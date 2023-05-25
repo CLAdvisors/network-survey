@@ -1,0 +1,125 @@
+{
+    "elements":[
+        {
+          "type": "tagbox",
+          "name": "question_1",
+          "title": "Who do you go to when you need help with a problem on your job?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {   
+          "type": "tagbox",
+          "name": "question_2",
+          "title": "Who do you collaborate with most frequently on projects or tasks?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_3",
+          "title": "Who do you feel most comfortable sharing personal issues with at work?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_4",
+          "title": "Who do you go to for advice or guidance on professional development?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_5",
+          "title": "Who do you usually have lunch or breaks with?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_6",
+          "title": "Who do you communicate with most frequently outside of work hours?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_7",
+          "title": "Who do you consider your mentor or role model within the organization?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_8",
+          "title": "Who do you believe has the most influence in your team or department?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_9",
+          "title": "Who do you turn to when you need creative or innovative ideas?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_10",
+          "title": "Who do you believe is the most knowledgeable about the company's products or services?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_11",
+          "title": "Who do you go to when you need information about company policies or procedures?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+          "type": "tagbox",
+          "name": "question_12",
+          "title": "Who do you feel most comfortable giving feedback to?",
+          "isRequired": true,
+          "choicesLazyLoadEnabled": true,
+          "choicesLazyLoadPageSize": 25
+        },
+        {
+        "type": "tagbox",
+        "name": "question_13",
+        "title": "Who do you go to when you need to understand the company's strategy or vision better?",
+        "isRequired": true,
+        "choicesLazyLoadEnabled": true,
+        "choicesLazyLoadPageSize": 25
+        },
+        {
+        "type": "tagbox",
+        "name": "question_14",
+        "title": "Who do you believe is the best at resolving conflicts within the team?",
+        "isRequired": true,
+        "choicesLazyLoadEnabled": true,
+        "choicesLazyLoadPageSize": 25
+        },
+        {
+        "type": "tagbox",
+        "name": "question_15",
+        "title": "Who do you go to when you need to understand the technical aspects of your job better?",
+        "isRequired": true,
+        "choicesLazyLoadEnabled": true,
+        "choicesLazyLoadPageSize": 25
+        }
+    ],
+    "showQuestionNumbers": false
+}

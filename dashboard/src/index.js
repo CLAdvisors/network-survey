@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import reportWebVitals from './reportWebVitals';
 import Dashboard from './dashboard';
-import TabularDataComponent from './TabularDataComponent';
+import TabularDataComponent from './TabularDataComponent.js';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

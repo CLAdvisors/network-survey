@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import './dashboard.css';
+import TabularDataComponent from './TabularDataComponent.js';
 
 const Dashboard = () => {
     const [activeSurvey, setActiveSurvey] = useState("");
@@ -97,7 +98,9 @@ const Dashboard = () => {
             type="text" 
             placeholder="Enter Survey Name"
             value={surveyName}
-            onChange={e => setSurveyName(e.target.value)}
+            onChange={(e) => {
+              setSurveyName(e.target.value);
+            }}
             />
             <label className="button">
             Upload Questions
@@ -119,7 +122,8 @@ const Dashboard = () => {
             </select>
             <button className="button" onClick={downloadAnswers}>Download Answers</button>
         </div>
-        </div>
+        <TabularDataComponent activeSurvey={activeSurvey}/>
+        </div> 
     );
 }
 

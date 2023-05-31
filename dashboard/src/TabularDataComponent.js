@@ -1,24 +1,43 @@
 import React, { useState } from 'react';
-import { createRoot } from 'react-dom/client';
 import { AgGridReact } from 'ag-grid-react';
 
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
 
-const TabularDataComponent = () => {
-   const [rowData] = useState([
-       {make: "Toyota", model: "Celica", price: 35000},
-       {make: "Ford", model: "Mondeo", price: 32000},
-       {make: "Porsche", model: "Boxster", price: 72000}
-   ]);
-   
-   const [columnDefs] = useState([
-       { field: 'Name' },
-       { field: 'Email' },
-       { field: 'Survey Started' },
-       { field: 'Survey Completed' }
-    
-   ])
+const TabularDataComponent = ({ activeSurvey }) => {
+
+    const [columnDefs] = useState([
+        { field: 'userName' },
+        { field: 'Email' },
+        { field: 'started' },
+        { field: 'status' }
+    ]);
+
+   const [rowData, setRowData] = useState([]);
+
+    React.useEffect(() => { 
+        if (activeSurvey === '') {
+            return;
+        }
+        console.log(activeSurvey)
+        const url = "http://localhost:3000/api/targets?surveyName=" + activeSurvey;
+        sendRequest(url, (data) => {
+            setRowData(data);
+            console.log(data)
+        });
+    }, [activeSurvey]);
+        
+    function sendRequest(url, onloadSuccessCallback) {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url);
+        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+        xhr.onload = () => {
+            if (xhr.status === 200) {
+            onloadSuccessCallback(JSON.parse(xhr.response));
+            }
+        };
+        xhr.send();
+    }
 
    return (
        <div className="ag-theme-alpine" style={{height: 400, width: 800,}}>

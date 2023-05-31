@@ -3,15 +3,14 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import reportWebVitals from './reportWebVitals';
 import Dashboard from './dashboard';
-import TabularDataComponent from './TabularDataComponent.js';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
+
 root.render(
   <React.StrictMode>
     <div className="container">
       <div className="content">
         <Dashboard />
-        <TabularDataComponent />
       </div>
     </div>
   </React.StrictMode>

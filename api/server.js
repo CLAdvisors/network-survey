@@ -2,7 +2,6 @@ const express = require('express');
 const fs = require('fs');
 const cors = require('cors');
 const { nanoid } = require('nanoid');
-const { time } = require('console');
 
 const app = express();
 const port = 3000; // Choose your desired port number
@@ -74,9 +73,9 @@ app.post('/api/user', express.json(), (req, res) => {
     const userId  = data.userId;
     const surveyName = data.surveyName;
     const answers = JSON.parse(data.answers);
-    const answerTimeStamp = data.timestamp;
+    const answerTimeStamp = new Date().toLocaleString();
     // add time stamp to answers
-    answers.push({timeStamp: answerTimeStamp});
+    answers.timeStamp = answerTimeStamp;
 
 
     const userDataFile = `data/userdata_${surveyName}.json`;
@@ -85,7 +84,7 @@ app.post('/api/user', express.json(), (req, res) => {
     console.log('Received user ID:', userId);
     console.log('Received data:', answers);
   
-    // Read existing user data
+    // Read existing user data 
     let existingUserData = [];
     try {
         existingUserData = JSON.parse(fs.readFileSync(userDataFile));
@@ -128,6 +127,7 @@ app.get('/api/names', (req, res) => {
 
   const response = {
     names: filteredNames,
+    //TODO check that this length/total even works
     total: filteredNames.length
   };
 
@@ -170,8 +170,8 @@ app.get('/api/targets', (req, res) => {
       return {
         userName: user.userName,
         Email: user.userId,
-        started: user.answers.length > 0 ? user.answers[0].timestamp : '',
-        status: user.answers.length > 0 ? 'Completed' : 'Pending'
+        started: Object.keys(user.answers).length > 0 ? user.answers.timeStamp : '',
+        status: Object.keys(user.answers).length > 0 ? 'Completed' : 'Pending'
       }
     }); 
     res.json(targets);

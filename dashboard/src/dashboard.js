@@ -122,7 +122,9 @@ const Dashboard = () => {
             </select>
             <button className="button" onClick={downloadAnswers}>Download Answers</button>
         </div>
-        <TabularDataComponent activeSurvey={activeSurvey}/>
+        <div className="row">
+          <TabularDataComponent activeSurvey={activeSurvey}/>
+        </div>
         </div> 
     );
 }

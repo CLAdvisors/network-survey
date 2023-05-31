@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const cors = require('cors');
 const { nanoid } = require('nanoid');
+const { time } = require('console');
 
 const app = express();
 const port = 3000; // Choose your desired port number
@@ -73,6 +74,9 @@ app.post('/api/user', express.json(), (req, res) => {
     const userId  = data.userId;
     const surveyName = data.surveyName;
     const answers = JSON.parse(data.answers);
+    const answerTimeStamp = data.timestamp;
+    // add time stamp to answers
+    answers.push({timeStamp: answerTimeStamp});
 
 
     const userDataFile = `data/userdata_${surveyName}.json`;
@@ -149,6 +153,28 @@ app.get('/api/results', (req, res) => {
   // send the response if the user data file exists
   if (userData) {
     res.json(userData);
+  } else {
+    res.status(404).json({ message: 'User data not found.' });
+  }
+});
+
+// GET API endpoint for a list of survey targets and the status of their responses
+app.get('/api/targets', (req, res) => {
+  const { surveyName = '' } = req.query;
+  console.log("Survey name: " + surveyName)
+  const userData = JSON.parse(fs.readFileSync(`data/userdata_${surveyName}.json`));
+
+  // send the response if the user data file exists
+  if (userData) {
+    const targets = userData.map(user => {
+      return {
+        userName: user.userName,
+        Email: user.userId,
+        started: user.answers.length > 0 ? user.answers[0].timestamp : '',
+        status: user.answers.length > 0 ? 'Completed' : 'Pending'
+      }
+    }); 
+    res.json(targets);
   } else {
     res.status(404).json({ message: 'User data not found.' });
   }

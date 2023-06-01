@@ -6,8 +6,16 @@ const { nanoid } = require('nanoid');
 const app = express();
 const port = 3000; // Choose your desired port number
 
-// Read the JSON file
-
+// TODO for MVP
+// - redesign the create survey backend
+// -- Create separate api for creating survey, adding names, adding questions
+// -- handle csv file upload
+// -- handle json file upload
+// -- handle xlsx entry
+// -- change userdatat schema to include email, ...
+// - add authentication
+// - add email functionality
+// - add csv file download
 
 app.use(cors()); 
 // PUT API endpoint for creating a new survey

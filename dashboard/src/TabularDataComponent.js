@@ -17,10 +17,10 @@ const TabularDataComponent = ({ activeSurvey }) => {
               },
             },
         },
-        { field: 'userName' },
-        { field: 'Email' },
-        { field: 'started' },
-        { field: 'status' }
+        { field: 'userName', sortable: true },
+        { field: 'Email', sortable: true },
+        { field: 'started', sortable: true },
+        { field: 'status', sortable: true }
     ]);
 
    const [rowData, setRowData] = useState([]);
@@ -50,7 +50,7 @@ const TabularDataComponent = ({ activeSurvey }) => {
     }
 
    return (
-       <div className="ag-theme-alpine" style={{height: 400, width: 800,}}>
+       <div className="ag-theme-alpine" style={{height: 600, width: 1000,}}>
            <AgGridReact
                rowData={rowData}
                columnDefs={columnDefs}> 

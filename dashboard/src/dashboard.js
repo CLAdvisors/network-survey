@@ -3,7 +3,7 @@ import './dashboard.css';
 import TabularDataComponent from './TabularDataComponent.js';
 
 const Dashboard = () => {
-    const [activeSurvey, setActiveSurvey] = useState("");
+  const [activeSurvey, setActiveSurvey] = useState("");
   const [surveys, setSurveys] = useState([]);
   const [surveyName, setSurveyName] = useState("");
   const [surveyQuestions, setSurveyQuestions] = useState(null);
@@ -22,8 +22,12 @@ const Dashboard = () => {
     }, []);
 
     const createSurvey = () => {
-        const url = "http://localhost:3000/api/survey";
-        postRequest(url, { surveyName: surveyName, surveyQuestions: surveyQuestions, surveyTargets: surveyTargets })
+        let url = "http://localhost:3000/api/survey";
+        postRequest(url, { surveyName: surveyName })
+        url = "http://localhost:3000/api/updateTargets";
+        postRequest(url, { surveyName: surveyName, csvData: surveyTargets })
+        url = "http://localhost:3000/api/updateQuestions";
+        postRequest(url, { surveyName: surveyName, surveyQuestions: surveyQuestions })
       }
     
       const uploadQuestions = event => {
@@ -37,7 +41,7 @@ const Dashboard = () => {
       const uploadContacts = event => {
         const reader = new FileReader();
         reader.onload = function(event) {
-          setSurveyTargets(JSON.parse(event.target.result));
+          setSurveyTargets(event.target.result);
         };
         reader.readAsText(event.target.files[0]);
       }

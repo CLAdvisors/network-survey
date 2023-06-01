@@ -7,12 +7,9 @@ const app = express();
 const port = 3000; // Choose your desired port number
 
 // TODO for MVP
-// - redesign the create survey backend
-// -- Create separate api for creating survey, adding names, adding questions
-// -- handle csv file upload
+// - extend the create survey backend
 // -- handle json file upload
 // -- handle xlsx entry
-// -- change userdatat schema to include email, ...
 // - add authentication
 // - add email functionality
 // - add csv file download
@@ -54,7 +51,7 @@ app.post('/api/survey', express.json(), (req, res) => {
   if (error) {
     res.status(500).json({ message: 'Error creating survey.' });
   } else {
-    res.json({ message: 'Survey created successfully.' });
+    res.status(200).json({ message: 'Survey created successfully.' });
   }
 });
 

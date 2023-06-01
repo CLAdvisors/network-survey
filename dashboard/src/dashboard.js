@@ -1,6 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import './dashboard.css';
 import TabularDataComponent from './TabularDataComponent.js';
+
+
+// TODO for MVP
+// - Redo the UI
+// - Change survey results download to csv
+// - Change name download to csv
+// - Questions upload download format?
+// - Add authentication
+// - make data table editable
+// - remove old data table data when switching to a survey with no data
 
 const Dashboard = () => {
   const [activeSurvey, setActiveSurvey] = useState("");
@@ -11,40 +21,54 @@ const Dashboard = () => {
 
     // Use the endpoint http://localhost:3001/api/surveys to get a list of surveys
     // and update the surveys state variable with the result
-    React.useEffect(() => {
-        const url = "http://localhost:3000/api/surveys";
+    
+    const updateActiveSurvey = useCallback((event) => {
+      const url = "http://localhost:3000/api/surveys";
         sendRequest(url, (data) => {
+          console.log(data)
             setSurveys(data);
-            if (data.length > 0) {
-                setActiveSurvey(data[0]);
+            if (data.length > 0 && activeSurvey === "") {
+              setActiveSurvey(data[0]);
             }
         });
-    }, []);
+    }, [activeSurvey]);
+    
+    React.useEffect(() => {
+        updateActiveSurvey();
+    }, [updateActiveSurvey]);
 
-    const createSurvey = () => {
-        let url = "http://localhost:3000/api/survey";
-        postRequest(url, { surveyName: surveyName })
-        url = "http://localhost:3000/api/updateTargets";
-        postRequest(url, { surveyName: surveyName, csvData: surveyTargets })
-        url = "http://localhost:3000/api/updateQuestions";
-        postRequest(url, { surveyName: surveyName, surveyQuestions: surveyQuestions })
-      }
     
-      const uploadQuestions = event => {
-        const reader = new FileReader();
-        reader.onload = function(event) {
-          setSurveyQuestions(JSON.parse(event.target.result));
-        };
-        reader.readAsText(event.target.files[0]);
-      }
+
+    const createSurvey = async () => {
+      const url = "http://localhost:3000/api/survey";
+      const response = await postRequest(url, { surveyName: surveyName });
     
-      const uploadContacts = event => {
-        const reader = new FileReader();
-        reader.onload = function(event) {
-          setSurveyTargets(event.target.result);
-        };
-        reader.readAsText(event.target.files[0]);
+      if (response.status === 200) {
+        setSurveys([...surveys, surveyName]);
       }
+    };
+    
+    const uploadQuestions = event => {
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        setSurveyQuestions(JSON.parse(event.target.result));
+      };
+      reader.readAsText(event.target.files[0]);
+
+      const url = "http://localhost:3000/api/updateTargets";
+      postRequest(url, { surveyName: surveyName, csvData: surveyTargets })
+    }
+    
+    const uploadContacts = event => {
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        setSurveyTargets(event.target.result);
+      };
+      reader.readAsText(event.target.files[0]);
+
+      const url = "http://localhost:3000/api/updateQuestions";
+      postRequest(url, { surveyName: surveyName, surveyQuestions: surveyQuestions })
+    }
 
     const downloadAnswers = () => {
         const url = `http://localhost:3000/api/results?surveyName=${activeSurvey}`;
@@ -85,9 +109,7 @@ const Dashboard = () => {
           if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status}`);
           }
-      
-          const jsonResponse = await response.json();
-          return jsonResponse;
+          return response;
         } catch (error) {
           console.error('Error:', error);
           throw error;
@@ -106,14 +128,6 @@ const Dashboard = () => {
               setSurveyName(e.target.value);
             }}
             />
-            <label className="button">
-            Upload Questions
-            <input type="file" onChange={uploadQuestions} style={{display: 'none'}} />
-            </label>
-            <label className="button">
-            Upload Names
-            <input type="file" onChange={uploadContacts} style={{display: 'none'}} />
-            </label>
             <button className="button" onClick={createSurvey}>Create New Survey</button>
         </div>
         <div className="row">
@@ -124,6 +138,16 @@ const Dashboard = () => {
                 </option>
             ))}
             </select>
+            <label className='icon_label'> Questions uploaded: <span className="icon_green">&#10003;</span></label>
+            <label className='icon_label'>Users uploaded: <span className="icon_red">✖</span></label>
+            <label className="button">
+            Upload Questions
+            <input type="file" onChange={uploadQuestions} style={{display: 'none'}} />
+            </label>
+            <label className="button">
+            Upload Names
+            <input type="file" onChange={uploadContacts} style={{display: 'none'}} />
+            </label>
             <button className="button" onClick={downloadAnswers}>Download Answers</button>
         </div>
         <div className="row">

@@ -1,0 +1,18 @@
+.icon_label {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    margin-right: 10px;
+    margin-bottom: 10px;
+    margin-right: 10px;
+  }
+  .icon_green {
+    font-size: 24px;
+    color: #4caf50; /* Change the color based on the status */
+    margin-left: 10px;
+  }
+  .icon_red {
+    font-size: 24px;
+    color: #FF0000; /* Change the color based on the status */
+    margin-left: 10px;
+  }

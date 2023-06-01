@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import './dashboard.css';
 import TabularDataComponent from './TabularDataComponent.js';
-
+import StatusIcon from './StatusIcon.js';
 
 // TODO for MVP
 // - Redo the UI
@@ -25,10 +25,9 @@ const Dashboard = () => {
     const updateActiveSurvey = useCallback((event) => {
       const url = "http://localhost:3000/api/surveys";
         sendRequest(url, (data) => {
-          console.log(data)
-            setSurveys(data);
+            setSurveys(data.surveys);
             if (data.length > 0 && activeSurvey === "") {
-              setActiveSurvey(data[0]);
+              setActiveSurvey(data.surveys[0]);
             }
         });
     }, [activeSurvey]);
@@ -36,8 +35,6 @@ const Dashboard = () => {
     React.useEffect(() => {
         updateActiveSurvey();
     }, [updateActiveSurvey]);
-
-    
 
     const createSurvey = async () => {
       const url = "http://localhost:3000/api/survey";
@@ -138,8 +135,8 @@ const Dashboard = () => {
                 </option>
             ))}
             </select>
-            <label className='icon_label'> Questions uploaded: <span className="icon_green">&#10003;</span></label>
-            <label className='icon_label'>Users uploaded: <span className="icon_red">✖</span></label>
+            <StatusIcon text = {"Questions uploaded:"} mode = {activeSurvey}/>
+            <StatusIcon text = {"Users uploaded:"} mode = {activeSurvey}/>
             <label className="button">
             Upload Questions
             <input type="file" onChange={uploadQuestions} style={{display: 'none'}} />
@@ -149,6 +146,7 @@ const Dashboard = () => {
             <input type="file" onChange={uploadContacts} style={{display: 'none'}} />
             </label>
             <button className="button" onClick={downloadAnswers}>Download Answers</button>
+            
         </div>
         <div className="row">
           <TabularDataComponent activeSurvey={activeSurvey}/>

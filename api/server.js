@@ -278,7 +278,23 @@ app.get('/api/targets', (req, res) => {
 app.get('/api/surveys', (req, res) => {
   const surveys = fs.readdirSync('./data').filter(file => file.startsWith('json_')).map(file => file.replace('json_', '').replace('.json', ''));
   console.log(surveys)
-  res.json(surveys);
+  // For each survey name in the json array of survey names, check if the associated json userdata and names files have data inside them.
+  // Create a new object with the survey name and a boolean value for whether or not the survey is complete.
+
+  const surveyData = surveys.map(survey => {
+    const userData = fs.readFileSync(`data/userdata_${survey}.json`);
+    const namesData = fs.readFileSync(`data/names_${survey}.json`);
+    const userDataExists = userData.length != 0;
+    const namesDataExists = namesData.length != 0;
+
+    return {
+      surveyName: survey,
+      userDataExists: userDataExists, 
+      namesDataExists: namesDataExists
+    }
+  });
+
+  res.json({surveys: surveys, surveyData: surveyData});
 });
 // Start the server
 app.listen(port, () => {

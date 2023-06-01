@@ -22,23 +22,85 @@ app.use(cors());
 app.post('/api/survey', express.json(), (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
-  const surveyQuestions = data.surveyQuestions
-  const surveyTargets = data.surveyTargets
 
   let error = false;
 
-  // Create a new user data file for the new survey
   const surveyUserDataFile = `data/userdata_${surveyName}.json`;
   // Create a json object for each user in the surveyTargets array
-  userData = surveyTargets.map((user, index) => {
+  fs.writeFile(surveyUserDataFile, '', err => 
+  {  
+    if (err){
+      console.error('Error writing user data file:', err); 
+      error = true;
+    }
+  });
+  const surveyNamesFile = `data/names_${surveyName}.json`;
+  fs.writeFile(surveyNamesFile, '', err => 
+  {  
+    if (err){
+      console.error('Error reading name data file:', err); 
+      error = true;
+    }
+  });
+  const surveyQuestionsFile = `data/json_${surveyName}.json`;
+  fs.writeFile(surveyQuestionsFile, '', err =>
+  {
+    if (err){
+      console.error('Error reading question data file:', err); 
+      error = true;
+    }
+  });
+
+  if (error) {
+    res.status(500).json({ message: 'Error creating survey.' });
+  } else {
+    res.json({ message: 'Survey created successfully.' });
+  }
+});
+
+// PUT API endpoint for uploading a csv file of names
+app.post('/api/updateTargets', express.json(), (req, res) => {
+  const data  = req.body;
+  const csvData = data.csvData;
+  const surveyName = data.surveyName;
+
+  let error = false;
+
+  
+  // Remove the header from the csv string, create a dict from header name to index
+  let csvArray = csvData.split('\n');
+  const header = csvArray.shift().split(',');
+  const headerDict = {};
+
+  header.forEach((name, index) => {
+    headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
+  });
+  console.log(headerDict);
+  // Convert to json
+  const surveyTargets = csvArray.map((row, index) => {
+    const columns = row.split(',');
     return {
-      userName: user,
+      userName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, "") + " " + columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
+      firstName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, ""),
+      lastName: columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
+      email: columns[headerDict['Email']].replace(/(\r\n|\n|\r)/gm, ""),
+      respondent: columns[headerDict['Respondent']].replace(/(\r\n|\n|\r)/gm, ""),
+      location: columns[headerDict['Location']].replace(/(\r\n|\n|\r)/gm, ""),
+      level: columns[headerDict['Level']].replace(/(\r\n|\n|\r)/gm, ""),
+      gender: columns[headerDict['Gender']].replace(/(\r\n|\n|\r)/gm, ""),
+      race: columns[headerDict['Race']].replace(/(\r\n|\n|\r)/gm, ""),
+      manager: columns[headerDict['Manager']].replace(/(\r\n|\n|\r)/gm, ""),
+      vp:columns[headerDict['VP']].replace(/(\r\n|\n|\r)/gm, ""),
+      businessGroup:columns[headerDict['Business Group']].replace(/(\r\n|\n|\r)/gm, ""),
+      businessGroup1:columns[headerDict['Business Group - 1']].replace(/(\r\n|\n|\r)/gm, ""),
+      businessGroup2:columns[headerDict['Business Group - 2']].replace(/(\r\n|\n|\r)/gm, ""),
       userId: nanoid(),
       answers: []
     }
   });
   // Write the user data to the file
-  fs.writeFile(surveyUserDataFile, JSON.stringify(userData, null, 2), err => 
+  const surveyUserDataFile = `data/userdata_${surveyName}.json`;
+  fs.writeFile(surveyUserDataFile, JSON.stringify(surveyTargets, null, 2), err => 
   {  
     if (err){
       console.error('Error writing user data file:', err); 
@@ -46,15 +108,37 @@ app.post('/api/survey', express.json(), (req, res) => {
     }
   });
 
-  // Create a new names file for the new survey
+  // generate names file from surveyTargets
   const surveyNamesFile = `data/names_${surveyName}.json`;
-  fs.writeFile(surveyNamesFile, JSON.stringify(surveyTargets, null, 2), err => 
-  {  
+
+  // Create an array of names from the surveyTargets
+  const names = [];
+  surveyTargets.forEach((user, index) => {
+    names.push(user.userName);
+  });
+  // Write the names to the file
+  fs.writeFile(surveyNamesFile, JSON.stringify(names, null, 2), err =>
+  {
     if (err){
-      console.error('Error reading name data file:', err); 
+      console.error('Error reading name data file:', err);
       error = true;
     }
   });
+
+  if (error) {
+    res.status(500).json({ message: 'Error creating survey.' });
+  } else {
+    res.json({ message: 'Survey created successfully.' });
+  }
+});
+
+// PUT API endpoint for uploading a json file of questions
+app.post('/api/updateQuestions', express.json(), (req, res) => {
+  const data  = req.body;
+  const surveyQuestions = data.surveyQuestions;
+  const surveyName = data.surveyName;
+
+  let error = false;
 
   // Create a new questions file for the new survey
   const surveyQuestionsFile = `data/json_${surveyName}.json`;
@@ -71,7 +155,6 @@ app.post('/api/survey', express.json(), (req, res) => {
   } else {
     res.json({ message: 'Survey created successfully.' });
   }
-
 });
 
 // PUT API endpoint for answer submission
@@ -170,6 +253,12 @@ app.get('/api/results', (req, res) => {
 app.get('/api/targets', (req, res) => {
   const { surveyName = '' } = req.query;
   console.log("Survey name: " + surveyName)
+
+  // catch if file is empty
+  if (fs.readFileSync(`data/userdata_${surveyName}.json`) == "") {
+    res.status(404).json({ message: 'User data empty.' });
+    return;
+  }
   const userData = JSON.parse(fs.readFileSync(`data/userdata_${surveyName}.json`));
 
   // send the response if the user data file exists
@@ -177,7 +266,7 @@ app.get('/api/targets', (req, res) => {
     const targets = userData.map(user => {
       return {
         userName: user.userName,
-        Email: user.userId,
+        Email: user.email,
         started: Object.keys(user.answers).length > 0 ? user.answers.timeStamp : '',
         status: Object.keys(user.answers).length > 0 ? 'Completed' : 'Pending'
       }

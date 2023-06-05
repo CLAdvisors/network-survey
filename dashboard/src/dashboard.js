@@ -89,7 +89,11 @@ const Dashboard = () => {
           link.click();
           document.body.removeChild(link); // Required for Firefox
         });
-      }
+    }
+
+    const testSurvey = () => {
+      window.open(`http://localhost:3002/?surveyName=${activeSurvey}&userId=demo`);
+    }
 
     function sendRequest(url, onloadSuccessCallback) {
         const xhr = new XMLHttpRequest();
@@ -155,8 +159,8 @@ const Dashboard = () => {
             Upload Names
             <input type="file" onChange={uploadContacts} style={{display: 'none'}} ref={userFileInputRef} />
             </label>
+            <button className="button" onClick={testSurvey}>Demo Survey</button>
             <button className="button" onClick={downloadAnswers}>Download Answers</button>
-            
         </div>
         <div className="row">
           <TabularDataComponent activeSurvey={activeSurvey}/>

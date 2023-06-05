@@ -31,6 +31,10 @@ function SurveyComponent() {
         let data = JSON.stringify(sender.data, null, 3);
         let url = 'http://localhost:3000/api/user'
 
+        if (userId === 'demo') {
+          return;
+        }
+        
         postRequest(url, {userId: userId, surveyName: surveyName, answers: data})
 
     });

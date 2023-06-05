@@ -1,8 +1,9 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import './dashboard.css';
 import TabularDataComponent from './TabularDataComponent.js';
-import StatusIcon from './StatusIcon.js';
-
+import NameStatusIcon from './NameStatusIcon';
+import QuestionStatusIcon from './QuestionStatusIcon';
+import TextInput from './TextInput';
 // TODO for MVP
 // - Redo the UI
 // - Change survey results download to csv
@@ -13,11 +14,13 @@ import StatusIcon from './StatusIcon.js';
 // - remove old data table data when switching to a survey with no data
 
 const Dashboard = () => {
+  const questionFileInputRef = useRef(null);
+  const userFileInputRef = useRef(null);
+
+
   const [activeSurvey, setActiveSurvey] = useState("");
   const [surveys, setSurveys] = useState([]);
   const [surveyName, setSurveyName] = useState("");
-  const [surveyQuestions, setSurveyQuestions] = useState(null);
-  const [surveyTargets, setSurveyTargets] = useState(null);
 
     // Use the endpoint http://localhost:3001/api/surveys to get a list of surveys
     // and update the surveys state variable with the result
@@ -26,7 +29,7 @@ const Dashboard = () => {
       const url = "http://localhost:3000/api/surveys";
         sendRequest(url, (data) => {
             setSurveys(data.surveys);
-            if (data.length > 0 && activeSurvey === "") {
+            if (data.surveys.length > 0 && activeSurvey === '') {
               setActiveSurvey(data.surveys[0]);
             }
         });
@@ -45,26 +48,33 @@ const Dashboard = () => {
       }
     };
     
-    const uploadQuestions = event => {
-      const reader = new FileReader();
-      reader.onload = function(event) {
-        setSurveyQuestions(JSON.parse(event.target.result));
-      };
-      reader.readAsText(event.target.files[0]);
-
-      const url = "http://localhost:3000/api/updateTargets";
-      postRequest(url, { surveyName: surveyName, csvData: surveyTargets })
-    }
-    
     const uploadContacts = event => {
       const reader = new FileReader();
       reader.onload = function(event) {
-        setSurveyTargets(event.target.result);
+
+        const url = "http://localhost:3000/api/updateTargets";
+        postRequest(url, { surveyName: activeSurvey, csvData: event.target.result })
+
+        // TODO make callback to postRequest to clear the file upload input
+        userFileInputRef.current.value = '';
       };
       reader.readAsText(event.target.files[0]);
+    }
+    
+    const uploadQuestions = event => {
+      console.log("guh1")
 
-      const url = "http://localhost:3000/api/updateQuestions";
-      postRequest(url, { surveyName: surveyName, surveyQuestions: surveyQuestions })
+      const reader = new FileReader();
+      reader.onload = function(event) {
+
+        const url = "http://localhost:3000/api/updateQuestions";
+        console.log("guh2")
+        postRequest(url, { surveyName: activeSurvey, surveyQuestions: JSON.parse(event.target.result)})
+
+        // TODO make callback to postRequest to clear the file upload input
+        questionFileInputRef.current.value = '';
+      };
+      reader.readAsText(event.target.files[0]);
     }
 
     const downloadAnswers = () => {
@@ -112,7 +122,6 @@ const Dashboard = () => {
           throw error;
         }
     }
-
     return (
         <div className="dashboard">
         <div className="row">
@@ -135,21 +144,25 @@ const Dashboard = () => {
                 </option>
             ))}
             </select>
-            <StatusIcon text = {"Questions uploaded:"} mode = {activeSurvey}/>
-            <StatusIcon text = {"Users uploaded:"} mode = {activeSurvey}/>
+            {/* <StatusIcon text = {"Questions uploaded:"} mode = {activeSurvey}/> */}
+            <QuestionStatusIcon activeSurvey = {activeSurvey}/>
+            <NameStatusIcon activeSurvey = {activeSurvey}/>
             <label className="button">
             Upload Questions
-            <input type="file" onChange={uploadQuestions} style={{display: 'none'}} />
+            <input type="file" onChange={uploadQuestions} style={{display: 'none'}} ref={questionFileInputRef} />
             </label>
             <label className="button">
             Upload Names
-            <input type="file" onChange={uploadContacts} style={{display: 'none'}} />
+            <input type="file" onChange={uploadContacts} style={{display: 'none'}} ref={userFileInputRef} />
             </label>
             <button className="button" onClick={downloadAnswers}>Download Answers</button>
             
         </div>
         <div className="row">
           <TabularDataComponent activeSurvey={activeSurvey}/>
+        </div>
+        <div className="row">
+          <TextInput activeSurvey={activeSurvey}/>
         </div>
         </div> 
     );

@@ -4,13 +4,19 @@ import './StatusIcon.css';
 
 const StatusIcon = ({ text, mode }) => {
 
-  let icon = null;
+  // useState for icon
 
-  if (mode === 'icon_green') {
-    icon = '✔';
-  } else if (mode === 'icon_red') {
-    icon = '✖';
-  } 
+  const [icon, setIcon] = React.useState('✖');
+
+  React.useEffect(() => {
+    console.log(mode);
+    if (mode === 'icon_green') {
+      setIcon('✔');
+    } else if (mode === 'icon_red') {
+      setIcon('✖');
+    } 
+  }, [mode]);
+
   return (
     <div>
       <label className='icon_label'>{text} <span className={mode}>{icon}</span></label>

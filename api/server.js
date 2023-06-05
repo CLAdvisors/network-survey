@@ -63,6 +63,8 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
 
   let error = false;
 
+  console.log("Updating targets for survey: " + surveyName);
+  console.log(data);
   
   // Remove the header from the csv string, create a dict from header name to index
   let csvArray = csvData.split('\n');
@@ -137,21 +139,18 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
 
   let error = false;
 
-  // Create a new questions file for the new survey
+  console.log("Updating questions for survey: " + surveyName);
+
   const surveyQuestionsFile = `data/json_${surveyName}.json`;
-  fs.writeFile(surveyQuestionsFile, JSON.stringify(surveyQuestions, null, 2), err =>
-  {
-    if (err){
-      console.error('Error reading question data file:', err); 
-      error = true;
+  fs.writeFile(surveyQuestionsFile, JSON.stringify(surveyQuestions, null, 2), err => {
+    if (err) {
+      console.error('Error creating survey:', err);
+      res.status(500).json({ message: 'Error creating survey.' });
+    } else {
+      res.json({ message: 'Survey created successfully.' });
     }
   });
 
-  if (error) {
-    res.status(500).json({ message: 'Error creating survey.' });
-  } else {
-    res.json({ message: 'Survey created successfully.' });
-  }
 });
 
 // PUT API endpoint for answer submission
@@ -281,21 +280,28 @@ app.get('/api/surveys', (req, res) => {
   // For each survey name in the json array of survey names, check if the associated json userdata and names files have data inside them.
   // Create a new object with the survey name and a boolean value for whether or not the survey is complete.
 
-  const surveyData = surveys.map(survey => {
-    const userData = fs.readFileSync(`data/userdata_${survey}.json`);
-    const namesData = fs.readFileSync(`data/names_${survey}.json`);
-    const userDataExists = userData.length != 0;
-    const namesDataExists = namesData.length != 0;
 
-    return {
-      surveyName: survey,
-      userDataExists: userDataExists, 
-      namesDataExists: namesDataExists
-    }
-  });
-
-  res.json({surveys: surveys, surveyData: surveyData});
+  res.json({surveys: surveys});
 });
+
+// GET API endpoint for status of survey creation
+app.get('/api/surveyStatus', (req, res) => {
+  const { surveyName = '' } = req.query;
+
+  if(surveyName === '' || surveyName === 'undefined' || surveyName === null || surveyName === 'null') {
+    res.status(404).json({ message: 'Survey name not found.' });
+    return;
+  }
+  const userData = fs.readFileSync(`data/userdata_${surveyName}.json`);
+  const questionData = fs.readFileSync(`data/json_${surveyName}.json`);
+  console.log("Survey status request: " + surveyName);
+  res.json( {
+    userDataStatus: userData.length >  0 ? true : false,
+    questionDataStatus: questionData.length > 0 ? true : false
+  });
+});
+
+
 // Start the server
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);

@@ -31,26 +31,34 @@ const TabularDataComponent = ({ activeSurvey }) => {
         }
         console.log(activeSurvey)
         const url = "http://localhost:3000/api/targets?surveyName=" + activeSurvey;
+        // try to send the request, if it fails delete old data
         sendRequest(url, (data) => {
             setRowData(data);
-            console.log(data)
+        }, (err) => {
+            setRowData([]);
         });
     }, [activeSurvey]);
         
-    function sendRequest(url, onloadSuccessCallback) {
+    function sendRequest(url, onloadSuccessCallback, onFailCallback) {
         const xhr = new XMLHttpRequest();
         xhr.open("GET", url);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
         xhr.onload = () => {
-            if (xhr.status === 200) {
+          if (xhr.status === 200) {
             onloadSuccessCallback(JSON.parse(xhr.response));
-            }
+          } else {
+            onFailCallback(xhr.status);
+          }
+        };
+        xhr.onerror = () => {
+          onFailCallback(xhr.status);
         };
         xhr.send();
-    }
+      }
+      
 
    return (
-       <div className="ag-theme-alpine" style={{height: 600, width: 1000,}}>
+       <div className="ag-theme-alpine" style={{height: 500, width: 1000,}}>
            <AgGridReact
                rowData={rowData}
                columnDefs={columnDefs}> 

@@ -4,6 +4,11 @@ import './index.css';
 import SurveyComponent from './SurveyComponent';
 import reportWebVitals from './reportWebVitals';
 
+// TODO for MVP
+// - Add privacy policy
+// - ???
+
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>

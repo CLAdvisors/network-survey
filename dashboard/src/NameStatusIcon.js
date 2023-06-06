@@ -2,7 +2,7 @@ import React, {useState} from 'react';
 import StatusIcon from './StatusIcon'; 
 
 
-const NameStatusIcon = ({ activeSurvey }) => {
+const NameStatusIcon = ({ activeSurvey, updateDummy }) => {
     const [status, setStatus] = useState("icon_red");
 
     React.useEffect(() => { 
@@ -18,7 +18,7 @@ const NameStatusIcon = ({ activeSurvey }) => {
 
             
         });
-    }, [activeSurvey, status]);
+    }, [activeSurvey, updateDummy, status]);
 
     function sendRequest(url, onloadSuccessCallback) {
         const xhr = new XMLHttpRequest();

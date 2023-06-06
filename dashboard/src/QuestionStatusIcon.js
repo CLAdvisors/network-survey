@@ -2,23 +2,27 @@ import React, {useState} from 'react';
 import StatusIcon from './StatusIcon'; 
 
 
-const QuestionStatusIcon = ({ activeSurvey }) => {
+const QuestionStatusIcon = ({ activeSurvey, updateDummy }) => {
     const [status, setStatus] = useState("icon_red");
 
     React.useEffect(() => { 
         if (activeSurvey === '') {
             return;
         }
+        console.log("Test", updateDummy)
         const url = `http://localhost:3000/api/surveyStatus?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
-            if(data.questionDataStatus)
-                setStatus('icon_green');
-            else
+            console.log("data: ", data)
+            if(data.questionDataStatus){
+              setStatus('icon_green');
+            }
+            else{
                 setStatus('icon_red');
+            }
 
             
         });
-    }, [activeSurvey, status]);
+    }, [activeSurvey, updateDummy, status]);
 
 
     function sendRequest(url, onloadSuccessCallback, onFailCallback) {

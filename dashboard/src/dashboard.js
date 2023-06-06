@@ -21,6 +21,7 @@ const Dashboard = () => {
   const [activeSurvey, setActiveSurvey] = useState("");
   const [surveys, setSurveys] = useState([]);
   const [surveyName, setSurveyName] = useState("");
+  const [statusUpdator, setStatusUpdator] = useState(0);
 
     // Use the endpoint http://localhost:3001/api/surveys to get a list of surveys
     // and update the surveys state variable with the result
@@ -53,28 +54,31 @@ const Dashboard = () => {
       reader.onload = function(event) {
 
         const url = "http://localhost:3000/api/updateTargets";
-        postRequest(url, { surveyName: activeSurvey, csvData: event.target.result })
-
-        // TODO make callback to postRequest to clear the file upload input
-        userFileInputRef.current.value = '';
+        postRequest(url, { surveyName: activeSurvey, csvData: event.target.result }, () => {
+          userFileInputRef.current.value = '';
+          setStatusUpdator(statusUpdator + 1);
+        });
       };
       reader.readAsText(event.target.files[0]);
+
+      
     }
     
     const uploadQuestions = event => {
-      console.log("guh1")
 
       const reader = new FileReader();
       reader.onload = function(event) {
 
         const url = "http://localhost:3000/api/updateQuestions";
-        console.log("guh2")
-        postRequest(url, { surveyName: activeSurvey, surveyQuestions: JSON.parse(event.target.result)})
-
-        // TODO make callback to postRequest to clear the file upload input
-        questionFileInputRef.current.value = '';
+        postRequest(url, { surveyName: activeSurvey, surveyQuestions: JSON.parse(event.target.result)}, () => {
+          questionFileInputRef.current.value = '';
+          setStatusUpdator(statusUpdator + 1);
+        });
       };
+
       reader.readAsText(event.target.files[0]);
+
+      
     }
 
     const downloadAnswers = () => {
@@ -107,25 +111,30 @@ const Dashboard = () => {
         xhr.send();
     }
 
-    async function postRequest(url, data) {
-        try {
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
-          });
-      
-          if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-          }
-          return response;
-        } catch (error) {
-          console.error('Error:', error);
-          throw error;
+    async function postRequest(url, data, onSuccess) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(data)
+        });
+    
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
         }
-    }
+    
+        if (typeof onSuccess === 'function') {
+          onSuccess(response);
+        }
+    
+        return response;
+      } catch (error) {
+        console.error('Error:', error);
+        throw error;
+      }
+    }    
     return (
         <div className="dashboard">
         <div className="row">
@@ -149,8 +158,8 @@ const Dashboard = () => {
             ))}
             </select>
             {/* <StatusIcon text = {"Questions uploaded:"} mode = {activeSurvey}/> */}
-            <QuestionStatusIcon activeSurvey = {activeSurvey}/>
-            <NameStatusIcon activeSurvey = {activeSurvey}/>
+            <QuestionStatusIcon activeSurvey = {activeSurvey} updateDummy={statusUpdator}/>
+            <NameStatusIcon activeSurvey = {activeSurvey} updateDummy={statusUpdator}/>
             <label className="button">
             Upload Questions
             <input type="file" onChange={uploadQuestions} style={{display: 'none'}} ref={questionFileInputRef} />

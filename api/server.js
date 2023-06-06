@@ -296,8 +296,9 @@ app.get('/api/surveyStatus', (req, res) => {
   const questionData = fs.readFileSync(`data/json_${surveyName}.json`);
   console.log("Survey status request: " + surveyName);
   res.json( {
-    userDataStatus: userData.length >  0 ? true : false,
-    questionDataStatus: questionData.length > 0 ? true : false
+    // Currently 12 to catch if file contians 'null' or 'undefined'
+    userDataStatus: userData.length >  12 ? true : false,
+    questionDataStatus: questionData.length > 12 ? true : false
   });
 });
 

@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import SurveyComponent from './SurveyComponent';
 import reportWebVitals from './reportWebVitals';
+import Header from './Header';
+import { ReactComponent as Logo } from './logo.svg';
+
 
 // TODO for MVP
 // - Add privacy policy
@@ -12,6 +15,7 @@ import reportWebVitals from './reportWebVitals';
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
+    <Header svgComponent={<Logo />} title="Survey Title" />
     <SurveyComponent />
   </React.StrictMode>
   

@@ -1,0 +1,12 @@
+{
+    "scripts": {
+        "start-api": "cd api && set PORT=3000 && nodemon",
+        "start-dashboard": "cd dashboard && set PORT=3001 && nodemon",
+        "start-network-survey": "cd network-survey && set PORT=3002 && nodemon",
+        "start-all": "concurrently \"npm run start-api\" \"npm run start-dashboard\" \"npm run start-network-survey\""
+    },
+    "devDependencies": {
+        "concurrently": "^8.2.0",
+        "nodemon": "^2.0.22"
+    }
+}

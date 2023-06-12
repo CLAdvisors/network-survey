@@ -13,6 +13,7 @@
     "express": "^4.18.2",
     "fs": "^0.0.1-security",
     "nanoid": "^3.3.4",
-    "papaparse": "^5.4.1"
+    "papaparse": "^5.4.1",
+    "sqlite3": "^5.1.6"
   }
 }

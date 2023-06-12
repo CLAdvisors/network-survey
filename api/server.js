@@ -3,10 +3,12 @@ const fs = require('fs');
 const cors = require('cors');
 const { nanoid } = require('nanoid');
 
+
 const app = express();
 const port = 3000; // Choose your desired port number
 
 // TODO for MVP
+// - move to a database to store survey data
 // - extend the create survey backend
 // -- handle json file upload
 // -- handle xlsx entry
@@ -113,7 +115,7 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   // Create an array of names from the surveyTargets
   const names = [];
   surveyTargets.forEach((user, index) => {
-    names.push(user.userName);
+    names.push(user.userName + " (" + user.email + ")");
   });
   // Write the names to the file
   fs.writeFile(surveyNamesFile, JSON.stringify(names, null, 2), err =>

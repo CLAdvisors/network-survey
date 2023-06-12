@@ -44,7 +44,7 @@ const QuestionStatusIcon = ({ activeSurvey, updateDummy }) => {
 
     return (
         <div>
-            <StatusIcon text = {"Questions uploaded:"} mode = {status}/>
+            <StatusIcon text = {"Survey file uploaded:"} mode = {status}/>
         </div>
     );
 };

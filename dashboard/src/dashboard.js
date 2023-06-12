@@ -137,6 +137,7 @@ const Dashboard = () => {
     }    
     return (
         <div className="dashboard">
+          <h1>Survey Dashboard</h1>
         <div className="row">
             <input 
             className="input"
@@ -147,7 +148,15 @@ const Dashboard = () => {
               setSurveyName(e.target.value);
             }}
             />
-            <button className="button" onClick={createSurvey}>Create New Survey</button>
+            <button className="button" onClick={createSurvey}>Submit New Survey</button>
+        </div>
+          <h2>Survey Config</h2>
+        <div className="row">
+          <div className='templates'>
+            <h3>Templates for creating surveys: </h3>
+            <button className="button" onClick={createSurvey}>Download Survey File Template</button>
+            <button className="button" onClick={createSurvey}>Download User File Template</button>
+          </div>
         </div>
         <div className="row">
             <select className="dropdown" value={activeSurvey} onChange={e => setActiveSurvey(e.target.value)}>
@@ -161,19 +170,21 @@ const Dashboard = () => {
             <QuestionStatusIcon activeSurvey = {activeSurvey} updateDummy={statusUpdator}/>
             <NameStatusIcon activeSurvey = {activeSurvey} updateDummy={statusUpdator}/>
             <label className="button">
-            Upload Questions
+            Upload Survey File
             <input type="file" onChange={uploadQuestions} style={{display: 'none'}} ref={questionFileInputRef} />
             </label>
             <label className="button">
-            Upload Names
+            Upload Users
             <input type="file" onChange={uploadContacts} style={{display: 'none'}} ref={userFileInputRef} />
             </label>
             <button className="button" onClick={testSurvey}>Demo Survey</button>
             <button className="button" onClick={downloadAnswers}>Download Answers</button>
         </div>
+        <h2>User Data</h2>
         <div className="row">
           <TabularDataComponent activeSurvey={activeSurvey}/>
         </div>
+        <h2>Email Contents</h2>
         <div className="row">
           <TextInput activeSurvey={activeSurvey}/>
         </div>

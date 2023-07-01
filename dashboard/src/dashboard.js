@@ -27,7 +27,7 @@ const Dashboard = () => {
     // and update the surveys state variable with the result
     
     const updateActiveSurvey = useCallback((event) => {
-      const url = "http://localhost:3000/api/surveys";
+      const url = "http://173.54.201.86:3000/api/surveys";
         sendRequest(url, (data) => {
             setSurveys(data.surveys);
             if (data.surveys.length > 0 && activeSurvey === '') {
@@ -41,7 +41,7 @@ const Dashboard = () => {
     }, [updateActiveSurvey]);
 
     const createSurvey = async () => {
-      const url = "http://localhost:3000/api/survey";
+      const url = "http://173.54.201.86:3000/api/survey";
       const response = await postRequest(url, { surveyName: surveyName });
     
       if (response.status === 200) {
@@ -53,7 +53,7 @@ const Dashboard = () => {
       const reader = new FileReader();
       reader.onload = function(event) {
 
-        const url = "http://localhost:3000/api/updateTargets";
+        const url = "http://173.54.201.86:3000/api/updateTargets";
         postRequest(url, { surveyName: activeSurvey, csvData: event.target.result }, () => {
           userFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -67,10 +67,11 @@ const Dashboard = () => {
     const uploadQuestions = event => {
 
       const reader = new FileReader();
+      
       reader.onload = function(event) {
-
-        const url = "http://localhost:3000/api/updateQuestions";
-        postRequest(url, { surveyName: activeSurvey, surveyQuestions: JSON.parse(event.target.result)}, () => {
+        const data = JSON.parse(event.target.result);
+        const url = "http://173.54.201.86:3000/api/updateQuestions";
+        postRequest(url, { surveyName: activeSurvey, surveyQuestions: data.questions, surveyTitle: data.title}, () => {
           questionFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
         });
@@ -82,7 +83,7 @@ const Dashboard = () => {
     }
 
     const downloadAnswers = () => {
-        const url = `http://localhost:3000/api/results?surveyName=${activeSurvey}`;
+        const url = `http://173.54.201.86:3000/api/results?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
           const dataBlob = new Blob([JSON.stringify(data)], { type: 'application/json' });
           const dataURL = window.URL.createObjectURL(dataBlob);
@@ -96,7 +97,7 @@ const Dashboard = () => {
     }
 
     const testSurvey = () => {
-      window.open(`http://localhost:3002/?surveyName=${activeSurvey}&userId=demo`);
+      window.open(`http://173.54.201.86:3002/?surveyName=${activeSurvey}&userId=demo`);
     }
 
     function sendRequest(url, onloadSuccessCallback) {

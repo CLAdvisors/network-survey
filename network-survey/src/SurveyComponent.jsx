@@ -5,7 +5,7 @@ import "survey-core/defaultV2.min.css";
 import "./index.css";
 // import { json } from "./json";
 
-function SurveyComponent() {
+function SurveyComponent({setTitle}) {
     const searchParams = new URLSearchParams(window.location.search);
     const userId = searchParams.get("userId"); 
     const surveyName = searchParams.get("surveyName"); 
@@ -15,12 +15,11 @@ function SurveyComponent() {
     // Get survey question json from questions api
     const [json, setJson] = React.useState(null);
     React.useEffect(() => {
-      const url = `http://localhost:3000/api/questions?surveyName=${surveyName}`;
-      sendRequest(url, (data) => { setJson(data); });
+      const url = `http://173.54.201.86:3000/api/questions?surveyName=${surveyName}`;
+      sendRequest(url, (data) => { setJson(data.questions); setTitle(data.title); });
     }, [surveyName]);
     
     
-  
     if (!userId || !surveyName) {
       return <h1>Invalid URL, please use the unique url provided by email.</h1>
     }
@@ -29,7 +28,7 @@ function SurveyComponent() {
 
     survey.onComplete.add((sender, options) => {
         let data = JSON.stringify(sender.data, null, 3);
-        let url = 'http://localhost:3000/api/user'
+        let url = 'http://173.54.201.86:3000/api/user'
 
         if (userId === 'demo') {
           return;
@@ -40,7 +39,8 @@ function SurveyComponent() {
     });
 
     survey.onChoicesLazyLoad.add((_, options) => {
-        const url = `http://localhost:3000/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
+        console.log("YES IT WENT HERE")
+        const url = `http://173.54.201.86:3000/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
         sendRequest(url, (data) => { options.setItems(data.names, data.total); });
     });
     
@@ -77,7 +77,9 @@ function SurveyComponent() {
           throw error;
         }
     }
-    return (<Survey model={survey} />);
+    return (json != null ?
+      <Survey model={survey} /> : <div></div>
+    );
 }
 
 export default SurveyComponent;

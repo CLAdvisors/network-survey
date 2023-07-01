@@ -2,7 +2,28 @@ const express = require('express');
 const fs = require('fs');
 const cors = require('cors');
 const { nanoid } = require('nanoid');
+const { Pool } = require('pg');
 
+// Create a new instance of the Pool
+const pool = new Pool({
+  user: 'postgres',
+  password: 'Picker22',
+  host: 'database-1.co6wn5j0nqtw.us-east-2.rds.amazonaws.com',
+  port: '5432',
+  database: '',
+});
+
+// Function to execute a query
+async function executeQuery(query) {
+  const client = await pool.connect();
+  
+  try {
+    const result = await client.query(query);
+    return result;
+  } finally {
+    client.release();
+  }
+}
 
 const app = express();
 const port = 3000; // Choose your desired port number
@@ -16,12 +37,109 @@ const port = 3000; // Choose your desired port number
 // - add email functionality
 // - add csv file download
 
-app.use(cors()); 
+app.use(cors()); // Enable CORS
+
+
+
+// Example usage: Adding a new survey
+async function insertSurvey(name, title) {
+  const query = `INSERT INTO Survey (name, title, creation_date)
+                 VALUES ('${name}', '${title}', NOW())`;
+  const result = await executeQuery(query);
+  
+  // Handle the result as needed
+  console.log('Survey added successfully!');
+}
+async function insertUsers(users) {
+  // Start a PostgreSQL client from the pool
+  const client = await pool.connect();
+
+  try {
+    // Begin a transaction
+    await client.query('BEGIN');
+
+    // Iterate through the users and insert them
+    for (const user of users) {
+      const query = 'INSERT INTO Respondent (name, contact_info, uuid, survey_name, can_respond) VALUES ($1, $2, $3, $4, $5)';
+      const values = [user.userName, user.email, user.userId, user.surveyName, user.respondent];
+      await client.query(query, values);
+    }
+
+    // Commit the transaction
+    await client.query('COMMIT');
+
+    // Release the client back to the pool
+    client.release();
+
+    console.log('Users inserted successfully!');
+  } catch (error) {
+    // If an error occurs, rollback the transaction
+    console.log(error)
+    await client.query('ROLLBACK');
+    console.error('Error inserting users:', error);
+    client.release();
+  }
+}
+async function insertQuestions(name, title, json) {
+  const client = await pool.connect();
+
+  try {
+    const query = 'UPDATE Survey SET title = $1, questions = $2 WHERE name = $3';
+    const values = [title, json, name];
+
+    await client.query(query, values);
+
+    console.log('Survey modified successfully!');
+  } catch (error) {
+    console.error('Error occurred:', error);
+  } finally {
+    await client.end();
+  }
+}
+async function insertResponses(responses, surveyName, userId) {
+  const client = await pool.connect();
+
+  try {
+    // Begin a transaction
+    await client.query('BEGIN');
+
+    for (const response of responses) {
+      const query = 'INSERT INTO Response (respondent_id, survey_name, response_value, response_timestamp) VALUES ($1, $2, $3, $4, $5)';
+      const values = [userId, surveyName, response, new Date().toLocaleString()];
+      await client.query(query, values);
+    }
+
+    // Commit the transaction
+    await client.query('COMMIT');
+
+    // Release the client back to the pool
+    client.release();
+
+    console.log('Responses inserted successfully!');
+  } catch (error) {
+    // If an error occurs, rollback the transaction
+    console.log(error)
+    await client.query('ROLLBACK');
+    console.error('Error inserting responses:', error);
+    client.release();
+  }
+}
+
 // PUT API endpoint for creating a new survey
 app.post('/api/survey', express.json(), (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
 
+  if (!surveyName) {
+    res.status(400).json({ message: 'Survey name is required.' });
+    return;
+  }
+
+  // Call the function to add a new survey
+  insertSurvey(surveyName, '')
+  .catch(error => console.error(error));
+
+  // OLD FS CODE
   let error = false;
 
   const surveyUserDataFile = `data/userdata_${surveyName}.json`;
@@ -63,8 +181,17 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   const csvData = data.csvData;
   const surveyName = data.surveyName;
 
-  let error = false;
 
+  if (!surveyName) {
+    res.status(400).json({ message: 'Survey name is required.' });
+    return;
+  }
+  if (!csvData) {
+    res.status(400).json({ message: 'CSV data is required.' });
+    return;
+  }
+
+  // OLD FS CODE
   console.log("Updating targets for survey: " + surveyName);
   console.log(data);
   
@@ -96,9 +223,19 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
       businessGroup1:columns[headerDict['Business Group - 1']].replace(/(\r\n|\n|\r)/gm, ""),
       businessGroup2:columns[headerDict['Business Group - 2']].replace(/(\r\n|\n|\r)/gm, ""),
       userId: nanoid(),
+      surveyName: surveyName,
       answers: []
     }
   });
+
+  // NEW DB CODE
+  // Insert the users into the database
+  console.log("GUHHHH")
+  insertUsers(surveyTargets);
+
+  // OLD FS CODE
+  let error = false;
+
   // Write the user data to the file
   const surveyUserDataFile = `data/userdata_${surveyName}.json`;
   fs.writeFile(surveyUserDataFile, JSON.stringify(surveyTargets, null, 2), err => 
@@ -138,13 +275,22 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   const data  = req.body;
   const surveyQuestions = data.surveyQuestions;
   const surveyName = data.surveyName;
+  // move to another endpoint
+  const surveyTitle = data.surveyTitle;
 
+  console.log("DATA:", data);
+  // NEW DB CODE
+  insertQuestions(surveyName, surveyTitle, surveyQuestions);
+
+  // OLD FS CODE
   let error = false;
 
   console.log("Updating questions for survey: " + surveyName);
 
   const surveyQuestionsFile = `data/json_${surveyName}.json`;
-  fs.writeFile(surveyQuestionsFile, JSON.stringify(surveyQuestions, null, 2), err => {
+
+  const jsonData = {title: surveyTitle, questions: surveyQuestions};
+  fs.writeFile(surveyQuestionsFile, JSON.stringify(jsonData, null, 2), err => {
     if (err) {
       console.error('Error creating survey:', err);
       res.status(500).json({ message: 'Error creating survey.' });
@@ -164,9 +310,12 @@ app.post('/api/user', express.json(), (req, res) => {
     const answers = JSON.parse(data.answers);
     const answerTimeStamp = new Date().toLocaleString();
     // add time stamp to answers
-    answers.timeStamp = answerTimeStamp;
+    answers.timeStamp = answerTimeStamp; 
 
+    // NEW DB CODE
+    insertResponses(answers, surveyName, userId);
 
+    // OLD FS CODE
     const userDataFile = `data/userdata_${surveyName}.json`;
 
     // Perform desired operations with the received data
@@ -202,25 +351,66 @@ app.post('/api/user', express.json(), (req, res) => {
         }
     });
 
-  });
+});
 
 // GET API endpoint for lazy loading the names list
-app.get('/api/names', (req, res) => {
+app.get('/api/names', async (req, res) => {
   const { skip = 0, take = 10, filter = '', surveyName = '' } = req.query;
 
-  const namesData = JSON.parse(fs.readFileSync(`data/names_${surveyName}.json`));
+  console.log("skip:", skip, "take:", take, "filter:", filter, "surveyName:", surveyName);
+  // NEW DB CODE
+    
+  const client = await pool.connect();
+  
+  const query = `
+  SELECT r.name, r.contact_info
+  FROM Respondent r
+  JOIN Survey s ON r.survey_name = s.name
+  WHERE s.name = $1
+  AND (r.name ILIKE $2 OR r.contact_info ILIKE $2)
+  OFFSET $3
+  LIMIT $4;
+  `;
 
-  let filteredNames = namesData.filter(name => name.toLowerCase().includes(filter.toLowerCase()));
+  const values = [surveyName, `%${filter}%`, skip, take];
+  client.query(query, values)
+  .then(result => {
+    const users = result.rows;
+    // Process the returned users
+    filteredNames = [];
+    // iterate over name, contact_info pairs
+    for (let i = 0; i < users.length; i++) {
+      const user = users[i];
+      // add to response
+      filteredNames.push(user.name + " (" + user.contact_info + ")");
+    }
+    const response = {
+      names: filteredNames,
+      //TODO check that this length/total even works
+      total: filteredNames.length
+    };
+    console.log("RESPONSE:", response);
+    res.json(response);
+  })
+  .catch(error => {
+    // Handle the error
+    console.error(error);
+  });
+  client.release();
+  // OLD FS CODE
+  // const namesData = JSON.parse(fs.readFileSync(`data/names_${surveyName}.json`));
 
-  filteredNames = filteredNames.slice(skip, parseInt(skip) + parseInt(take));
+  // let filteredNames = namesData.filter(name => name.toLowerCase().includes(filter.toLowerCase()));
 
-  const response = {
-    names: filteredNames,
-    //TODO check that this length/total even works
-    total: filteredNames.length
-  };
+  // filteredNames = filteredNames.slice(skip, parseInt(skip) + parseInt(take));
 
-  res.json(response);
+  // const response = {
+  //   names: filteredNames,
+  //   //TODO check that this length/total even works
+  //   total: filteredNames.length
+  // };
+
+  // res.json(response);
 });
 
 // GET API endpoint for survey questions

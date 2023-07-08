@@ -19,7 +19,6 @@ const TabularDataComponent = ({ activeSurvey }) => {
         },
         { field: 'userName', sortable: true },
         { field: 'Email', sortable: true },
-        { field: 'started', sortable: true },
         { field: 'status', sortable: true }
     ]);
 
@@ -30,9 +29,10 @@ const TabularDataComponent = ({ activeSurvey }) => {
             return;
         }
         console.log(activeSurvey)
-        const url = "http://173.54.201.86:3000/api/targets?surveyName=" + activeSurvey;
+        const url = "http://localhost:3000/api/targets?surveyName=" + activeSurvey;
         // try to send the request, if it fails delete old data
         sendRequest(url, (data) => {
+            console.log(data)
             setRowData(data);
         }, (err) => {
             setRowData([]);

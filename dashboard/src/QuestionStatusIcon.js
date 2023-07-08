@@ -10,7 +10,7 @@ const QuestionStatusIcon = ({ activeSurvey, updateDummy }) => {
             return;
         }
         console.log("Test", updateDummy)
-        const url = `http://173.54.201.86:3000/api/surveyStatus?surveyName=${activeSurvey}`;
+        const url = `http://localhost:3000/api/surveyStatus?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
             console.log("data: ", data)
             if(data.questionDataStatus){

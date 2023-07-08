@@ -15,7 +15,7 @@ function SurveyComponent({setTitle}) {
     // Get survey question json from questions api
     const [json, setJson] = React.useState(null);
     React.useEffect(() => {
-      const url = `http://173.54.201.86:3000/api/questions?surveyName=${surveyName}`;
+      const url = `http://localhost:3000/api/questions?surveyName=${surveyName}`;
       sendRequest(url, (data) => { setJson(data.questions); setTitle(data.title); });
     }, [surveyName]);
     
@@ -28,7 +28,7 @@ function SurveyComponent({setTitle}) {
 
     survey.onComplete.add((sender, options) => {
         let data = JSON.stringify(sender.data, null, 3);
-        let url = 'http://173.54.201.86:3000/api/user'
+        let url = 'http://localhost:3000/api/user'
 
         if (userId === 'demo') {
           return;
@@ -40,7 +40,7 @@ function SurveyComponent({setTitle}) {
 
     survey.onChoicesLazyLoad.add((_, options) => {
         console.log("YES IT WENT HERE")
-        const url = `http://173.54.201.86:3000/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
+        const url = `http://localhost:3000/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
         sendRequest(url, (data) => { options.setItems(data.names, data.total); });
     });
     

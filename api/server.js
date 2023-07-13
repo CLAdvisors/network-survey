@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const cors = require('cors');
+const { Resend } = require('resend');
 const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
 
@@ -12,6 +13,65 @@ const pool = new Pool({
   port: '5432',
   database: '',
 });
+const resend = new Resend('re_UNs8VgH6_HhcK6GEjQM7pk3BczHt9dKB3');
+
+const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<html lang="en">
+
+  <head data-id="__react-email-head"></head>
+  <div id="__react-email-preview" style="display:none;overflow:hidden;line-height:1px;opacity:0;max-height:0;max-width:0">You&#x27;re now ready to take your CLA survey!
+  </div>
+
+  <body data-id="__react-email-body" style="background-color:#f6f9fc;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,&quot;Helvetica Neue&quot;,Ubuntu,sans-serif">
+    <table align="center" width="100%" data-id="__react-email-container" role="presentation" cellSpacing="0" cellPadding="0" border="0" style="max-width:37.5em;background-color:#ffffff;margin:0 auto;padding:20px 0 48px;margin-bottom:64px">
+      <tbody>
+        <tr style="width:100%">
+          <td>
+            <table align="center" width="100%" data-id="react-email-section" style="padding:0 48px" border="0" cellPadding="0" cellSpacing="0" role="presentation">
+              <tbody>
+                <tr>
+                  <td><img data-id="react-email-img" alt="Logo" src="https://i.postimg.cc/4nkbg08K/logo.png" width="189" height="49" style="display:block;outline:none;border:none;text-decoration:none" />
+                    <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />`, 
+                    `<a href="`, `" data-id="react-email-button" target="_blank" style="background-color:#42B4AF;border-radius:5px;color:#fff;font-size:16px;font-weight:bold;text-decoration:none;text-align:center;display:inline-block;width:100%;line-height:100%;max-width:100%;padding:10px 10px"><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%;mso-text-raise:15" hidden>&nbsp;</i><![endif]--></span><span style="max-width:100%;display:inline-block;line-height:120%;mso-padding-alt:0px;mso-text-raise:7.5px">Start your survey</span><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%" hidden>&nbsp;</i><![endif]--></span></a>
+                    <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">View our <a href="https://stripe.com/docs" data-id="react-email-link" target="_blank" style="color:#556cd6;text-decoration:none">privacy policy</a> .</p>
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem. Morbi sed erat non ex mollis pulvinar ut eu nisi.</p>
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">— The CLA team</p>
+                    <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
+                    <p data-id="react-email-text" style="font-size:12px;line-height:16px;margin:16px 0;color:#8898aa">Contemporary Leadership Advisors, 299 Park Ave, New York, NY 10171</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+
+</html>`];
+
+const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem.</p> 
+<p>Morbi sed erat non ex mollis pulvinar ut eu nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed gravida cursus pellentesque. Aliquam in lectus et ex ultricies sodales a.</p>`; 
+
+async function sendMail(email, id, surveyName, text = loremIpsum, html = EMAIL_HTML) {
+  try {
+    text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
+
+    let customLink = `http://localhost:3002/?surveyName=${surveyName}&userId=${id}`;
+    const data = await resend.emails.send({
+      from: 'CLA Survey <survey@cladvisors.com>',
+      to: email,
+      subject: 'CLA Network Survey',
+      html: html[0] + text + html[1] + customLink + html[2]
+    });
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+// sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query
 async function executeQuery(query) {
@@ -126,41 +186,6 @@ app.post('/api/survey', express.json(), (req, res) => {
   // Call the function to add a new survey
   insertSurvey(surveyName, '')
   .catch(error => console.error(error));
-
-  // OLD FS CODE
-  // let error = false;
-
-  // const surveyUserDataFile = `data/userdata_${surveyName}.json`;
-  // // Create a json object for each user in the surveyTargets array
-  // fs.writeFile(surveyUserDataFile, '', err => 
-  // {  
-  //   if (err){
-  //     console.error('Error writing user data file:', err); 
-  //     error = true;
-  //   }
-  // });
-  // const surveyNamesFile = `data/names_${surveyName}.json`;
-  // fs.writeFile(surveyNamesFile, '', err => 
-  // {  
-  //   if (err){
-  //     console.error('Error reading name data file:', err); 
-  //     error = true;
-  //   }
-  // });
-  // const surveyQuestionsFile = `data/json_${surveyName}.json`;
-  // fs.writeFile(surveyQuestionsFile, '', err =>
-  // {
-  //   if (err){
-  //     console.error('Error reading question data file:', err); 
-  //     error = true;
-  //   }
-  // });
-
-  // if (error) {
-  //   res.status(500).json({ message: 'Error creating survey.' });
-  // } else {
-  //   res.status(200).json({ message: 'Survey created successfully.' });
-  // }
 });
 
 // PUT API endpoint for uploading a csv file of names
@@ -178,44 +203,37 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
     res.status(400).json({ message: 'CSV data is required.' });
     return;
   }
+  let csvArray = csvData.split('\n');
+  const header = csvArray.shift().split(',');
+  const headerDict = {};
 
-  // // OLD FS CODE
-  // console.log("Updating targets for survey: " + surveyName);
-  // console.log(data);
-  
-  // // Remove the header from the csv string, create a dict from header name to index
-  // let csvArray = csvData.split('\n');
-  // const header = csvArray.shift().split(',');
-  // const headerDict = {};
-
-  // header.forEach((name, index) => {
-  //   headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
-  // });
-  // console.log(headerDict);
-  // // Convert to json
-  // const surveyTargets = csvArray.map((row, index) => {
-  //   const columns = row.split(',');
-  //   return {
-  //     userName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, "") + " " + columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     firstName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     lastName: columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     email: columns[headerDict['Email']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     respondent: columns[headerDict['Respondent']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     location: columns[headerDict['Location']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     level: columns[headerDict['Level']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     gender: columns[headerDict['Gender']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     race: columns[headerDict['Race']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     manager: columns[headerDict['Manager']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     vp:columns[headerDict['VP']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     businessGroup:columns[headerDict['Business Group']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     businessGroup1:columns[headerDict['Business Group - 1']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     businessGroup2:columns[headerDict['Business Group - 2']].replace(/(\r\n|\n|\r)/gm, ""),
-  //     userId: nanoid(),
-  //     surveyName: surveyName,
-  //     answers: []
-  //   }
-  // });
-
+  header.forEach((name, index) => {
+    headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
+  });
+  console.log(headerDict);
+  // Convert to json
+  const surveyTargets = csvArray.map((row, index) => {
+    const columns = row.split(',');
+    return {
+      userName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, "") + " " + columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
+      firstName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, ""),
+      lastName: columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
+      email: columns[headerDict['Email']].replace(/(\r\n|\n|\r)/gm, ""),
+      respondent: columns[headerDict['Respondent']].replace(/(\r\n|\n|\r)/gm, ""),
+      location: columns[headerDict['Location']].replace(/(\r\n|\n|\r)/gm, ""),
+      level: columns[headerDict['Level']].replace(/(\r\n|\n|\r)/gm, ""),
+      gender: columns[headerDict['Gender']].replace(/(\r\n|\n|\r)/gm, ""),
+      race: columns[headerDict['Race']].replace(/(\r\n|\n|\r)/gm, ""),
+      manager: columns[headerDict['Manager']].replace(/(\r\n|\n|\r)/gm, ""),
+      vp:columns[headerDict['VP']].replace(/(\r\n|\n|\r)/gm, ""),
+      businessGroup:columns[headerDict['Business Group']].replace(/(\r\n|\n|\r)/gm, ""),
+      businessGroup1:columns[headerDict['Business Group - 1']].replace(/(\r\n|\n|\r)/gm, ""),
+      businessGroup2:columns[headerDict['Business Group - 2']].replace(/(\r\n|\n|\r)/gm, ""),
+      userId: nanoid(),
+      surveyName: surveyName,
+      answers: []
+    }
+  });
   // NEW DB CODE
   // Insert the users into the database
   insertUsers(surveyTargets);
@@ -269,22 +287,6 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   // NEW DB CODE
   insertQuestions(surveyName, surveyTitle, surveyQuestions);
 
-  // OLD FS CODE
-  // let error = false;
-
-  // console.log("Updating questions for survey: " + surveyName);
-
-  // const surveyQuestionsFile = `data/json_${surveyName}.json`;
-
-  // const jsonData = {title: surveyTitle, questions: surveyQuestions};
-  // fs.writeFile(surveyQuestionsFile, JSON.stringify(jsonData, null, 2), err => {
-  //   if (err) {
-  //     console.error('Error creating survey:', err);
-  //     res.status(500).json({ message: 'Error creating survey.' });
-  //   } else {
-  //     res.json({ message: 'Survey created successfully.' });
-  //   }
-  // });
 
 });
 
@@ -301,42 +303,6 @@ app.post('/api/user', express.json(), (req, res) => {
 
     // NEW DB CODE
     insertResponses(answers, userId);
-
-    // OLD FS CODE
-    // const userDataFile = `data/userdata_${surveyName}.json`;
-
-    // // Perform desired operations with the received data
-    // console.log('Received user ID:', userId);
-    // console.log('Received data:', answers);
-  
-    // // Read existing user data 
-    // let existingUserData = [];
-    // try {
-    //     existingUserData = JSON.parse(fs.readFileSync(userDataFile));
-    // } catch (error) {
-    //     console.error('Error reading user data file:', error);
-    // }
-
-    // const existingUserIndex = existingUserData.findIndex(user => user.userId === userId);
-
-    // if (existingUserIndex !== -1) {
-    //     // Update existing user data
-    //     existingUserData[existingUserIndex].answers = answers;
-    // } else {
-    //     // Error if user ID is not found
-    //     console.error('User ID not found:', userId);
-    // }
-
-    // // Write updated user data to the JSON file
-    // fs.writeFile(userDataFile, JSON.stringify(existingUserData, null, 2), err => {
-    //     if (err) {
-    //     console.error('Error writing user data file:', err);
-    //     res.status(500).json({ message: 'Error writing user data.' });
-    //     } else {
-    //     console.log('User data written to file:', userDataFile);
-    //     res.json({ message: 'User data received and saved successfully.' });
-    //     }
-    // });
 
 });
 
@@ -384,20 +350,7 @@ app.get('/api/names', async (req, res) => {
     console.error(error);
   });
   client.release();
-  // OLD FS CODE
-  // const namesData = JSON.parse(fs.readFileSync(`data/names_${surveyName}.json`));
-
-  // let filteredNames = namesData.filter(name => name.toLowerCase().includes(filter.toLowerCase()));
-
-  // filteredNames = filteredNames.slice(skip, parseInt(skip) + parseInt(take));
-
-  // const response = {
-  //   names: filteredNames,
-  //   //TODO check that this length/total even works
-  //   total: filteredNames.length
-  // };
-
-  // res.json(response);
+  
 });
 
 // GET API endpoint for survey questions
@@ -429,13 +382,8 @@ app.get('/api/questions', async (req, res) => {
     .catch(error => {
       // Handle the error
       console.error(error);
-    });
-
-    client.release();
-    // OLD FS CODE
-    // const questionsData = JSON.parse(fs.readFileSync(`data/json_${surveyName}.json`));
-
-    // res.json(questionsData);
+    })
+    .finally(() => client.release());
 
   });
 
@@ -461,15 +409,6 @@ app.get('/api/results', async (req, res) => {
     .catch(e => console.error(e.stack))
     .finally(() => client.end());
 
-  // OLD FS CODE
-  // const userData = JSON.parse(fs.readFileSync(`data/userdata_${surveyName}.json`));
-
-  // // send the response if the user data file exists
-  // if (userData) {
-  //   res.json(userData);
-  // } else {
-  //   res.status(404).json({ message: 'User data not found.' });
-  // }
 });
 
 // GET API endpoint for a list of survey targets and the status of their responses
@@ -494,29 +433,6 @@ app.get('/api/targets', async(req, res) => {
     })
     .catch(e => console.error(e.stack))
     .finally(() => client.end());
-
-  // OLD FS CODE
-  // catch if file is empty
-  // if (fs.readFileSync(`data/userdata_${surveyName}.json`) == "") {
-  //   res.status(404).json({ message: 'User data empty.' });
-  //   return;
-  // }
-  // const userData = JSON.parse(fs.readFileSync(`data/userdata_${surveyName}.json`));
-
-  // // send the response if the user data file exists
-  // if (userData) {
-  //   const targets = userData.map(user => {
-  //     return {
-  //       userName: user.userName,
-  //       Email: user.email,
-  //       started: Object.keys(user.answers).length > 0 ? user.answers.timeStamp : '',
-  //       status: Object.keys(user.answers).length > 0 ? 'Completed' : 'Pending'
-  //     }
-  //   }); 
-  //   res.json(targets);
-  // } else {
-  //   res.status(404).json({ message: 'User data not found.' });
-  // }
 });
 
 // GET API endpoint for a list of current surveys
@@ -544,13 +460,6 @@ app.get('/api/surveys', async (req, res) => {
     })
     .finally(() => client.release());
     
-  // const surveys = fs.readdirSync('./data').filter(file => file.startsWith('json_')).map(file => file.replace('json_', '').replace('.json', ''));
-  // console.log(surveys)
-  // // For each survey name in the json array of survey names, check if the associated json userdata and names files have data inside them.
-  // // Create a new object with the survey name and a boolean value for whether or not the survey is complete.
-
-
-  // res.json({surveys: surveys});
 });
 
 // GET API endpoint for status of survey creation
@@ -598,17 +507,9 @@ GROUP BY
     })
     .finally(() => client.release());
 
-
-  // OLD FS CODE
-  // const userData = fs.readFileSync(`data/userdata_${surveyName}.json`);
-  // const questionData = fs.readFileSync(`data/json_${surveyName}.json`);
-  // console.log("Survey status request: " + surveyName);
-  // res.json( {
-  //   // Currently 12 to catch if file contians 'null' or 'undefined'
-  //   userDataStatus: userData.length >  12 ? true : false,
-  //   questionDataStatus: questionData.length > 12 ? true : false
-  // });
 });
+
+
 
 
 // Start the server

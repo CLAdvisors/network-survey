@@ -510,7 +510,9 @@ GROUP BY
 
 });
 
-
+app.get('/api/surveyStatus', async (req, res) => {
+  res.status(200).json({ message: 'Health Check: All Good!.' });
+});
 
 
 // Start the server

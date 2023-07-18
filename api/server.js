@@ -185,7 +185,8 @@ app.post('/api/survey', express.json(), (req, res) => {
 
   // Call the function to add a new survey
   insertSurvey(surveyName, '')
-  .catch(error => console.error(error));
+  .catch(error => console.error(error))
+  .then(() => {res.status(200).json({ message: 'Survey created successfully!' });});
 });
 
 // PUT API endpoint for uploading a csv file of names
@@ -514,5 +515,5 @@ GROUP BY
 
 // Start the server
 app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+  console.log(`Server is running on port: ${port}`);
 });

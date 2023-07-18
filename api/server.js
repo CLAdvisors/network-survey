@@ -1,5 +1,4 @@
 const express = require('express');
-const https = require('https');
 const fs = require('fs');
 const cors = require('cors');
 const { Resend } = require('resend');
@@ -52,11 +51,6 @@ const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//
   </body>
 
 </html>`];
-
-const options = {
-  key: fs.readFileSync('./privatekey.key'),
-  cert: fs.readFileSync('./certificate.crt')
-};
 
 const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem.</p> 
 <p>Morbi sed erat non ex mollis pulvinar ut eu nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed gravida cursus pellentesque. Aliquam in lectus et ex ultricies sodales a.</p>`; 
@@ -520,9 +514,6 @@ GROUP BY
 
 
 // Start the server
-https.createServer(options, app).listen(port, () => {
+app.listen(port, () => {
   console.log(`Server is running on port: ${port}`);
 });
-// app.listen(port, () => {
-//   console.log(`Server is running on port: ${port}`);
-// });

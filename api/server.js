@@ -272,7 +272,7 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   if (error) {
     res.status(500).json({ message: 'Error creating survey.' });
   } else {
-    res.json({ message: 'Survey created successfully.' });
+    res.status(200).json({ message: 'Survey created successfully.' });
   }
 });
 
@@ -344,7 +344,7 @@ app.get('/api/names', async (req, res) => {
       total: filteredNames.length
     };
     console.log("RESPONSE:", response);
-    res.json(response);
+    res.status(200).json(response);
   })
   .catch(error => {
     // Handle the error
@@ -378,7 +378,7 @@ app.get('/api/questions', async (req, res) => {
     .then(result => {
       const jsonData = {title: result.rows[0].title, questions: result.rows[0].questions};
       // Process the returned JSON data
-      res.json(jsonData);
+      res.status(200).json(jsonData);
     })
     .catch(error => {
       // Handle the error
@@ -405,7 +405,7 @@ app.get('/api/results', async (req, res) => {
           return {...combined, [row.name]: row.response};
         }, {});
         console.log(responses); // This will be an array of response JSON objects
-        res.json({responses});
+        res.status(200).json({responses});
     })
     .catch(e => console.error(e.stack))
     .finally(() => client.end());
@@ -430,7 +430,7 @@ app.get('/api/targets', async(req, res) => {
             Email: row.contact_info,
             status: row.response_status ? 'Incomplete' : 'Complete'
         }));
-        res.json(respondents); // This will be an array of respondent objects
+        res.status(200).json(respondents); // This will be an array of respondent objects
     })
     .catch(e => console.error(e.stack))
     .finally(() => client.end());
@@ -453,7 +453,7 @@ app.get('/api/surveys', async (req, res) => {
       const jsonData = result.rows;
       const surveys = jsonData.map(survey => survey.name);
       // Process the returned JSON data
-      res.json({surveys: surveys});
+      res.status(200).json({surveys: surveys});
     })
     .catch(error => {
       // Handle the error
@@ -497,7 +497,7 @@ GROUP BY
       const { number_of_respondents, is_questions_null } = result.rows[0];
       // Process the returned values
       console.log(number_of_respondents, is_questions_null)
-      res.json( {
+      res.status(200).json( {
         userDataStatus: number_of_respondents >  1 ? true : false,
         questionDataStatus: !is_questions_null
       });

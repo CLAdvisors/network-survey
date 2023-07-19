@@ -28,7 +28,7 @@ const Dashboard = () => {
     // and update the surveys state variable with the result
     
     const updateActiveSurvey = useCallback((event) => {
-      const url = "http://localhost:3000/api/surveys";
+      const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/surveys";
         sendRequest(url, (data) => {
             setSurveys(data.surveys);
             if (data.surveys.length > 0 && activeSurvey === '') {
@@ -42,9 +42,9 @@ const Dashboard = () => {
     }, [updateActiveSurvey]);
 
     const createSurvey = async () => {
-      const url = "http://localhost:3000/api/survey";
+      const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/survey";
       const response = await postRequest(url, { surveyName: surveyName });
-    
+      console.log(response)
       if (response.status === 200) {
         setSurveys([...surveys, surveyName]);
       }
@@ -54,7 +54,7 @@ const Dashboard = () => {
       const reader = new FileReader();
       reader.onload = function(event) {
 
-        const url = "http://localhost:3000/api/updateTargets";
+        const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/updateTargets";
         postRequest(url, { surveyName: activeSurvey, csvData: event.target.result }, () => {
           userFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -71,7 +71,7 @@ const Dashboard = () => {
       
       reader.onload = function(event) {
         const data = JSON.parse(event.target.result);
-        const url = "http://localhost:3000/api/updateQuestions";
+        const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/updateQuestions";
         postRequest(url, { surveyName: activeSurvey, surveyQuestions: data.questions, surveyTitle: data.title}, () => {
           questionFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -84,7 +84,7 @@ const Dashboard = () => {
     }
 
     const downloadAnswers = () => {
-        const url = `http://localhost:3000/api/results?surveyName=${activeSurvey}`;
+        const url = `https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/results?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
           const dataBlob = new Blob([JSON.stringify(data)], { type: 'application/json' });
           const dataURL = window.URL.createObjectURL(dataBlob);
@@ -98,7 +98,7 @@ const Dashboard = () => {
     }
 
     const testSurvey = () => {
-      window.open(`http://localhost:3002/?surveyName=${activeSurvey}&userId=demo`);
+      window.open(`http://network-survey-cla.s3-website-us-east-1.amazonaws.com/?surveyName=${activeSurvey}&userId=demo`);
     }
 
     function sendRequest(url, onloadSuccessCallback) {

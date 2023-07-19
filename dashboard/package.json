@@ -15,7 +15,8 @@
     "react-markdown": "^8.0.7",
     "react-quill": "^2.0.0",
     "react-scripts": "5.0.1",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "webpack": "^5.82.0"
   },
   "scripts": {
     "start": "react-scripts start",

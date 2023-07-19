@@ -9,7 +9,7 @@ const NameStatusIcon = ({ activeSurvey, updateDummy }) => {
         if (activeSurvey === '') {
             return;
         }
-        const url = `http://localhost:3000/api/surveyStatus?surveyName=${activeSurvey}`;
+        const url = `https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/surveyStatus?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
             if(data.userDataStatus)
                 setStatus('icon_green');

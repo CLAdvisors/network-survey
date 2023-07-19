@@ -10,7 +10,7 @@ const QuestionStatusIcon = ({ activeSurvey, updateDummy }) => {
             return;
         }
         console.log("Test", updateDummy)
-        const url = `http://localhost:3000/api/surveyStatus?surveyName=${activeSurvey}`;
+        const url = `https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/surveyStatus?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
             console.log("data: ", data)
             if(data.questionDataStatus){

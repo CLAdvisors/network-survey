@@ -29,7 +29,7 @@ const TabularDataComponent = ({ activeSurvey }) => {
             return;
         }
         console.log(activeSurvey)
-        const url = "http://localhost:3000/api/targets?surveyName=" + activeSurvey;
+        const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/targets?surveyName=" + activeSurvey;
         // try to send the request, if it fails delete old data
         sendRequest(url, (data) => {
             console.log(data)

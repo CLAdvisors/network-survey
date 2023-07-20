@@ -4,6 +4,7 @@ const cors = require('cors');
 const { Resend } = require('resend');
 const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
+const Papa = require('papaparse');
 
 // Create a new instance of the Pool
 const pool = new Pool({
@@ -173,6 +174,39 @@ async function insertResponses(responses, userId) {
   }  
 }
 
+function csvToJson(csvString, title) {
+    let json = {
+        "title": title,
+        "questions": {
+            "elements": [],
+            "showQuestionNumbers": false
+        }
+    };
+
+    // Parse CSV string
+    let result = Papa.parse(csvString, {
+        header: true,
+        skipEmptyLines: true,
+    });
+
+    // Iterate through each parsed data and create the corresponding question object
+    result.data.forEach(item => {
+        let questionObject = {
+            "type": "tagbox",
+            "name": item['Question name'],
+            "title": item['Question title'],
+            "isRequired": true,
+            "choicesLazyLoadEnabled": true,
+            "choicesLazyLoadPageSize": 25
+        };
+
+        json.questions.elements.push(questionObject);
+    });
+
+    return json;
+}
+
+
 // PUT API endpoint for creating a new survey
 app.post('/api/survey', express.json(), (req, res) => {
   const data  = req.body;
@@ -239,41 +273,8 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   // Insert the users into the database
   insertUsers(surveyTargets);
 
-  // OLD FS CODE
-  let error = false;
-
-  // Write the user data to the file
-  const surveyUserDataFile = `data/userdata_${surveyName}.json`;
-  fs.writeFile(surveyUserDataFile, JSON.stringify(surveyTargets, null, 2), err => 
-  {  
-    if (err){
-      console.error('Error writing user data file:', err); 
-      error = true;
-    }
-  });
-
-  // generate names file from surveyTargets
-  const surveyNamesFile = `data/names_${surveyName}.json`;
-
-  // Create an array of names from the surveyTargets
-  const names = [];
-  surveyTargets.forEach((user, index) => {
-    names.push(user.userName + " (" + user.email + ")");
-  });
-  // Write the names to the file
-  fs.writeFile(surveyNamesFile, JSON.stringify(names, null, 2), err =>
-  {
-    if (err){
-      console.error('Error reading name data file:', err);
-      error = true;
-    }
-  });
-
-  if (error) {
-    res.status(500).json({ message: 'Error creating survey.' });
-  } else {
-    res.status(200).json({ message: 'Survey created successfully.' });
-  }
+  // make this a promise response
+  res.status(200).json({ message: 'Survey created successfully.' }); 
 });
 
 // PUT API endpoint for uploading a json file of questions
@@ -283,6 +284,8 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   const surveyName = data.surveyName;
   // move to another endpoint
   const surveyTitle = data.surveyTitle;
+
+  surveyQuestions = csvToJson(surveyQuestions, surveyTitle);
 
   console.log("DATA:", data);
   // NEW DB CODE

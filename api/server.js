@@ -176,11 +176,8 @@ async function insertResponses(responses, userId) {
 
 function csvToJson(csvString, title) {
     let json = {
-        "title": title,
-        "questions": {
-            "elements": [],
-            "showQuestionNumbers": false
-        }
+        "elements": [],
+        "showQuestionNumbers": false
     };
 
     // Parse CSV string

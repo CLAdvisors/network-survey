@@ -285,11 +285,11 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   // move to another endpoint
   const surveyTitle = data.surveyTitle;
 
-  surveyQuestions = csvToJson(surveyQuestions, surveyTitle);
+  const questions = csvToJson(surveyQuestions, surveyTitle);
 
   console.log("DATA:", data);
   // NEW DB CODE
-  insertQuestions(surveyName, surveyTitle, surveyQuestions);
+  insertQuestions(surveyName, surveyTitle, questions);
 
 
 });

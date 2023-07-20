@@ -197,7 +197,7 @@ function csvToJson(csvString, title) {
             "choicesLazyLoadPageSize": 25
         };
 
-        json.questions.elements.push(questionObject);
+        json.elements.push(questionObject);
     });
 
     return json;

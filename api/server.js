@@ -170,7 +170,7 @@ async function insertResponses(responses, userId) {
   } catch (error) {
     console.error('Error occurred:', error);
   } finally {
-    await client.end();
+    await client.release();
   }  
 }
 
@@ -407,7 +407,7 @@ app.get('/api/results', async (req, res) => {
         res.status(200).json({responses});
     })
     .catch(e => console.error(e.stack))
-    .finally(() => client.end());
+    .finally(() => client.release());
 
 });
 
@@ -432,7 +432,7 @@ app.get('/api/targets', async(req, res) => {
         res.status(200).json(respondents); // This will be an array of respondent objects
     })
     .catch(e => console.error(e.stack))
-    .finally(() => client.end());
+    .finally(() => client.release());
 });
 
 // GET API endpoint for a list of current surveys

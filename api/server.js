@@ -154,7 +154,7 @@ async function insertQuestions(name, title, json) {
   } catch (error) {
     console.error('Error occurred:', error);
   } finally {
-    await client.end();
+    await client.release();
   }
 }
 async function insertResponses(responses, userId) {
@@ -287,7 +287,7 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   // NEW DB CODE
   insertQuestions(surveyName, surveyData.title, surveyData.questions);
 
-
+  
 });
 
 // PUT API endpoint for answer submission

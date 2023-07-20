@@ -5,6 +5,7 @@ import NameStatusIcon from './NameStatusIcon';
 import QuestionStatusIcon from './QuestionStatusIcon';
 import TextInput from './TextInput';
 import Graph from './Graph';
+import Papa from 'papaparse';
 // TODO for MVP
 // - Redo the UI
 // - Change survey results download to csv
@@ -70,9 +71,10 @@ const Dashboard = () => {
       const reader = new FileReader();
       
       reader.onload = function(event) {
-        const data = JSON.parse(event.target.result);
+        const data = event.target.result;
+
         const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/updateQuestions";
-        postRequest(url, { surveyName: activeSurvey, surveyQuestions: data.questions, surveyTitle: data.title}, () => {
+        postRequest(url, { surveyName: activeSurvey, surveyQuestions: data}, () => {
           questionFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
         });
@@ -83,14 +85,50 @@ const Dashboard = () => {
       
     }
 
+    function jsonToCsv(json) {
+      // Create an array to hold the data rows
+      let csvData = [];
+  
+      // Iterate over the responses in the JSON object
+      for (let name in json.responses) {
+          // Create a new object for this row
+          let row = {
+              "name": name,
+              "timeStamp": json.responses[name].timestamp,
+          };
+          
+          // Iterate over the questions in this response
+          console.log(row)
+          for (let question in json.responses[name]) {
+              // Skip if it's the timestamp field
+              if (question === "timeStamp") continue;
+  
+              // Add this question's answers to the row
+              row[question] = json.responses[name][question].join(", ");
+          }
+  
+          // Add this row to the csv data array
+          csvData.push(row);
+      }
+      console.log(csvData)
+      // Unparse the csv data array into a CSV string
+      let csvString = Papa.unparse(csvData);
+  
+      return csvString;
+  }
+
     const downloadAnswers = () => {
         const url = `https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/results?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
-          const dataBlob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+          // convert JSON to CSV
+          const csv = jsonToCsv(data);
+          // create a blob object
+          const dataBlob = new Blob([csv], { type: 'text/csv' });
+          // const dataBlob = new Blob([JSON.stringify(data)], { type: 'application/json' });
           const dataURL = window.URL.createObjectURL(dataBlob);
           const link = document.createElement('a');
           link.href = dataURL;
-          link.setAttribute('download', `${activeSurvey}_results.json`);
+          link.setAttribute('download', `${activeSurvey}_results.csv`);
           document.body.appendChild(link); // Required for Firefox
           link.click();
           document.body.removeChild(link); // Required for Firefox

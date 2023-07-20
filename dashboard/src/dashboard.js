@@ -94,7 +94,7 @@ const Dashboard = () => {
           // Create a new object for this row
           let row = {
               "name": name,
-              "timeStamp": json.responses[name].timestamp,
+              "timestamp": json.responses[name].timeStamp,
           };
           
           // Iterate over the questions in this response

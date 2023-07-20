@@ -200,7 +200,7 @@ function csvToJson(csvString, title) {
         json.elements.push(questionObject);
     });
 
-    return json, result.data[0]['Title'];
+    return {questions: json, title: result.data[0]['Title']};
 }
 
 
@@ -281,11 +281,11 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   const surveyName = data.surveyName;
   // move to another endpoint
 
-  const {questions,  surveyTitle} = csvToJson(surveyQuestions);
+  const surveyData = csvToJson(surveyQuestions);
 
   console.log("DATA:", data);
   // NEW DB CODE
-  insertQuestions(surveyName, surveyTitle, questions);
+  insertQuestions(surveyName, surveyData.title, surveyData.questions);
 
 
 });

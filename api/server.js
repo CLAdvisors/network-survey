@@ -72,6 +72,24 @@ async function sendMail(email, id, surveyName, text = loremIpsum, html = EMAIL_H
   }
 }
 
+async function startSurvey(surveyName){
+  // Pull all users from the database
+  const client = await pool.connect();
+  const query = 'SELECT name, contact_info, uuid FROM Respondent WHERE survey_name = $1';
+  const values = [surveyName];
+  client.query(query, values)
+    .then(response => {
+        const respondents = response.rows.map(row => ({
+            userName: row.name,
+            email: row.contact_info,
+            userId: row.uuid
+        }));
+    });
+    // Send the emails
+    respondents.forEach(respondent => {
+      sendMail(respondent.email, respondent.userId, surveyName);
+    });
+  }
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query
@@ -121,8 +139,8 @@ async function insertUsers(users) {
 
     // Iterate through the users and insert them
     for (const user of users) {
-      const query = 'INSERT INTO Respondent (name, contact_info, uuid, survey_name, can_respond) VALUES ($1, $2, $3, $4, $5)';
-      const values = [user.userName, user.email, user.userId, user.surveyName, user.respondent];
+      const query = 'INSERT INTO Respondent (name, contact_info, uuid, survey_name, can_respond, lang) VALUES ($1, $2, $3, $4, $5, $6)';
+      const values = [user.userName, user.email, user.userId, user.surveyName, user.respondent, user.language];
       await client.query(query, values);
     }
 
@@ -325,6 +343,7 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
       businessGroup:columns[headerDict['Business Group']].replace(/(\r\n|\n|\r)/gm, ""),
       businessGroup1:columns[headerDict['Business Group - 1']].replace(/(\r\n|\n|\r)/gm, ""),
       businessGroup2:columns[headerDict['Business Group - 2']].replace(/(\r\n|\n|\r)/gm, ""),
+      language:columns[headerDict['Language']].replace(/(\r\n|\n|\r)/gm, ""),
       userId: nanoid(),
       surveyName: surveyName,
       answers: []

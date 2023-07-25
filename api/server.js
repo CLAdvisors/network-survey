@@ -56,7 +56,7 @@ const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//
 const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem.</p> 
 <p>Morbi sed erat non ex mollis pulvinar ut eu nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed gravida cursus pellentesque. Aliquam in lectus et ex ultricies sodales a.</p>`; 
 
-async function sendMail(email, id, surveyName, text = loremIpsum, html = EMAIL_HTML) {
+async function sendMail(email, id, surveyName, text) {
   try {
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
 
@@ -65,7 +65,7 @@ async function sendMail(email, id, surveyName, text = loremIpsum, html = EMAIL_H
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
       subject: 'CLA Network Survey',
-      html: html[0] + text + html[1] + customLink + html[2]
+      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2]
     });
   } catch (error) {
     console.error(error);
@@ -101,16 +101,16 @@ async function startSurvey(surveyName){
     });
     // Create a map from language to email text
     const emailMap = emails.reduce((map, email) => {
-      map[email.language] = email.text;
+      map[email.language.replace(/"/g, "").replace(/'/g, "")] = '<p>' + email.text + '</p>';
       return map;
     }, {});
-  
+    console.log(emailMap)
+    console.log(respondents)
     // Send the emails
     respondents.forEach(respondent => {
-      sendMail(respondent.email, respondent.userId, surveyName, emailMap[respondent.language]);
+      sendMail(respondent.email, respondent.userId, surveyName, emailMap[respondent.language].replace(/"/g, "").replace(/'/g, ""));
     });
   }
-startSurvey("Test7");
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query
@@ -287,6 +287,21 @@ app.post('/api/survey', express.json(), (req, res) => {
   insertSurvey(surveyName, '')
   .catch(error => console.error(error))
   .then(() => {res.status(200).json({ message: 'Survey created successfully!' });});
+});
+
+app.post('/api/startSurvey', express.json(), (req, res) => {
+  const data  = req.body;
+  const surveyName = data.surveyName;
+
+  if (!surveyName) {
+    res.status(400).json({ message: 'Survey name is required.' });
+    return;
+  }
+
+  // Call the function to add a new survey
+  startSurvey(surveyName)
+  .catch(error => console.error(error))
+  .then(() => {res.status(200).json({ message: 'Survey started successfully!' });});
 });
 
 app.post('/api/updateEmails', express.json(), (req, res) => {

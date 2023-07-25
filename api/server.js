@@ -267,8 +267,16 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
 
   let csvArray = csvData.split('\n');
   const header = csvArray.shift().split(',');
- 
-  console.log(csvArray);
+
+  data = csvArray.map((row, index) => {
+    const columns = row.split(',');
+    return {
+      language: columns[0].replace(/(\r\n|\n|\r)/gm, ""),
+      text: columns[1].replace(/(\r\n|\n|\r)/gm, "")
+    }
+  });
+
+  console.log(data);
 
 });
 

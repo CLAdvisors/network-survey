@@ -270,6 +270,8 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
 
   csvArray = csvArray.map((row, index) => {
     const columns = row.split(',');
+    // combine all strings after index 0
+    columns[1] = columns.slice(1).join(',');
     return {
       language: columns[0].replace(/(\r\n|\n|\r)/gm, ""),
       text: columns[1].replace(/(\r\n|\n|\r)/gm, "")

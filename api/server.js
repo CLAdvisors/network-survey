@@ -60,7 +60,7 @@ async function sendMail(email, id, surveyName, text = loremIpsum, html = EMAIL_H
   try {
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
 
-    let customLink = `http://localhost:3002/?surveyName=${surveyName}&userId=${id}`;
+    let customLink = `https://survey.bennetts.work/?surveyName=${surveyName}&userId=${id}`;
     const data = await resend.emails.send({
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
@@ -75,21 +75,42 @@ async function sendMail(email, id, surveyName, text = loremIpsum, html = EMAIL_H
 async function startSurvey(surveyName){
   // Pull all users from the database
   const client = await pool.connect();
-  const query = 'SELECT name, contact_info, uuid FROM Respondent WHERE survey_name = $1';
+  const query = 'SELECT name, contact_info, uuid, lang FROM Respondent WHERE survey_name = $1';
   const values = [surveyName];
-  client.query(query, values)
+  let respondents = [];
+  let emails = [];
+  await client.query(query, values)
     .then(response => {
-        const respondents = response.rows.map(row => ({
+        respondents = response.rows.map(row => ({
             userName: row.name,
             email: row.contact_info,
-            userId: row.uuid
+            userId: row.uuid,
+            language: row.lang
         }));
     });
+
+  // Pull the email text from the database for each language
+  const emailQuery = 'SELECT lang, text FROM email WHERE survey_name = $1';
+  const emailValues = [surveyName];
+  await client.query(emailQuery, emailValues)
+    .then(response => {
+        emails = response.rows.map(row => ({
+            language: row.lang,
+            text: row.text
+        }));
+    });
+    // Create a map from language to email text
+    const emailMap = emails.reduce((map, email) => {
+      map[email.language] = email.text;
+      return map;
+    }, {});
+  
     // Send the emails
     respondents.forEach(respondent => {
-      sendMail(respondent.email, respondent.userId, surveyName);
+      sendMail(respondent.email, respondent.userId, surveyName, emailMap[respondent.language]);
     });
   }
+startSurvey("Test7");
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query

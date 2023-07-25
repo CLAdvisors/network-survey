@@ -141,6 +141,36 @@ async function insertUsers(users) {
     client.release();
   }
 }
+async function insertEmails(data) {
+  // Start a PostgreSQL client from the pool
+  const client = await pool.connect();
+
+  try {
+    // Begin a transaction
+    await client.query('BEGIN');
+
+    // Iterate through the users and insert them
+    for (const user of users) {
+      const query = 'INSERT INTO email (survey_name, lang, text) VALUES ($1, $2, $3)';
+      const values = [data.surveyName, data.language, data.text];
+      await client.query(query, values);
+    }
+
+    // Commit the transaction
+    await client.query('COMMIT');
+
+    // Release the client back to the pool
+    client.release();
+
+    console.log('Email data inserted successfully!');
+  } catch (error) {
+    // If an error occurs, rollback the transaction
+    console.log(error)
+    await client.query('ROLLBACK');
+    console.error('Error inserting users:', error);
+    client.release();
+  }
+}
 async function insertQuestions(name, title, json) {
   const client = await pool.connect();
 
@@ -218,6 +248,28 @@ app.post('/api/survey', express.json(), (req, res) => {
   insertSurvey(surveyName, '')
   .catch(error => console.error(error))
   .then(() => {res.status(200).json({ message: 'Survey created successfully!' });});
+});
+
+app.post('/api/updateEmails', express.json(), (req, res) => {
+  const data  = req.body;
+  const surveyName = data.surveyName;
+  const csvData = data.csvData;
+
+  if (!surveyName) {
+    res.status(400).json({ message: 'Survey name is required.' });
+    return;
+  }
+
+  if (!csvData) {
+    res.status(400).json({ message: 'CSV data is required.' });
+    return;
+  }
+
+  let csvArray = csvData.split('\n');
+  const header = csvArray.shift().split(',');
+ 
+  console.log(csvArray);
+
 });
 
 // PUT API endpoint for uploading a csv file of names

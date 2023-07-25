@@ -273,13 +273,15 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
     // combine all strings after index 0
     columns[1] = columns.slice(1).join(',');
     return {
+      surveyName: surveyName,
       language: columns[0].replace(/(\r\n|\n|\r)/gm, ""),
       text: columns[1].replace(/(\r\n|\n|\r)/gm, "")
     }
   });
 
-  console.log(csvArray);
+  insertEmails(csvArray);
 
+  res.status(200).json({ message: 'Email data updated successfully.' }); 
 });
 
 // PUT API endpoint for uploading a csv file of names

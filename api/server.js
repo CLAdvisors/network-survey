@@ -150,9 +150,9 @@ async function insertEmails(data) {
     await client.query('BEGIN');
 
     // Iterate through the users and insert them
-    for (const user of users) {
+    for (const email of data) {
       const query = 'INSERT INTO email (survey_name, lang, text) VALUES ($1, $2, $3)';
-      const values = [data.surveyName, data.language, data.text];
+      const values = [email.surveyName, email.language, email.text];
       await client.query(query, values);
     }
 

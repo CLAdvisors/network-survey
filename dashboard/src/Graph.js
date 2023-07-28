@@ -100,7 +100,7 @@ const Graph = ({ vertexSet, edgeSet }) => {
   }, [vertexSet, edgeSet]);
 
   return (
-    <div ref={wrapperRef} style={{ width: '100%', height: '200px' }}>
+    <div ref={wrapperRef} style={{ width: '100%', height: '400px' }}>
       <svg ref={svgRef} />
     </div>
   );

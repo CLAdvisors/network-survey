@@ -3,9 +3,11 @@ import './dashboard.css';
 import TabularDataComponent from './TabularDataComponent.js';
 import NameStatusIcon from './NameStatusIcon';
 import QuestionStatusIcon from './QuestionStatusIcon';
-import TextInput from './TextInput';
 import Graph from './Graph';
 import Papa from 'papaparse';
+import { Tab, Tabs, TabList, TabPanel } from 'react-tabs';
+import 'react-tabs/style/react-tabs.css';
+
 // TODO for MVP
 // - Redo the UI
 // - Change survey results download to csv
@@ -18,6 +20,7 @@ import Papa from 'papaparse';
 const Dashboard = () => {
   const questionFileInputRef = useRef(null);
   const userFileInputRef = useRef(null);
+  const emailFileInputRef = useRef(null);
 
 
   const [activeSurvey, setActiveSurvey] = useState("");
@@ -29,7 +32,7 @@ const Dashboard = () => {
     // and update the surveys state variable with the result
     
     const updateActiveSurvey = useCallback((event) => {
-      const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/surveys";
+      const url = "https://api.bennetts.work/api/surveys";
         sendRequest(url, (data) => {
             setSurveys(data.surveys);
             if (data.surveys.length > 0 && activeSurvey === '') {
@@ -43,7 +46,7 @@ const Dashboard = () => {
     }, [updateActiveSurvey]);
 
     const createSurvey = async () => {
-      const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/survey";
+      const url = "https://api.bennetts.work/api/survey";
       const response = await postRequest(url, { surveyName: surveyName });
       console.log(response)
       if (response.status === 200) {
@@ -55,7 +58,7 @@ const Dashboard = () => {
       const reader = new FileReader();
       reader.onload = function(event) {
 
-        const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/updateTargets";
+        const url = "https://api.bennetts.work/api/updateTargets";
         postRequest(url, { surveyName: activeSurvey, csvData: event.target.result }, () => {
           userFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -73,7 +76,7 @@ const Dashboard = () => {
       reader.onload = function(event) {
         const data = event.target.result;
 
-        const url = "https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/updateQuestions";
+        const url = "https://api.bennetts.work/api/updateQuestions";
         postRequest(url, { surveyName: activeSurvey, surveyQuestions: data}, () => {
           questionFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -84,6 +87,31 @@ const Dashboard = () => {
 
       
     }
+
+    const uploadEmails = event => {
+
+      const reader = new FileReader();
+      
+      reader.onload = function(event) {
+        const data = event.target.result;
+
+        const url = "https://api.bennetts.work/api/updateEmails";
+        postRequest(url, { surveyName: activeSurvey, csvData: data}, () => {
+          emailFileInputRef.current.value = '';
+          setStatusUpdator(statusUpdator + 1);
+        });
+      };
+
+      reader.readAsText(event.target.files[0]);
+
+      
+    }
+
+    const sendSurvey = async () => {
+      const url = "https://api.bennetts.work/api/startSurvey";
+      const response = await postRequest(url, { surveyName: activeSurvey });
+      console.log(response);
+    };
 
     function jsonToCsv(json) {
       // Create an array to hold the data rows
@@ -118,7 +146,7 @@ const Dashboard = () => {
   }
 
     const downloadAnswers = () => {
-        const url = `https://network-survey-lb-1148380680.us-east-1.elb.amazonaws.com/api/results?surveyName=${activeSurvey}`;
+        const url = `https://api.bennetts.work/api/results?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
           // convert JSON to CSV
           const csv = jsonToCsv(data);
@@ -190,22 +218,34 @@ const Dashboard = () => {
             />
             <button className="button" onClick={createSurvey}>Submit New Survey</button>
         </div>
-          <h2>Survey Config</h2>
-        <div className="row">
-          <div className='templates'>
-            <h3>Templates for creating surveys: </h3>
-            <button className="button" onClick={createSurvey}>Download Survey File Template</button>
-            <button className="button" onClick={createSurvey}>Download User File Template</button>
+          <div className="row">
+            <div className='templates'>
+              <h3>Templates for creating surveys: </h3>
+              <button className="button" onClick={createSurvey}>Download Survey File Template</button>
+              <button className="button" onClick={createSurvey}>Download User File Template</button>
+              <button className="button" onClick={createSurvey}>Download Email File Template</button>
+            </div>
           </div>
-        </div>
-        <div className="row">
-            <select className="dropdown" value={activeSurvey} onChange={e => setActiveSurvey(e.target.value)}>
+          <div className="row">
+          <h3> Selected Survey:</h3>
+          <select className="dropdown" value={activeSurvey} onChange={e => setActiveSurvey(e.target.value)}>
             {surveys.map((survey, index) => (
                 <option key={index} value={survey}>
                 {survey}
                 </option>
             ))}
             </select>
+          </div>
+          <div className="row">
+          <Tabs>
+          <TabList>
+            <Tab>Survey Config</Tab>
+            <Tab>Survey Table</Tab>
+            <Tab>Survey Graph</Tab>
+          </TabList>
+
+          <TabPanel>
+          <div className="row">
             {/* <StatusIcon text = {"Questions uploaded:"} mode = {activeSurvey}/> */}
             <QuestionStatusIcon activeSurvey = {activeSurvey} updateDummy={statusUpdator}/>
             <NameStatusIcon activeSurvey = {activeSurvey} updateDummy={statusUpdator}/>
@@ -217,38 +257,53 @@ const Dashboard = () => {
             Upload Users
             <input type="file" onChange={uploadContacts} style={{display: 'none'}} ref={userFileInputRef} />
             </label>
-            <button className="button" onClick={testSurvey}>Demo Survey</button>
-            <button className="button" onClick={downloadAnswers}>Download Answers</button>
+            <label className="button">
+            Upload Email Template
+            <input type="file" onChange={uploadEmails} style={{display: 'none'}} ref={emailFileInputRef} />
+            </label>
+            </div>
+            <div className="row">
+            <div>
+              <button className="button" onClick={testSurvey}>Demo Survey</button>
+              <button className="button" onClick={downloadAnswers}>Download Answers</button>
+            </div>
+            </div>
+            <div className="row">
+            <h3>Start Survey (Be careful):</h3>
+              <button className="button" onClick={sendSurvey}>Send Notifications</button>
+            </div>
+          </TabPanel>
+          <TabPanel>
+            <h2>User Data</h2>
+          <div className="row">
+            <TabularDataComponent activeSurvey={activeSurvey}/>
+          </div>
+          </TabPanel>
+          <TabPanel>
+          <div className="row">
+            <Graph vertexSet={[
+          {id: '1', label: 'Vertex 1'},
+          {id: '2', label: 'Vertex 2'},
+          {id: '3', label: 'Vertex 3'},
+          {id: '4', label: 'Vertex 4'},
+          {id: '5', label: 'Vertex 5'},
+          {id: '6', label: 'Vertex 6'},
+          {id: '7', label: 'Vertex 7'},
+        ]} edgeSet={[
+          {source: '1', target: '2', label: 'Edge 1-2'},
+          {source: '1', target: '3', label: 'Edge 1-3'},
+          {source: '2', target: '4', label: 'Edge 2-4'},
+          {source: '3', target: '5', label: 'Edge 3-5'},
+          {source: '4', target: '5', label: 'Edge 4-5'},
+          {source: '6', target: '7', label: 'Edge 6-7'},
+          {source: '2', target: '7', label: 'Edge 2-7'},
+          {source: '2', target: '5', label: 'Edge 2-5'}
+        ]}></Graph>
+          </div>
+          </TabPanel>
+        </Tabs>
         </div>
-        <h2>User Data</h2>
-        <div className="row">
-          <TabularDataComponent activeSurvey={activeSurvey}/>
-        </div>
-        <div className="row">
-          <Graph vertexSet={[
-        {id: '1', label: 'Vertex 1'},
-        {id: '2', label: 'Vertex 2'},
-        {id: '3', label: 'Vertex 3'},
-        {id: '4', label: 'Vertex 4'},
-        {id: '5', label: 'Vertex 5'},
-        {id: '6', label: 'Vertex 6'},
-        {id: '7', label: 'Vertex 7'},
-      ]} edgeSet={[
-        {source: '1', target: '2', label: 'Edge 1-2'},
-        {source: '1', target: '3', label: 'Edge 1-3'},
-        {source: '2', target: '4', label: 'Edge 2-4'},
-        {source: '3', target: '5', label: 'Edge 3-5'},
-        {source: '4', target: '5', label: 'Edge 4-5'},
-        {source: '6', target: '7', label: 'Edge 6-7'},
-        {source: '2', target: '7', label: 'Edge 2-7'},
-        {source: '2', target: '5', label: 'Edge 2-5'}
-      ]}></Graph>
-        </div>
-        <h2>Email Contents</h2>
-        <div className="row">
-          <TextInput activeSurvey={activeSurvey}/>
-        </div>
-        </div> 
+      </div> 
     );
 }
 

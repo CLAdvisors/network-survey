@@ -104,8 +104,7 @@ async function startSurvey(surveyName){
       map[email.language.replace(/"/g, "").replace(/'/g, "")] = '<p>' + email.text + '</p>';
       return map;
     }, {});
-    console.log(emailMap)
-    console.log(respondents)
+    
     // Send the emails
     respondents.forEach(respondent => {
       sendMail(respondent.email, respondent.userId, surveyName, emailMap[respondent.language].replace(/"/g, "").replace(/'/g, ""));
@@ -127,15 +126,6 @@ async function executeQuery(query) {
 
 const app = express();
 const port = 3000; // Choose your desired port number
-
-// TODO for MVP
-// - move to a database to store survey data
-// - extend the create survey backend
-// -- handle json file upload
-// -- handle xlsx entry
-// - add authentication
-// - add email functionality
-// - add csv file download
 
 app.use(cors()); // Enable CORS
 
@@ -258,7 +248,7 @@ function csvToJson(csvString, title) {
     // Iterate through each parsed data and create the corresponding question object
     result.data.forEach(item => {
         let questionObject = {
-            "type": "tagbox",
+            "type": item['Question type'],
             "name": item['Question name'],
             "title": item['Question title'],
             "isRequired": true,

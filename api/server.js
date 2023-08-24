@@ -352,9 +352,8 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   });
   console.log(headerDict);
   // Convert to json
-  const surveyTargets = csvArray.map((row, index) => {
+  const surveyTargets = csvArray.filter(x => x !== '').map((row, index) => {
     const columns = row.split(',');
-    console.log(columns)
     return {
       userName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, "") + " " + columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
       firstName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, ""),

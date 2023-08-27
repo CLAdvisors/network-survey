@@ -72,6 +72,18 @@ async function sendMail(email, id, surveyName, text) {
   }
 }
 
+// User test email function (allow admin user to send test email to themselves)
+async function sendTestMail(email, surveyName, lang) {
+  const client = await pool.connect();
+  const query = 'SELECT text FROM email WHERE survey_name = $1 AND lang = $2';
+  const values = [surveyName, lang];
+
+  await client.query(query, values).then(response => {
+    const text = response.rows[0].text;
+    sendMail(email, 'demo', surveyName, text);
+  });
+}
+
 async function startSurvey(surveyName){
   // Pull all users from the database
   const client = await pool.connect();
@@ -277,6 +289,31 @@ app.post('/api/survey', express.json(), (req, res) => {
   insertSurvey(surveyName, '')
   .catch(error => console.error(error))
   .then(() => {res.status(200).json({ message: 'Survey created successfully!' });});
+});
+
+app.post('/api/testEmail', express.json(), (req, res) => {
+  const data  = req.body;
+  const surveyName = data.surveyName;
+  const language = data.language;
+  const email = data.email;
+
+  if (!surveyName) {
+    res.status(400).json({ message: 'Survey name is required.' });
+    return;
+  }
+  if (!language) {
+    res.status(400).json({ message: 'Language name is required.' });
+    return;
+  }
+  if (!email) {
+    res.status(400).json({ message: 'Email name is required.' });
+    return;
+  }
+
+  // Call the function to add a new survey
+  sendTestMail(email, surveyName, language)
+  .catch(error => console.error(error))
+  .then(() => {res.status(200).json({ message: 'Survey started successfully!' });});
 });
 
 app.post('/api/startSurvey', express.json(), (req, res) => {

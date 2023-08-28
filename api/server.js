@@ -79,7 +79,7 @@ async function sendTestMail(email, surveyName, lang) {
   const values = [surveyName, lang];
 
   await client.query(query, values).then(response => {
-    const text = response.rows[0].text;
+    const text = response.text;
     sendMail(email, 'demo', surveyName, text);
   });
 }

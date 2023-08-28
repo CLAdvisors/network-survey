@@ -80,6 +80,9 @@ async function sendTestMail(email, surveyName, lang) {
 
   await client.query(query, values).then(response => {
     const text = response.text;
+    console.log(response.text)
+    console.log(response)
+    console.log(surveyName, lang)
     sendMail(email, 'demo', surveyName, text);
   });
 }

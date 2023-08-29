@@ -16,3 +16,7 @@ code {
 .sv-tagbox__item {
   background-color: #42B4AF !important;
 }
+
+.sd-page {
+  padding-top: 10px !important;
+}

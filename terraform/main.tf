@@ -121,12 +121,13 @@ resource "aws_db_instance" "postgres" {
   engine                 = "postgres"
   engine_version         = "15.10"            # Use a compatible version
   instance_class         = "db.t3.micro"     # Use a compatible instance class
+  db_name                = "ONA"
   username               = var.db_user
   password               = var.db_password
-  publicly_accessible    = false
+  publicly_accessible    = true
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
   db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
-
+  skip_final_snapshot    = true
   tags = {
     Name = "postgres-db"
   }

@@ -1,17 +1,25 @@
 const express = require('express');
 const fs = require('fs');
+const path = require('path');
 const cors = require('cors');
 const { Resend } = require('resend');
 const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
 const Papa = require('papaparse');
+const dotenvFlow = require('dotenv-flow');
+
+
+dotenvFlow.config({ 
+  path: path.resolve(__dirname, '../'),
+ });
+dotenvFlow.config();
 
 // Create a new instance of the Pool
 const pool = new Pool({
-  user: 'postgres',
-  password: 'Picker22',
-  host: 'database-1.co6wn5j0nqtw.us-east-2.rds.amazonaws.com',
-  port: '5432',
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
   database: '',
 });
 const resend = new Resend('re_UNs8VgH6_HhcK6GEjQM7pk3BczHt9dKB3');

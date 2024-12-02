@@ -3,3 +3,9 @@
 /.pnp
 .pnp.js
 react-email-starter
+terraform/.terraform
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars
+terraform/.terraform.lock.hcl
+*.pem

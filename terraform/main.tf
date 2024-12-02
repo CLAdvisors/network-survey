@@ -132,3 +132,15 @@ resource "aws_db_instance" "postgres" {
     Name = "postgres-db"
   }
 }
+
+
+resource "local_file" "liquibase_properties" {
+  filename = "../db/liquibase.properties"
+  content  = templatefile("./templates/liquibase.properties.tmpl", {
+    db_host     = aws_db_instance.postgres.address
+    db_port     = aws_db_instance.postgres.port
+    db_name     = aws_db_instance.postgres.db_name
+    db_user     = var.db_user
+    db_password = var.db_password
+  })
+}

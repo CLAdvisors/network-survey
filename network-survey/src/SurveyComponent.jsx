@@ -14,7 +14,7 @@ function SurveyComponent({setTitle}) {
     // Get survey question json from questions api
     const [json, setJson] = React.useState(null);
     React.useEffect(() => {
-      const url = `https://api.bennetts.work/api/questions?surveyName=${surveyName}`;
+      const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/questions?surveyName=${surveyName}`;
       sendRequest(url, (data) => { setJson(data.questions); setTitle(data.title); });
     }, [surveyName]);
     
@@ -27,7 +27,7 @@ function SurveyComponent({setTitle}) {
 
     survey.onComplete.add((sender, options) => {
         let data = JSON.stringify(sender.data, null, 3);
-        let url = `https://api.bennetts.work/api/user`
+        let url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user`
 
         if (userId === 'demo') {
           return;
@@ -39,7 +39,7 @@ function SurveyComponent({setTitle}) {
 
     survey.onChoicesLazyLoad.add((_, options) => {
         console.log("YES IT WENT HERE")
-        const url = `https://api.bennetts.work/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
         sendRequest(url, (data) => { options.setItems(data.names, data.total); });
     });
     

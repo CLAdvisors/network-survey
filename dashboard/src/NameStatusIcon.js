@@ -9,7 +9,7 @@ const NameStatusIcon = ({ activeSurvey, updateDummy }) => {
         if (activeSurvey === '') {
             return;
         }
-        const url = `https://api.bennetts.work/api/surveyStatus?surveyName=${activeSurvey}`;
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/surveyStatus?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
             if(data.userDataStatus)
                 setStatus('icon_green');

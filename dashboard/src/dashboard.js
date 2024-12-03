@@ -32,7 +32,7 @@ const Dashboard = () => {
     // and update the surveys state variable with the result
     
     const updateActiveSurvey = useCallback((event) => {
-      const url = "https://api.bennetts.work/api/surveys";
+      const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/surveys`;
         sendRequest(url, (data) => {
             setSurveys(data.surveys);
             if (data.surveys.length > 0 && activeSurvey === '') {
@@ -46,7 +46,7 @@ const Dashboard = () => {
     }, [updateActiveSurvey]);
 
     const createSurvey = async () => {
-      const url = "https://api.bennetts.work/api/survey";
+      const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/survey";
       const response = await postRequest(url, { surveyName: surveyName });
       console.log(response)
       if (response.status === 200) {
@@ -58,7 +58,7 @@ const Dashboard = () => {
       const reader = new FileReader();
       reader.onload = function(event) {
 
-        const url = "https://api.bennetts.work/api/updateTargets";
+        const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateTargets";
         postRequest(url, { surveyName: activeSurvey, csvData: event.target.result }, () => {
           userFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -76,7 +76,7 @@ const Dashboard = () => {
       reader.onload = function(event) {
         const data = event.target.result;
 
-        const url = "https://api.bennetts.work/api/updateQuestions";
+        const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateQuestions";
         postRequest(url, { surveyName: activeSurvey, surveyQuestions: data}, () => {
           questionFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -95,7 +95,7 @@ const Dashboard = () => {
       reader.onload = function(event) {
         const data = event.target.result;
 
-        const url = "https://api.bennetts.work/api/updateEmails";
+        const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateEmails";
         postRequest(url, { surveyName: activeSurvey, csvData: data}, () => {
           emailFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -108,7 +108,7 @@ const Dashboard = () => {
     }
 
     const sendSurvey = async () => {
-      const url = "https://api.bennetts.work/api/startSurvey";
+      const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/startSurvey";
       const response = await postRequest(url, { surveyName: activeSurvey });
       console.log(response);
     };
@@ -146,7 +146,7 @@ const Dashboard = () => {
   }
 
     const downloadAnswers = () => {
-        const url = `https://api.bennetts.work/api/results?surveyName=${activeSurvey}`;
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/results?surveyName=${activeSurvey}`;
         sendRequest(url, (data) => {
           // convert JSON to CSV
           const csv = jsonToCsv(data);

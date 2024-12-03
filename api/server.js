@@ -22,6 +22,7 @@ const pool = new Pool({
   port: process.env.DB_PORT,
   database: '',
 });
+
 const resend = new Resend('re_UNs8VgH6_HhcK6GEjQM7pk3BczHt9dKB3');
 
 const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">

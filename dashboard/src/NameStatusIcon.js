@@ -25,7 +25,7 @@ const NameStatusIcon = ({ activeSurvey, updateDummy }) => {
         xhr.open("GET", url);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
         xhr.onload = () => {
-          if (xhr.status === 200) {
+          if (xhr.status === 200 && xhr.response !== '') {
             onloadSuccessCallback(JSON.parse(xhr.response));
           }
         };

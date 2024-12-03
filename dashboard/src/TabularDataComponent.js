@@ -29,7 +29,7 @@ const TabularDataComponent = ({ activeSurvey }) => {
             return;
         }
         console.log(activeSurvey)
-        const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/targets?surveyName=" + activeSurvey;
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/targets?surveyName=` + activeSurvey;
         // try to send the request, if it fails delete old data
         sendRequest(url, (data) => {
             console.log(data)
@@ -44,7 +44,7 @@ const TabularDataComponent = ({ activeSurvey }) => {
         xhr.open("GET", url);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
         xhr.onload = () => {
-          if (xhr.status === 200) {
+          if (xhr.status === 200 && xhr.response !== '') {
             onloadSuccessCallback(JSON.parse(xhr.response));
           } else {
             onFailCallback(xhr.status);

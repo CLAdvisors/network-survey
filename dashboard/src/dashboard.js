@@ -22,7 +22,8 @@ const Dashboard = () => {
   const userFileInputRef = useRef(null);
   const emailFileInputRef = useRef(null);
 
-
+  const apiUrl = process.env.REACT_APP_API_URL;
+  console.log('API URL:', apiUrl);
   const [activeSurvey, setActiveSurvey] = useState("");
   const [surveys, setSurveys] = useState([]);
   const [surveyName, setSurveyName] = useState("");
@@ -46,19 +47,19 @@ const Dashboard = () => {
     }, [updateActiveSurvey]);
 
     const createSurvey = async () => {
-      const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/survey";
+      const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/survey`;
       const response = await postRequest(url, { surveyName: surveyName });
       console.log(response)
       if (response.status === 200) {
         setSurveys([...surveys, surveyName]);
       }
-    };
+    };  
     
     const uploadContacts = event => {
       const reader = new FileReader();
       reader.onload = function(event) {
 
-        const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateTargets";
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateTargets`;
         postRequest(url, { surveyName: activeSurvey, csvData: event.target.result }, () => {
           userFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -76,7 +77,7 @@ const Dashboard = () => {
       reader.onload = function(event) {
         const data = event.target.result;
 
-        const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateQuestions";
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateQuestions`;
         postRequest(url, { surveyName: activeSurvey, surveyQuestions: data}, () => {
           questionFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -95,7 +96,7 @@ const Dashboard = () => {
       reader.onload = function(event) {
         const data = event.target.result;
 
-        const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateEmails";
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/updateEmails`;
         postRequest(url, { surveyName: activeSurvey, csvData: data}, () => {
           emailFileInputRef.current.value = '';
           setStatusUpdator(statusUpdator + 1);
@@ -108,7 +109,7 @@ const Dashboard = () => {
     }
 
     const sendSurvey = async () => {
-      const url = "${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/startSurvey";
+      const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/startSurvey`;
       const response = await postRequest(url, { surveyName: activeSurvey });
       console.log(response);
     };
@@ -172,7 +173,7 @@ const Dashboard = () => {
         xhr.open("GET", url);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
         xhr.onload = () => {
-          if (xhr.status === 200) {
+          if (xhr.status === 200 && xhr.response !== '') {
             onloadSuccessCallback(JSON.parse(xhr.response));
           }
         };

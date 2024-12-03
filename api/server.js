@@ -9,9 +9,6 @@ const Papa = require('papaparse');
 const dotenvFlow = require('dotenv-flow');
 
 
-dotenvFlow.config({ 
-  path: path.resolve(__dirname, '../'),
- });
 dotenvFlow.config();
 
 // Create a new instance of the Pool
@@ -20,7 +17,7 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD,
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
-  database: '',
+  database: 'ONA',
 });
 
 const resend = new Resend('re_UNs8VgH6_HhcK6GEjQM7pk3BczHt9dKB3');

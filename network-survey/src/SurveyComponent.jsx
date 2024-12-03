@@ -16,7 +16,7 @@ function SurveyComponent({setTitle}) {
     React.useEffect(() => {
       const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/questions?surveyName=${surveyName}`;
       sendRequest(url, (data) => { setJson(data.questions); setTitle(data.title); });
-    }, [surveyName]);
+    }, [surveyName, setTitle]);
     
     
     if (!userId || !surveyName) {

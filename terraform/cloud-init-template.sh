@@ -8,6 +8,11 @@ sudo apt install -y curl
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
 sudo apt install -y nodejs
 
+export HOME=/home/ubuntu
+export PM2_HOME=$HOME/.pm2
+export NODE_ENV=prod
+export node_env=prod
+
 # Install PM2 globally
 sudo npm install -g pm2
 
@@ -21,6 +26,7 @@ git clone https://github.com/CLAdvisors/network-survey.git $SERVICE_DIR
 
 sudo apt-get install -y awscli
 aws s3 cp s3://${bucket_name}/configs/.env.prod $SERVICE_DIR/api/.env.prod
+sudo rm -rf $SERVICE_DIR/api/.env.local
 
 # Navigate to service directory and install dependencies
 cd $SERVICE_DIR
@@ -29,10 +35,8 @@ npm install
 cd api
 npm install
 
-set node_env=prod
-
 # Start the service with PM2
-pm2 start server.js --name my-service
+pm2 start server.js --name my-service --env prod
 pm2 startup
 pm2 save
 

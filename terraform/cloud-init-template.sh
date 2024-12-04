@@ -19,10 +19,17 @@ sudo chown ubuntu:ubuntu $SERVICE_DIR
 # Clone your service repository (replace with your repo)
 git clone https://github.com/CLAdvisors/network-survey.git $SERVICE_DIR
 
+sudo apt-get install -y awscli
+aws s3 cp s3://${bucket_name}/configs/.env.prod $SERVICE_DIR/api/.env.prod
+
 # Navigate to service directory and install dependencies
 cd $SERVICE_DIR
+npm install
+
 cd api
 npm install
+
+set node_env=prod
 
 # Start the service with PM2
 pm2 start server.js --name my-service

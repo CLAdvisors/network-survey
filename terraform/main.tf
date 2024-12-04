@@ -183,19 +183,6 @@ resource "aws_s3_object" "api_config" {
   })
 }
 
-# Upload DB config file to the S3 bucket
-resource "aws_s3_object" "db_config" {
-  bucket = aws_s3_bucket.config_bucket.id
-  key    = "configs/liquibase.properties"
-  content = templatefile("./templates/liquibase.properties.tmpl", {
-    db_host     = aws_db_instance.postgres.address
-    db_port     = aws_db_instance.postgres.port
-    db_name     = aws_db_instance.postgres.db_name
-    db_user     = var.db_user
-    db_password = var.db_password
-  })
-}
-
 # IAM Role for the EC2 instance
 resource "aws_iam_role" "ec2_role" {
   name               = "ec2-role-config-access"
@@ -254,14 +241,31 @@ resource "aws_iam_instance_profile" "ec2_instance_profile" {
 }
 
 resource "local_file" "liquibase_properties" {
-  filename = "../db/liquibase.properties"
-  content  = templatefile("./templates/liquibase.properties.tmpl", {
+  filename = "../db/liquibase-prod.sh"
+  content  = templatefile("./templates/liquibase-prod.sh.tmpl", {
     db_host     = aws_db_instance.postgres.address
     db_port     = aws_db_instance.postgres.port
     db_name     = aws_db_instance.postgres.db_name
     db_user     = var.db_user
     db_password = var.db_password
   })
+
+  # Ensure the generated script is executable
+  file_permission = "0755"
+}
+
+resource "local_file" "liquibase_properties_ps" {
+  filename = "../db/liquibase-prod.ps1"
+  content  = templatefile("./templates/liquibase-prod.ps1.tmpl", {
+    db_host     = aws_db_instance.postgres.address
+    db_port     = aws_db_instance.postgres.port
+    db_name     = aws_db_instance.postgres.db_name
+    db_user     = var.db_user
+    db_password = var.db_password
+  })
+
+  # Ensure the generated script is executable
+  file_permission = "0755"
 }
 
 resource "local_file" "api_config" {

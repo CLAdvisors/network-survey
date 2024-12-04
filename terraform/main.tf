@@ -21,7 +21,7 @@ resource "aws_subnet" "db_subnet_2" {
 
 # Create a DB subnet group
 resource "aws_db_subnet_group" "db_subnet_group" {
-  name       = "my-db-subnet-group"
+  name       = "db-subnet-group"
   subnet_ids = [
     aws_subnet.db_subnet_1.id,
     aws_subnet.db_subnet_2.id,
@@ -183,6 +183,19 @@ resource "aws_s3_object" "api_config" {
   })
 }
 
+# Upload DB config file to the S3 bucket
+resource "aws_s3_object" "db_config" {
+  bucket = aws_s3_bucket.config_bucket.id
+  key    = "configs/liquibase.properties"
+  content = templatefile("./templates/liquibase.properties.tmpl", {
+    db_host     = aws_db_instance.postgres.address
+    db_port     = aws_db_instance.postgres.port
+    db_name     = aws_db_instance.postgres.db_name
+    db_user     = var.db_user
+    db_password = var.db_password
+  })
+}
+
 # IAM Role for the EC2 instance
 resource "aws_iam_role" "ec2_role" {
   name               = "ec2-role-config-access"
@@ -202,6 +215,30 @@ data "aws_iam_policy_document" "s3_access_policy" {
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.config_bucket.arn}/*"]
   }
+}
+
+# EC2 instance config role policy attachment 
+resource "aws_iam_role_policy_attachment" "ec2_s3_policy" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = aws_iam_policy.s3_access_policy.arn
+}
+
+resource "aws_s3_bucket_policy" "config_bucket_policy" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          AWS = "${aws_iam_role.ec2_role.arn}"
+        }
+        Action = "s3:GetObject"
+        Resource = "${aws_s3_bucket.config_bucket.arn}/*"
+      }
+    ]
+  })
 }
 
 # Attach the S3 access policy to the EC2 IAM role
@@ -250,3 +287,117 @@ data "aws_iam_policy_document" "ec2_assume_role_policy" {
   }
 }
 
+# Upload React build files to S3
+resource "aws_s3_object" "react_dashboard_files" {
+  for_each = fileset("../dashboard/build", "**/*")
+
+  bucket = aws_s3_bucket.react_dashboard.id
+  key    = each.value
+  source = "../dashboard/build/${each.value}"
+
+  content_type = lookup(
+    {
+      "html" = "text/html",
+      "css"  = "text/css",
+      "js"   = "application/javascript",
+      "png"  = "image/png",
+      "jpg"  = "image/jpeg",
+    },
+    element(split(".", each.value), length(split(".", each.value)) - 1),
+    "application/octet-stream"
+  )
+}
+# Define the S3 bucket to store your static website or assets
+resource "aws_s3_bucket" "react_dashboard" {
+  bucket = "react-dashboard-${random_id.bucket_id.hex}"
+
+  tags = {
+    Name        = "ReactAppBucket"
+    Environment = "Production"
+  }
+}
+
+# Generate a unique suffix for the bucket name
+resource "random_id" "bucket_id" {
+  byte_length = 4
+}
+
+# Create an Origin Access Control (OAC) for CloudFront to securely access the S3 bucket
+resource "aws_cloudfront_origin_access_control" "react_dashboard_oac" {
+  name                              = "react-dashboard-oac"
+  description                       = "OAC for React Dashboard S3 Bucket"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# Define the CloudFront distribution to serve content from the S3 bucket
+resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
+  origin {
+    domain_name              = aws_s3_bucket.react_dashboard.bucket_regional_domain_name
+    origin_id                = "S3-react-app"
+    origin_access_control_id = aws_cloudfront_origin_access_control.react_dashboard_oac.id
+  }
+
+  enabled             = true
+  is_ipv6_enabled     = true
+  default_root_object = "index.html"
+
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD", "OPTIONS"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3-react-app"
+
+    forwarded_values {
+      query_string = false
+
+      cookies {
+        forward = "none"
+      }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  tags = {
+    Name        = "ReactAppCloudFront"
+    Environment = "Production"
+  }
+}
+
+# Update the S3 bucket policy to allow access from the CloudFront distribution using OAC
+resource "aws_s3_bucket_policy" "react_dashboard_policy" {
+  bucket = aws_s3_bucket.react_dashboard.id
+
+  policy = data.aws_iam_policy_document.react_dashboard_policy.json
+}
+
+# Generate the IAM policy document for the S3 bucket policy
+data "aws_iam_policy_document" "react_dashboard_policy" {
+  statement {
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.react_dashboard.arn}/*"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.react_dashboard_distribution.arn]
+    }
+  }
+}

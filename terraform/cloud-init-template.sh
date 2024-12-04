@@ -21,6 +21,12 @@ git clone https://github.com/CLAdvisors/network-survey.git $SERVICE_DIR
 
 sudo apt-get install -y awscli
 aws s3 cp s3://${bucket_name}/configs/.env.prod $SERVICE_DIR/api/.env.prod
+aws s3 cp s3://${bucket_name}/configs/liquibase.properties $SERVICE_DIR/db/liquibase.properties
+
+export LIQUIBASE_URL="jdbc:postgresql://terraform-20241204043920443000000001.cb4kmcse0a7d.us-east-1.rds.amazonaws.com:5432/ONA"
+export LIQUIBASE_USERNAME="DbAdmin"
+export LIQUIBASE_PASSWORD="password!"
+export LIQUIBASE_CHANGELOGFILE="/opt/service/db/changelogs/master-changelog.xml"
 
 # Navigate to service directory and install dependencies
 cd $SERVICE_DIR

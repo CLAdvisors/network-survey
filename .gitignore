@@ -10,5 +10,6 @@ terraform/terraform.tfvars
 terraform/.terraform.lock.hcl
 db/liquibase.properties
 dashboard/.env
+api/.env.prod
 network-survey/.env
 *.pem

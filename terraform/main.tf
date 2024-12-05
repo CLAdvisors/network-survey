@@ -19,6 +19,19 @@ resource "aws_subnet" "db_subnet_2" {
   availability_zone       = "${var.aws_region}b"
 }
 
+# DB parameter group to turn off ssl
+resource "aws_db_parameter_group" "postgres_no_ssl" {
+  name        = "postgres-no-ssl"
+  family      = "postgres15" # Use the family matching your PostgreSQL version
+  description = "Parameter group to allow connections without SSL"
+
+  parameter {
+    name  = "rds.force_ssl"
+    value = "0" # Disable forced SSL
+    apply_method = "pending-reboot"
+  }
+}
+
 # Create a DB subnet group
 resource "aws_db_subnet_group" "db_subnet_group" {
   name       = "db-subnet-group"
@@ -137,6 +150,7 @@ resource "aws_db_instance" "postgres" {
   publicly_accessible    = true
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
   db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
+  parameter_group_name   = aws_db_parameter_group.postgres_no_ssl.name # Apply custom parameter group
   skip_final_snapshot    = true
   tags = {
     Name = "postgres-db"
@@ -329,6 +343,17 @@ resource "aws_s3_bucket" "react_dashboard" {
   }
 }
 
+resource "aws_s3_bucket_cors_configuration" "react_dashboard_cors" {
+  bucket = aws_s3_bucket.react_dashboard.id
+
+  cors_rule {
+    allowed_methods = ["GET", "HEAD"]
+    allowed_origins = ["*"] # Replace with specific origins if needed
+    allowed_headers = ["*"]
+    max_age_seconds = 3000
+  }
+}
+
 # Generate a unique suffix for the bucket name
 resource "random_id" "bucket_id" {
   byte_length = 4
@@ -359,16 +384,20 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
     allowed_methods  = ["GET", "HEAD", "OPTIONS"]
     cached_methods   = ["GET", "HEAD"]
     target_origin_id = "S3-react-app"
+    viewer_protocol_policy = "allow-all"
 
     forwarded_values {
-      query_string = false
-
+      query_string             = true
+      query_string_cache_keys  = ["v"]
+      headers                  = ["Origin"]
       cookies {
         forward = "none"
       }
     }
 
-    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
   }
 
   restrictions {
@@ -387,29 +416,27 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
   }
 }
 
+
 # Update the S3 bucket policy to allow access from the CloudFront distribution using OAC
 resource "aws_s3_bucket_policy" "react_dashboard_policy" {
   bucket = aws_s3_bucket.react_dashboard.id
 
-  policy = data.aws_iam_policy_document.react_dashboard_policy.json
-}
-
-# Generate the IAM policy document for the S3 bucket policy
-data "aws_iam_policy_document" "react_dashboard_policy" {
-  statement {
-    effect    = "Allow"
-    actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.react_dashboard.arn}/*"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["cloudfront.amazonaws.com"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "AWS:SourceArn"
-      values   = [aws_cloudfront_distribution.react_dashboard_distribution.arn]
-    }
-  }
+  policy = jsonencode({
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Service": "cloudfront.amazonaws.com"
+        },
+        "Action": "s3:GetObject",
+        "Resource": "${aws_s3_bucket.react_dashboard.arn}/*",
+        "Condition": {
+          "StringEquals": {
+            "AWS:SourceArn": "${aws_cloudfront_distribution.react_dashboard_distribution.arn}"
+          }
+        }
+      }
+    ]
+  })
 }

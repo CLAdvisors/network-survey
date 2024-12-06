@@ -20,3 +20,21 @@ output "cloudfront_url" {
   value = aws_cloudfront_distribution.react_dashboard_distribution.domain_name
   description = "URL to access the React app via CloudFront."
 }
+
+# Output the DNS validation records for the ACM certificate
+
+# Output the DNS validation records
+output "ssl_cert_validation_records" {
+  value = [
+    for dvo in aws_acm_certificate.ssl_cert.domain_validation_options : {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      value  = dvo.resource_record_value
+    }
+  ]
+}
+
+output "alb_dns_name" {
+  value = aws_lb.main_alb.dns_name
+  description = "The DNS name of the ALB. Use this to configure your domain's CNAME record."
+}

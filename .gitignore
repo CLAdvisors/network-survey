@@ -9,7 +9,7 @@ terraform/terraform.tfstate.backup
 terraform/terraform.tfvars
 terraform/.terraform.lock.hcl
 db/liquibase.properties
-dashboard/.env
+dashboard/.env.production
 api/.env.prod
-network-survey/.env
+network-survey/.env.production
 *.pem

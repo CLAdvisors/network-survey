@@ -440,3 +440,87 @@ resource "aws_s3_bucket_policy" "react_dashboard_policy" {
     ]
   })
 }
+
+# Request an SSL certificate in ACM
+resource "aws_acm_certificate" "ssl_cert" {
+  domain_name       = "demo.ona.api.bennetts.work"
+  validation_method = "DNS"
+
+  tags = {
+    Name = "SSL Certificate"
+  }
+}
+
+# Wait for the certificate to be validated (manual process)
+resource "aws_acm_certificate_validation" "ssl_cert_validation" {
+  certificate_arn         = aws_acm_certificate.ssl_cert.arn
+  validation_record_fqdns = [
+    for dvo in aws_acm_certificate.ssl_cert.domain_validation_options : dvo.resource_record_name
+  ]
+}
+
+# Security group for the ALB
+resource "aws_security_group" "alb_sg" {
+  name        = "alb-security-group"
+  description = "Allow HTTPS traffic to the ALB"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allow HTTPS traffic from anywhere
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# Target group for backend instances
+resource "aws_lb_target_group" "backend_targets" {
+  name        = "backend-targets"
+  protocol    = "HTTP"
+  port        = 3000 # Your backend app's port
+  vpc_id      = aws_vpc.main.id
+  target_type = "instance"
+}
+
+# ALB
+resource "aws_lb" "main_alb" {
+  name               = "main-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = [aws_subnet.db_subnet_1.id, aws_subnet.db_subnet_2.id]
+
+  enable_deletion_protection = false
+  tags = {
+    Name = "main-alb"
+  }
+}
+
+# HTTPS Listener
+resource "aws_lb_listener" "https_listener" {
+  load_balancer_arn = aws_lb.main_alb.arn
+  port              = 443
+  protocol          = "HTTPS"
+
+  ssl_policy = "ELBSecurityPolicy-2016-08"
+  certificate_arn = aws_acm_certificate.ssl_cert.arn # Use your validated certificate's ARN
+
+  default_action {
+    type = "forward"
+    target_group_arn = aws_lb_target_group.backend_targets.arn
+  }
+}
+
+# Register instances with the target group
+resource "aws_lb_target_group_attachment" "backend_attachments" {
+  for_each = toset([aws_instance.backend.id]) # Replace with backend instance IDs
+  target_group_arn = aws_lb_target_group.backend_targets.arn
+  target_id        = each.value
+}

@@ -72,7 +72,7 @@ const SurveyForm = () => {
     <Box
       sx={{
         padding: '20px',
-        maxWidth: '600px',
+        maxWidth: '80%',
         margin: 'auto',
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: '8px',

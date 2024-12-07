@@ -17,7 +17,7 @@ const theme = createTheme({
     },
     typography: {
       h6: {
-        fontWeight: 900, // Title weight adjusted to be bolder than bold
+        fontWeight: 'bold', // Title weight adjusted to be bolder than bold
         color: '#42B3AF', // Green shade for titles
       },
     },

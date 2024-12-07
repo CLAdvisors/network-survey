@@ -10,7 +10,7 @@ const Dashboard = () => {
         <Box  sx={{ padding: '10px' }}>   
             <Typography
             variant="h5"
-            color="#42B3AF"
+            color="primary.main"
             sx={{
             fontWeight: 'bold',
             marginBottom: '20px',
@@ -27,7 +27,7 @@ const Dashboard = () => {
         <Box  sx={{ padding: '10px' }}>
             <Typography
                 variant="h5"
-                color="#42B3AF"
+                color="primary.main"
                 sx={{
                 fontWeight: 'bold',
                 marginBottom: '20px',

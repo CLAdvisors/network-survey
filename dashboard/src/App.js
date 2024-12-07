@@ -15,10 +15,10 @@ import { useTheme } from '@mui/material/styles';
 
 
 const NAVIGATION = [
-  { segment: '', title: 'Dashboard', icon: <DashboardIcon style={{ color: '#42B3AF' }} /> },
-  { segment: 'survey', title: 'Survey Creation', icon: <QuizIcon style={{ color: '#42B3AF' }} /> },
-  { segment: 'results', title: 'Results', icon: <TimelineIcon style={{ color: '#42B3AF' }} /> },
-  { segment: 'settings', title: 'Settings', icon: <SettingsIcon style={{ color: '#42B3AF' }} /> },
+  { segment: '', title: 'Dashboard', icon: <DashboardIcon style={{ color: 'primary.main' }} /> },
+  { segment: 'survey', title: 'Survey Creation', icon: <QuizIcon style={{ color: 'primary.main' }} /> },
+  { segment: 'results', title: 'Results', icon: <TimelineIcon style={{ color: 'primary.main' }} /> },
+  { segment: 'settings', title: 'Settings', icon: <SettingsIcon style={{ color: 'primary.main' }} /> },
 ];
 
 const AppContent = () => {
@@ -40,7 +40,7 @@ const AppContent = () => {
         title: (
           <span
             style={{
-              color: '#42B3AF',
+              color: 'primary.main',
               fontWeight: 900, // Stronger than bold
               marginLeft: '10px',
               fontSize: '1.5rem', // Larger font size for emphasis

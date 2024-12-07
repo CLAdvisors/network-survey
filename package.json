@@ -10,6 +10,10 @@
         "nodemon": "^2.0.22"
     },
     "dependencies": {
+        "@emotion/react": "^11.13.5",
+        "@emotion/styled": "^11.13.5",
+        "@mui/material": "^6.1.10",
+        "@mui/x-data-grid": "^7.23.1",
         "dotenv-flow": "^4.1.0",
         "pg": "^8.11.0",
         "resend": "^0.16.0"

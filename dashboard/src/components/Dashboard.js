@@ -16,6 +16,9 @@ const api = axios.create({
 const Dashboard = () => {
   const theme = useTheme();
   const [surveyData, setSurveyData] = React.useState(null);
+  const [selectSurvey, setselectSurvey] = React.useState(null);
+
+  const [respondentData, setRespondentData] = React.useState(null);
 
   React.useEffect(() => {
     // Define the fetch function
@@ -33,9 +36,31 @@ const Dashboard = () => {
     fetchData();
   }, []);
 
+  React.useEffect(() => {
+    // Define the fetch function
+    const fetchData = async () => {
+      try {
+        const response = await api.get(`/api/targets?surveyName=${selectSurvey.name}`); // Fetch data from the API
+        setRespondentData(response.data); // Set data from the API response
+        // setRespondentData(response.data.surveys); // Set data from the API response
+      } catch (err) {
+        console.log(err);
+      }
+    };
+
+    // Call the fetch function
+    fetchData();
+  }, [selectSurvey]);
+
+  const handleSelectRow = (childData) => {
+    console.log("sdsadasdsd")
+    setselectSurvey(childData);
+};
+
   return (
     <Box
       sx={{
+        marginTop: "20px",
         padding: "20px",
         marginLeft: "10%",
         marginRight: "10%",
@@ -68,7 +93,7 @@ const Dashboard = () => {
         >
           Surveys
         </Typography>
-        <SurveyTable rows={surveyData}/>
+        <SurveyTable rows={surveyData} selectRow={handleSelectRow}/>
       </Box>
       <Box
         sx={{
@@ -90,7 +115,7 @@ const Dashboard = () => {
         >
           Respondents
         </Typography>
-        <RespondentTable />
+        <RespondentTable rows={respondentData}/>
       </Box>
     </Box>
   );

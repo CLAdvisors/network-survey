@@ -9,11 +9,11 @@ const columns = [
   { field: 'respondents', headerName: 'Respondents', width: 200 },
   { field: 'questions', headerName: 'Questions', width: 200 },
   { field: 'date', headerName: 'Creation Date', width: 200 },
-
 ];
 
 const SurveyTable = (props) => {
   const [rows, setRows] = useState(initialRows);
+  const [lastClickedRow, setLastClickedRow] = useState(null);
 
   useEffect(() => {
     if (props.rows) {
@@ -24,13 +24,17 @@ const SurveyTable = (props) => {
         console.log(updatedRows);
         setRows(updatedRows);
     }
-}, [props]); // Runs only when 'data' prop changes
-
+  }, [props]);
 
   const handleProcessRowUpdate = (newRow) => {
     const updatedRows = rows.map((row) => (row.id === newRow.id ? newRow : row));
     setRows(updatedRows);
     return newRow;
+  };
+
+  const handleRowClick = (params) => {
+    setLastClickedRow(params.row);
+    props.selectRow(params.row)
   };
 
   return (
@@ -42,20 +46,18 @@ const SurveyTable = (props) => {
         rowsPerPageOptions={[5]}
         disableSelectionOnClick
         processRowUpdate={handleProcessRowUpdate}
+        onRowClick={handleRowClick}
         components={{
           Toolbar: GridToolbar,
         }}
         sx={{
-          // Column Headers Hover Effect
           '& .MuiDataGrid-columnHeader:hover': {
-            backgroundColor: 'rgba(66, 179, 175, 0.3)', // Darker green on hover
+            backgroundColor: 'rgba(66, 179, 175, 0.3)',
           },
-          // Row Hover Effect
           '& .MuiDataGrid-row:hover': {
-            backgroundColor: 'rgba(0, 178, 140, 0.1)', // Subtle highlight
+            backgroundColor: 'rgba(0, 178, 140, 0.1)',
           },
         }}
-        
       />
     </div>
   );

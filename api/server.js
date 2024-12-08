@@ -150,7 +150,7 @@ const port = 3000; // Choose your desired port number
 
 app.use(express.json());
 app.use(cors({
-  origin: 'http://localhost:3001', // or whatever port your frontend runs on
+  origin: process.env.FRONTEND_URL, // or whatever port your frontend runs on
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']

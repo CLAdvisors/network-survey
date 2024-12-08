@@ -78,6 +78,7 @@ const Dashboard = () => {
         sx={{
           padding: "10px",
           borderRadius: "8px",
+          marginBottom: "40px",
         }}
       >
         <DropdownWrapper label="Hide Survey Table">

@@ -35,8 +35,10 @@ const RespondentTable = (props) => {
       <DataGrid
         rows={rows}
         columns={columns}
-        pageSize={5}
-        rowsPerPageOptions={[5]}
+        initialState={{ //Add this prop
+          pagination: { paginationModel: { pageSize: 10 } } // Setting initial pageSize
+        }}
+        pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
         processRowUpdate={handleProcessRowUpdate}
         components={{
@@ -49,7 +51,7 @@ const RespondentTable = (props) => {
           },
           // Row Hover Effect
           '& .MuiDataGrid-row:hover': {
-            backgroundColor: 'rgba(0, 178, 140, 0.1)', // Subtle highlight
+            backgroundColor: 'rgba(0, 178, 140, 0.2)', // Subtle highlight
           },
         }}
         

@@ -1,11 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 
-const initialRows = [
-  { id: 1, name: 'ONA Survey', respondents: '18', questions: '8', date: '2021-10-01' },
-  { id: 2, name: 'Stress Test', respondents: '2500',questions: '12', date: '2021-10-01' },
-  { id: 3, name: 'Test Questions', respondents: '222',questions: '4', date: '2021-10-01' }
-];
+const initialRows = [];
 
 const columns = [
   { field: 'id', headerName: 'ID', width: 90 },
@@ -16,8 +12,15 @@ const columns = [
 
 ];
 
-const SurveyTable = () => {
+const SurveyTable = (props) => {
   const [rows, setRows] = useState(initialRows);
+
+  useEffect(() => {
+    if (props.rows) {
+        setRows(props.rows);
+    }
+}, [props]); // Runs only when 'data' prop changes
+
 
   const handleProcessRowUpdate = (newRow) => {
     const updatedRows = rows.map((row) => (row.id === newRow.id ? newRow : row));

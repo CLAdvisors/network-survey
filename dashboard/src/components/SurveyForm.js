@@ -78,8 +78,11 @@ const SurveyForm = () => {
     
     console.log(formData);
 
-    api.post('/api/survey', formData)
-    api.post('/api/updateTargets', formData)
+    api.post('/api/survey', formData).then((response) => 
+    {
+        if(response.data.status === 'success')
+        api.post('/api/updateTargets', formData)
+    });
 
     setFormData({
       surveyName: '',

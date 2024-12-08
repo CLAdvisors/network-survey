@@ -333,6 +333,26 @@ resource "aws_s3_object" "react_dashboard_files" {
     "application/octet-stream"
   )
 }
+resource "aws_s3_object" "react_survey_files" {
+  for_each = fileset("../network-survey/build", "**/*")
+
+  bucket = aws_s3_bucket.react_survey.id
+  key    = each.value
+  source = "../network-survey/build/${each.value}"
+
+  content_type = lookup(
+    {
+      "html" = "text/html",
+      "css"  = "text/css",
+      "js"   = "application/javascript",
+      "png"  = "image/png",
+      "jpg"  = "image/jpeg",
+    },
+    element(split(".", each.value), length(split(".", each.value)) - 1),
+    "application/octet-stream"
+  )
+}
+
 # Define the S3 bucket to store your static website or assets
 resource "aws_s3_bucket" "react_dashboard" {
   bucket = "react-dashboard-${random_id.bucket_id.hex}"
@@ -342,9 +362,27 @@ resource "aws_s3_bucket" "react_dashboard" {
     Environment = "Production"
   }
 }
+resource "aws_s3_bucket" "react_survey" {
+  bucket = "react-survey-${random_id.bucket_id.hex}"
+
+  tags = {
+    Name        = "ReactAppBucket"
+    Environment = "Production"
+  }
+}
 
 resource "aws_s3_bucket_cors_configuration" "react_dashboard_cors" {
   bucket = aws_s3_bucket.react_dashboard.id
+
+  cors_rule {
+    allowed_methods = ["GET", "HEAD"]
+    allowed_origins = ["*"] # Replace with specific origins if needed
+    allowed_headers = ["*"]
+    max_age_seconds = 3000
+  }
+}
+resource "aws_s3_bucket_cors_configuration" "react_survey_cors" {
+  bucket = aws_s3_bucket.react_survey.id
 
   cors_rule {
     allowed_methods = ["GET", "HEAD"]
@@ -363,6 +401,13 @@ resource "random_id" "bucket_id" {
 resource "aws_cloudfront_origin_access_control" "react_dashboard_oac" {
   name                              = "dashboard-oac-${random_id.bucket_id.hex}"
   description                       = "OAC for React Dashboard S3 Bucket"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+resource "aws_cloudfront_origin_access_control" "react_survey_oac" {
+  name                              = "survey-oac-${random_id.bucket_id.hex}"
+  description                       = "OAC for React survey S3 Bucket"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
@@ -417,6 +462,54 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
     Environment = "Production"
   }
 }
+resource "aws_cloudfront_distribution" "react_survey_distribution" {
+  origin {
+    domain_name              = aws_s3_bucket.react_survey.bucket_regional_domain_name
+    origin_id                = "S3-react-app"
+    origin_access_control_id = aws_cloudfront_origin_access_control.react_survey_oac.id
+  }
+
+  enabled             = true
+  is_ipv6_enabled     = true
+  default_root_object = "index.html"
+  aliases = [ "demo.ona.survey.bennetts.work" ]
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD", "OPTIONS"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3-react-app"
+    viewer_protocol_policy = "allow-all"
+
+    forwarded_values {
+      query_string             = true
+      query_string_cache_keys  = ["v"]
+      headers                  = ["Origin"]
+      cookies {
+        forward = "none"
+      }
+    }
+
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    acm_certificate_arn      = aws_acm_certificate.ssl_cert_survey.arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2018"
+  }
+
+  tags = {
+    Name        = "ReactAppCloudFront"
+    Environment = "Production"
+  }
+}
 
 
 # Update the S3 bucket policy to allow access from the CloudFront distribution using OAC
@@ -436,6 +529,28 @@ resource "aws_s3_bucket_policy" "react_dashboard_policy" {
         "Condition": {
           "StringEquals": {
             "AWS:SourceArn": "${aws_cloudfront_distribution.react_dashboard_distribution.arn}"
+          }
+        }
+      }
+    ]
+  })
+}
+resource "aws_s3_bucket_policy" "react_survey_policy" {
+  bucket = aws_s3_bucket.react_survey.id
+
+  policy = jsonencode({
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Service": "cloudfront.amazonaws.com"
+        },
+        "Action": "s3:GetObject",
+        "Resource": "${aws_s3_bucket.react_survey.arn}/*",
+        "Condition": {
+          "StringEquals": {
+            "AWS:SourceArn": "${aws_cloudfront_distribution.react_survey_distribution.arn}"
           }
         }
       }
@@ -465,6 +580,16 @@ resource "aws_acm_certificate" "ssl_cert_dashboard" {
   }
 }
 
+# Request an SSL certificate in ACM for survey
+resource "aws_acm_certificate" "ssl_cert_survey" {
+  domain_name       = "demo.ona.survey.bennetts.work"
+  validation_method = "DNS"
+
+  tags = {
+    Name = "SSL Certificate"
+  }
+}
+
 # Wait for the certificate to be validated (manual process)
 resource "aws_acm_certificate_validation" "ssl_cert_validation" {
   certificate_arn         = aws_acm_certificate.ssl_cert.arn
@@ -478,6 +603,14 @@ resource "aws_acm_certificate_validation" "ssl_cert_dashboard_validation" {
   certificate_arn         = aws_acm_certificate.ssl_cert_dashboard.arn
   validation_record_fqdns = [
     for dvo in aws_acm_certificate.ssl_cert_dashboard.domain_validation_options : dvo.resource_record_name
+  ]
+}
+
+# Wait for the certificate to be validated (manual process)
+resource "aws_acm_certificate_validation" "ssl_cert_survey_validation" {
+  certificate_arn         = aws_acm_certificate.ssl_cert_survey.arn
+  validation_record_fqdns = [
+    for dvo in aws_acm_certificate.ssl_cert_survey.domain_validation_options : dvo.resource_record_name
   ]
 }
 

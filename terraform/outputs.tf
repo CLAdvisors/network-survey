@@ -42,7 +42,15 @@ output "ssl_cert_dashboard_validation_records" {
     }
   ]
 }
-
+output "ssl_cert_survey_validation_records" {
+  value = [
+    for dvo in aws_acm_certificate.ssl_cert_survey.domain_validation_options : {
+      name   = dvo.resource_record_name
+      type   = dvo.resource_record_type
+      value  = dvo.resource_record_value
+    }
+  ]
+}
 
 
 output "alb_dns_name" {

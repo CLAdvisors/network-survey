@@ -6,6 +6,7 @@ import { useTheme } from "@emotion/react";
 import RespondentTable from "./RespondentTable";
 import DropdownWrapper from "./DropDownWrapper";
 import api from '../api/axios';
+import QuestionTable from "./QuestionTable";
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -71,7 +72,6 @@ const Dashboard = () => {
         sx={{
           padding: "10px",
           borderRadius: "8px",
-          marginBottom: "20px",
         }}
       >
         <DropdownWrapper label="Hide Survey Table">
@@ -114,6 +114,30 @@ const Dashboard = () => {
           Respondents
         </Typography>
         <RespondentTable rows={respondentData}/>
+        </DropdownWrapper>
+      </Box>
+      <Box
+        sx={{
+          padding: "10px",
+          borderRadius: "8px",
+        }}
+      >
+        <DropdownWrapper label="Hide Question Table">
+        <Typography
+          variant="h4"
+          color="primary"
+          sx={{
+            fontWeight: "bold",
+            marginBottom: "20px",
+            borderBottom: "2px solid",
+            borderColor: "primary.main",
+            paddingBottom: "10px",
+            width: "fit-content",
+          }}
+        >
+          Questions
+        </Typography>
+        <QuestionTable />
         </DropdownWrapper>
       </Box>
     </Box>

@@ -258,7 +258,7 @@ resource "aws_iam_role_policy_attachment" "attach_s3_policy" {
 
 # EC2 Instance Profile
 resource "aws_iam_instance_profile" "ec2_instance_profile" {
-  name = "ec2-instance-profile"
+  name = "instance-profile-access"
   role = aws_iam_role.ec2_role.name
 }
 
@@ -361,7 +361,7 @@ resource "random_id" "bucket_id" {
 
 # Create an Origin Access Control (OAC) for CloudFront to securely access the S3 bucket
 resource "aws_cloudfront_origin_access_control" "react_dashboard_oac" {
-  name                              = "react-dashboard-oac"
+  name                              = "dashboard-oac-${random_id.bucket_id.hex}"
   description                       = "OAC for React Dashboard S3 Bucket"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
@@ -379,7 +379,7 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
-
+  aliases = [ "demo.ona.dashboard.bennetts.work" ]
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD", "OPTIONS"]
     cached_methods   = ["GET", "HEAD"]
@@ -407,7 +407,9 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate.ssl_cert_dashboard.arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2018"
   }
 
   tags = {
@@ -451,11 +453,31 @@ resource "aws_acm_certificate" "ssl_cert" {
   }
 }
 
+# Request an SSL certificate in ACM for dashboard
+resource "aws_acm_certificate" "ssl_cert_dashboard" {
+  domain_name       = "demo.ona.dashboard.bennetts.work"
+  validation_method = "DNS"
+
+  subject_alternative_names = [ "demo.ona.dashboard.bennetts.work" ]
+
+  tags = {
+    Name = "SSL Certificate"
+  }
+}
+
 # Wait for the certificate to be validated (manual process)
 resource "aws_acm_certificate_validation" "ssl_cert_validation" {
   certificate_arn         = aws_acm_certificate.ssl_cert.arn
   validation_record_fqdns = [
     for dvo in aws_acm_certificate.ssl_cert.domain_validation_options : dvo.resource_record_name
+  ]
+}
+
+# Wait for the certificate to be validated (manual process)
+resource "aws_acm_certificate_validation" "ssl_cert_dashboard_validation" {
+  certificate_arn         = aws_acm_certificate.ssl_cert_dashboard.arn
+  validation_record_fqdns = [
+    for dvo in aws_acm_certificate.ssl_cert_dashboard.domain_validation_options : dvo.resource_record_name
   ]
 }
 
@@ -520,7 +542,10 @@ resource "aws_lb_listener" "https_listener" {
 
 # Register instances with the target group
 resource "aws_lb_target_group_attachment" "backend_attachments" {
-  for_each = toset([aws_instance.backend.id]) # Replace with backend instance IDs
+  for_each = {
+    instance1 = aws_instance.backend.id
+  }
+
   target_group_arn = aws_lb_target_group.backend_targets.arn
   target_id        = each.value
 }

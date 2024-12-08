@@ -578,9 +578,10 @@ app.get('/api/targets', async(req, res) => {
                WHERE survey_name = $1`;
   client.query(query, [surveyName])
     .then(response => {
-        const respondents = response.rows.map(row => ({
-            userName: row.name,
-            Email: row.contact_info,
+        const respondents = response.rows.map((row, index) => ({
+            id: index + 1,
+            name: row.name,
+            email: row.contact_info,
             status: row.response_status ? 'Incomplete' : 'Complete'
         }));
         res.status(200).json(respondents); // This will be an array of respondent objects

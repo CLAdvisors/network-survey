@@ -5,6 +5,7 @@ import Box from "@mui/material/Box";
 import { useTheme } from "@emotion/react";
 import RespondentTable from "./RespondentTable";
 import axios from "axios";
+import DropdownWrapper from "./DropDownWrapper";
 
 const api = axios.create({
   baseURL: `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}`,
@@ -79,6 +80,7 @@ const Dashboard = () => {
           borderRadius: "8px",
         }}
       >
+        <DropdownWrapper label="Hide Survey Table">
         <Typography
           variant="h4"
           color="primary"
@@ -94,6 +96,7 @@ const Dashboard = () => {
           Surveys
         </Typography>
         <SurveyTable rows={surveyData} selectRow={handleSelectRow}/>
+        </DropdownWrapper>
       </Box>
       <Box
         sx={{
@@ -101,6 +104,7 @@ const Dashboard = () => {
           borderRadius: "8px",
         }}
       >
+        <DropdownWrapper label="Hide Respondent Table">
         <Typography
           variant="h4"
           color="primary"
@@ -116,6 +120,7 @@ const Dashboard = () => {
           Respondents
         </Typography>
         <RespondentTable rows={respondentData}/>
+        </DropdownWrapper>
       </Box>
     </Box>
   );

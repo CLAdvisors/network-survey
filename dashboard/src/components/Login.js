@@ -80,7 +80,7 @@ const Login = () => {
               fontWeight: 900,
             }}
           >
-            CLA Survey Dashboard
+            ONA Dashboard Login
           </Typography>
         </Box>
 

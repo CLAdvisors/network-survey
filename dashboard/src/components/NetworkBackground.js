@@ -9,9 +9,20 @@ const NetworkBackground = () => {
   const { simulationRef, nodesRef, linksRef, initializeSimulation, isInitialized } = useNetwork();
   const visualsRef = useRef(null);
 
+  // Helper to get true viewport size
+  const getViewportSize = () => {
+    // Use visual viewport if available, otherwise use window dimensions
+    const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+    const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    // Apply the 1.5x scale
+    return {
+      width: vw * 1.5,
+      height: vh * 1.5
+    };
+  };
+
   useEffect(() => {
-    const width = window.innerWidth * 1.5;
-    const height = window.innerHeight * 1.5;
+    const { width, height } = getViewportSize();
 
     // Initialize simulation if not already done
     initializeSimulation(width, height, theme);
@@ -26,7 +37,7 @@ const NetworkBackground = () => {
     // Gradient for links
     const defs = svg.append("defs");
     const linkGradient = defs.append("linearGradient")
-      .attr("id", `linkGradient-${Math.random()}`) // Unique ID to prevent conflicts
+      .attr("id", `linkGradient-${Math.random()}`)
       .attr("gradientUnits", "userSpaceOnUse");
 
     linkGradient.append("stop")
@@ -39,10 +50,8 @@ const NetworkBackground = () => {
       .attr("stop-color", theme.palette.primary.main)
       .attr("stop-opacity", 0.4);
 
-    // Create container for visual elements
     visualsRef.current = svg.append("g");
 
-    // Create visual elements
     const link = visualsRef.current.append("g")
       .selectAll("line")
       .data(linksRef.current)
@@ -59,7 +68,6 @@ const NetworkBackground = () => {
       .style("fill", theme.palette.primary.main)
       .style("opacity", 0.4);
 
-    // Glow effect
     node.append("circle")
       .attr("r", d => d.radius * 1.2)
       .style("fill", "none")
@@ -67,13 +75,14 @@ const NetworkBackground = () => {
       .style("stroke-width", 0.5)
       .style("opacity", 0.2);
 
-    // Update tick function
     const updatePositions = () => {
-      // Boundary checking
+      const { width: currentWidth, height: currentHeight } = getViewportSize();
+      const padding = 50;
+
       nodesRef.current.forEach(node => {
-        const padding = 50;
-        node.x = Math.max(padding, Math.min(width - padding, node.x));
-        node.y = Math.max(padding, Math.min(height - padding, node.y));
+        // Use current viewport size for boundaries
+        node.x = Math.max(padding, Math.min(currentWidth - padding, node.x));
+        node.y = Math.max(padding, Math.min(currentHeight - padding, node.y));
       });
 
       link
@@ -89,10 +98,9 @@ const NetworkBackground = () => {
 
     simulationRef.current.on("tick", updatePositions);
 
-    // Handle window resize
+    // Enhanced resize handler
     const handleResize = () => {
-      const newWidth = window.innerWidth * 1.5;
-      const newHeight = window.innerHeight * 1.5;
+      const { width: newWidth, height: newHeight } = getViewportSize();
       
       svg
         .attr("width", newWidth)
@@ -103,12 +111,19 @@ const NetworkBackground = () => {
         .restart();
     };
 
+    // Listen to both window resize and visual viewport resize
     window.addEventListener("resize", handleResize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", handleResize);
+    }
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener("resize", handleResize);
+      }
     };
-  }, [theme, initializeSimulation, isInitialized]);
+  }, [theme, initializeSimulation, isInitialized, linksRef, nodesRef, simulationRef]);
 
   return (
     <svg

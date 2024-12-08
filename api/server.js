@@ -375,7 +375,7 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
 // PUT API endpoint for uploading a csv file of names
 app.post('/api/updateTargets', express.json(), (req, res) => {
   const data  = req.body;
-  const csvData = data.csvData.content;
+  const csvData = data.csvData;
   const surveyName = data.surveyName;
 
 
@@ -383,7 +383,7 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
     res.status(400).json({ message: 'Survey name is required.' });
     return;
   }
-  if (!csvData) {
+  if (!csvData ) {
     res.status(400).json({ message: 'CSV data is required.' });
     return;
   }
@@ -395,7 +395,11 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   header.forEach((name, index) => {
     headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
   });
-  console.log(headerDict);
+  console.log("csv " + csvArray);
+  if (csvArray.length === 0 || csvArray[0].length === 0) {
+    res.status(400).json({ message: 'CSV data is empty.' });
+    return;
+  }
   // Convert to json
   const surveyTargets = csvArray.filter(x => x !== '').map((row, index) => {
     const columns = row.split(',');
@@ -431,10 +435,10 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
 // PUT API endpoint for uploading a json file of questions
 app.post('/api/updateQuestions', express.json(), (req, res) => {
   const data  = req.body;
-  const surveyQuestions = data.surveyQuestions;
+  const surveyQuestions = data.questions;
   const surveyName = data.surveyName;
   // move to another endpoint
-
+  console.log("SURVEY QUESTIONS:", surveyQuestions);
   const surveyData = csvToJson(surveyQuestions);
 
   console.log("DATA:", data);

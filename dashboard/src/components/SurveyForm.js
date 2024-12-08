@@ -43,7 +43,7 @@ const SurveyForm = () => {
       console.log(fileContent);
       setFormData((prevData) => ({
         ...prevData,
-        csvData: { name: file.name, content: fileContent },
+        csvData: fileContent,
       }));
     };
     reader.readAsText(file);
@@ -76,12 +76,25 @@ const SurveyForm = () => {
   const handleSubmit = (event) => {
     event.preventDefault();
     
+    const csvHeader = 'Title,Question name,Question title,Question type\n';
+    const csvRows = formData.questions.map((question, index) => {
+      const questionName = `question_${index + 1}`;
+      const questionTitle = question;
+      const questionType = 'tagbox';
+      return `${index === 0 ? formData.surveyName : ''},${questionName},${questionTitle},${questionType}`;
+    });
+    const csvString = csvHeader + csvRows.join('\n');
+    formData.questions = csvString;
+
     console.log(formData);
 
     api.post('/api/survey', formData).then((response) => 
     {
-        if(response.data.status === 'success')
-        api.post('/api/updateTargets', formData)
+        console.log(response);
+        if(response.status === 200) {
+            api.post('/api/updateTargets', formData)
+            api.post('/api/updateQuestions', formData)
+        }
     });
 
     setFormData({

@@ -202,6 +202,7 @@ resource "aws_s3_object" "api_config" {
     db_name     = aws_db_instance.postgres.db_name
     db_user     = var.db_user
     db_password = var.db_password
+    frontend_url = "https://demo.ona.dashboard.bennetts.work"
   })
 }
 
@@ -298,6 +299,7 @@ resource "local_file" "api_config" {
     db_name     = aws_db_instance.postgres.db_name
     db_user     = var.db_user
     db_password = var.db_password
+    frontend_url = "https://demo.ona.dashboard.bennetts.work"
   })
 }
 

@@ -18,11 +18,31 @@ CREATE TABLE Respondent (
 	response JSONB
 );
 
+-- Create Email table
 CREATE TABLE EMAIL (
 	survey_name VARCHAR(255) REFERENCES Survey(name),
 	lang VARCHAR(255),
 	text VARCHAR(2555)
 );
+
+
+-- Create User table
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  username VARCHAR(255) UNIQUE NOT NULL,
+  password VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create Session table
+CREATE TABLE sessions (
+  sid varchar NOT NULL COLLATE "default",
+  sess json NOT NULL,
+  expire timestamp(6) NOT NULL,
+  CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
+);
+
+CREATE INDEX "IDX_session_expire" ON sessions ("expire");
 
 ALTER TABLE EMAIL
 ADD CONSTRAINT name_lang UNIQUE (survey_name, lang);

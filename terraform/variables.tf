@@ -21,3 +21,8 @@ variable "db_user" {
 variable "db_password" {
   description = "Database password"
 }
+
+variable "frontend_url" {
+  description = "value of the frontend url"
+  default = "https://demo.ona.dashboard.bennetts.work"
+}

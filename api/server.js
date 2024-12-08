@@ -5,9 +5,11 @@ const cors = require('cors');
 const { Resend } = require('resend');
 const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
+const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
 const Papa = require('papaparse');
 const dotenvFlow = require('dotenv-flow');
-
+const bcrypt = require('bcrypt');
 
 dotenvFlow.config();
 
@@ -146,8 +148,201 @@ async function executeQuery(query) {
 const app = express();
 const port = 3000; // Choose your desired port number
 
-app.use(cors()); // Enable CORS
+app.use(express.json());
+app.use(cors({
+  origin: 'http://localhost:3001', // or whatever port your frontend runs on
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
+
+// Session configuration with PostgreSQL
+app.use(session({
+  store: new pgSession({
+    pool,
+    tableName: 'sessions',   // Name of the session table
+    createTableIfMissing: true, // Auto-create the session table
+    pruneSessionInterval: 60 * 15 // Clean expired sessions every 15 min
+  }),
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  name: 'sessionId',
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    sameSite: 'strict'
+  }
+}));
+
+app.post('/api/create-test-user', async (req, res) => {
+  try {
+    const testUser = {
+      username: 'testuser',
+      password: 'password123'  // Will be hashed before storage
+    };
+
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(testUser.password, 10);
+
+    // Check if user exists
+    const exists = await pool.query(
+      'SELECT * FROM users WHERE username = $1',
+      [testUser.username]
+    );
+
+    if (exists.rows.length > 0) {
+      return res.json({ message: 'Test user already exists' });
+    }
+
+    // Create user
+    await pool.query(
+      'INSERT INTO users (username, password) VALUES ($1, $2)',
+      [testUser.username, hashedPassword]
+    );
+
+    res.json({ 
+      message: 'Test user created',
+      credentials: {
+        username: testUser.username,
+        password: testUser.password
+      }
+    });
+  } catch (error) {
+    console.error('Error creating test user:', error);
+    res.status(500).json({ error: 'Failed to create test user' });
+  }
+});
+
+// Register user endpoint
+app.post('/api/register', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Validate input
+    if (!username || !password) {
+      return res.status(400).json({ 
+        error: 'Username and password are required' 
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ 
+        error: 'Password must be at least 6 characters' 
+      });
+    }
+
+    // Check if username already exists
+    const existingUser = await pool.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
+    );
+
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ 
+        error: 'Username already exists' 
+      });
+    }
+
+    // Hash password and create user
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    const result = await pool.query(
+      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
+      [username, hashedPassword]
+    );
+
+    res.status(201).json({
+      success: true,
+      user: {
+        id: result.rows[0].id,
+        username: result.rows[0].username
+      }
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ 
+      error: 'Failed to create account' 
+    });
+  }
+});
+
+// Login endpoint
+app.post('/api/login', async (req, res) => {
+  console.log('Login attempt received:', req.body); // Debug log
+  const { username, password } = req.body;
+  console.log("username: ", username, "password: ", password);
+  try {
+
+    const result = await pool.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
+    );
+    
+    const user = result.rows[0];
+    
+    if (!user || !await bcrypt.compare(password, user.password)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Store user info in session
+    req.session.userId = user.id;
+    req.session.username = user.username;
+
+    // Return user data (excluding sensitive info)
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        // Add other user fields as needed
+      }
+    });
+  } catch (error) {
+    console.log('Login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Logout endpoint
+app.post('/api/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      console.error('Logout error:', err);
+      return res.status(500).json({ error: 'Error during logout' });
+    }
+    res.clearCookie('sessionId');
+    res.json({ success: true });
+  });
+});
+
+// Check auth status endpoint
+app.get('/api/check-auth', (req, res) => {
+  if (req.session.userId) {
+    res.json({
+      isAuthenticated: true,
+      user: {
+        id: req.session.userId,
+        username: req.session.username,
+        // Add other user fields as needed
+      }
+    });
+  } else {
+    res.status(401).json({ 
+      isAuthenticated: false 
+    });
+  }
+});
+
+// Auth middleware for protected routes
+const requireAuth = (req, res, next) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+};
 
 
 // Example usage: Adding a new survey
@@ -595,7 +790,7 @@ app.get('/api/targets', async(req, res) => {
 });
 
 // GET API endpoint for a list of current surveys
-app.get('/api/surveys', async (req, res) => {
+app.get('/api/surveys', requireAuth, async (req, res) => {
   // NEW DB CODE
   const client = await pool.connect();
 

@@ -6,14 +6,7 @@ import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { useTheme } from '@mui/material/styles';
-import axios from 'axios';
-
-const api = axios.create({
-    baseURL: `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}`,
-    // headers: {
-    //   'Authorization': 'Bearer your-token', // Example header
-    // },
-});
+import api from '../api/axios';
 
 const SurveyForm = () => {
   const theme = useTheme(); // Get the current theme (light/dark mode)
@@ -88,12 +81,12 @@ const SurveyForm = () => {
 
     console.log(formData);
 
-    api.post('/api/survey', formData).then((response) => 
+    api.post('/survey', formData).then((response) => 
     {
         console.log(response);
         if(response.status === 200) {
-            api.post('/api/updateTargets', formData)
-            api.post('/api/updateQuestions', formData)
+            api.post('/updateTargets', formData)
+            api.post('/updateQuestions', formData)
         }
     });
 

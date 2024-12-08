@@ -4,15 +4,8 @@ import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
 import { useTheme } from "@emotion/react";
 import RespondentTable from "./RespondentTable";
-import axios from "axios";
 import DropdownWrapper from "./DropDownWrapper";
-
-const api = axios.create({
-  baseURL: `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}`,
-  // headers: {
-  //   'Authorization': 'Bearer your-token', // Example header
-  // },
-});
+import api from '../api/axios';
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -25,7 +18,7 @@ const Dashboard = () => {
     // Define the fetch function
     const fetchData = async () => {
       try {
-        const response = await api.get('/api/surveys'); // Fetch data from the API
+        const response = await api.get('/surveys'); // Fetch data from the API
         console.log(response.data.surveys);
         setSurveyData(response.data.surveys); // Set data from the API response
       } catch (err) {
@@ -41,7 +34,7 @@ const Dashboard = () => {
     // Define the fetch function
     const fetchData = async () => {
       try {
-        const response = await api.get(`/api/targets?surveyName=${selectSurvey.name}`); // Fetch data from the API
+        const response = await api.get(`/targets?surveyName=${selectSurvey.name}`); // Fetch data from the API
         setRespondentData(response.data); // Set data from the API response
         // setRespondentData(response.data.surveys); // Set data from the API response
       } catch (err) {
@@ -78,7 +71,7 @@ const Dashboard = () => {
         sx={{
           padding: "10px",
           borderRadius: "8px",
-          marginBottom: "40px",
+          marginBottom: "20px",
         }}
       >
         <DropdownWrapper label="Hide Survey Table">

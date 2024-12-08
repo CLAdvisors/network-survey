@@ -9,32 +9,27 @@ const NetworkBackground = () => {
   const { simulationRef, nodesRef, linksRef, initializeSimulation, isInitialized } = useNetwork();
   const visualsRef = useRef(null);
 
-  // Helper to get true viewport size
   const getViewportSize = () => {
-    // Use visual viewport if available, otherwise use window dimensions
     const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth;
     const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    // Apply the 1.5x scale
+    // Larger scale for mobile
+    const scaleFactor = window.innerWidth < 768 ? 2 : 1.5;
     return {
-      width: vw * 1.5,
-      height: vh * 1.5
+      width: vw * scaleFactor,
+      height: vh * scaleFactor
     };
   };
 
   useEffect(() => {
     const { width, height } = getViewportSize();
-
-    // Initialize simulation if not already done
     initializeSimulation(width, height, theme);
 
-    // Clear existing SVG content
     d3.select(svgRef.current).selectAll("*").remove();
 
     const svg = d3.select(svgRef.current)
       .attr("width", width)
       .attr("height", height);
 
-    // Gradient for links
     const defs = svg.append("defs");
     const linkGradient = defs.append("linearGradient")
       .attr("id", `linkGradient-${Math.random()}`)
@@ -80,7 +75,6 @@ const NetworkBackground = () => {
       const padding = 50;
 
       nodesRef.current.forEach(node => {
-        // Use current viewport size for boundaries
         node.x = Math.max(padding, Math.min(currentWidth - padding, node.x));
         node.y = Math.max(padding, Math.min(currentHeight - padding, node.y));
       });
@@ -98,7 +92,6 @@ const NetworkBackground = () => {
 
     simulationRef.current.on("tick", updatePositions);
 
-    // Enhanced resize handler
     const handleResize = () => {
       const { width: newWidth, height: newHeight } = getViewportSize();
       
@@ -111,7 +104,6 @@ const NetworkBackground = () => {
         .restart();
     };
 
-    // Listen to both window resize and visual viewport resize
     window.addEventListener("resize", handleResize);
     if (window.visualViewport) {
       window.visualViewport.addEventListener("resize", handleResize);
@@ -125,15 +117,18 @@ const NetworkBackground = () => {
     };
   }, [theme, initializeSimulation, isInitialized, linksRef, nodesRef, simulationRef]);
 
+  // Use larger offset for mobile
+  const offset = window.innerWidth < 768 ? '-50%' : '-25%';
+
   return (
     <svg
       ref={svgRef}
       style={{
         position: 'fixed',
-        top: '-25%',
-        left: '-25%',
-        width: '150%',
-        height: '150%',
+        top: offset,
+        left: offset,
+        width: window.innerWidth < 768 ? '200%' : '150%',
+        height: window.innerWidth < 768 ? '200%' : '150%',
         zIndex: 1,
         backgroundColor: theme.palette.background.default,
         opacity: 0.8,

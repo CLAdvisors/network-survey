@@ -12,14 +12,22 @@ export const NetworkProvider = ({ children }) => {
   const initializeSimulation = (width, height, theme) => {
     if (isInitialized) return;
 
+    // Check if mobile device (width less than 768px)
+    const isMobile = window.innerWidth < 768;
+
     const config = {
-      nodeCount: 200,
-      linkCount: 300,
-      nodeSize: { min: 2, max: 6 },
-      linkDistance: 150,
-      chargeStrength: -50,
+      // Fewer nodes and links for mobile
+      nodeCount: isMobile ? 50 : 200,
+      linkCount: isMobile ? 75 : 300,
+      nodeSize: { 
+        min: isMobile ? 1.5 : 2, 
+        max: isMobile ? 4 : 6 
+      },
+      linkDistance: isMobile ? 100 : 150,
+      chargeStrength: isMobile ? -30 : -50,
       velocityDecay: 0.4,
-      initialSpread: 0.45,
+      // More spread for mobile
+      initialSpread: isMobile ? 0.6 : 0.45,
     };
 
     const centerX = width / 2;

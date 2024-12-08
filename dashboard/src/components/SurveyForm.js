@@ -22,7 +22,7 @@ const SurveyForm = () => {
 
   const [formData, setFormData] = useState({
     surveyName: '',
-    respondentsFile: null,
+    csvData: null,
     emailNotification: '',
     questions: [],
   });
@@ -37,10 +37,16 @@ const SurveyForm = () => {
 
   const handleFileUpload = (event) => {
     const file = event.target.files[0];
-    setFormData((prevData) => ({
-      ...prevData,
-      respondentsFile: file,
-    }));
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const fileContent = e.target.result;
+      console.log(fileContent);
+      setFormData((prevData) => ({
+        ...prevData,
+        csvData: { name: file.name, content: fileContent },
+      }));
+    };
+    reader.readAsText(file);
   };
 
   const handleQuestionChange = (index, value) => {
@@ -69,10 +75,15 @@ const SurveyForm = () => {
 
   const handleSubmit = (event) => {
     event.preventDefault();
-    console.log('Form Data Submitted:', formData);
+    
+    console.log(formData);
+
+    api.post('/api/survey', formData)
+    api.post('/api/updateTargets', formData)
+
     setFormData({
       surveyName: '',
-      respondentsFile: null,
+      csvData: null,
       emailNotification: '',
       questions: [],
     });
@@ -144,13 +155,13 @@ const SurveyForm = () => {
               onChange={handleFileUpload}
             />
           </Button>
-          {formData.respondentsFile && (
+          {formData.csvData && (
             <Typography
               variant="body2"
               color="text.secondary"
               sx={{ marginTop: '8px' }}
             >
-              Selected File: {formData.respondentsFile.name}
+              Selected File: {formData.csvData.name}
             </Typography>
           )}
         </Box>

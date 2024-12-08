@@ -375,7 +375,7 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
 // PUT API endpoint for uploading a csv file of names
 app.post('/api/updateTargets', express.json(), (req, res) => {
   const data  = req.body;
-  const csvData = data.csvData;
+  const csvData = data.csvData.content;
   const surveyName = data.surveyName;
 
 
@@ -387,6 +387,7 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
     res.status(400).json({ message: 'CSV data is required.' });
     return;
   }
+  console.log(csvData);
   let csvArray = csvData.split('\n');
   const header = csvArray.shift().split(',');
   const headerDict = {};

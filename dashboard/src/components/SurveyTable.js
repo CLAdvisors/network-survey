@@ -17,7 +17,12 @@ const SurveyTable = (props) => {
 
   useEffect(() => {
     if (props.rows) {
-        setRows(props.rows);
+        const updatedRows = props.rows.map(row => ({
+          ...row,
+          questions: row.questions === "null" ? "0" : row.questions
+        }));
+        console.log(updatedRows);
+        setRows(updatedRows);
     }
 }, [props]); // Runs only when 'data' prop changes
 

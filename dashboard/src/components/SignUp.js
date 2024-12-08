@@ -71,7 +71,6 @@ const SignUp = () => {
         justifyContent: 'center',
         minHeight: '100vh',
         padding: '20px',
-        backgroundColor: theme.palette.background.default,
       }}
     >
       <Paper

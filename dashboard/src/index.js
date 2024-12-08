@@ -22,6 +22,22 @@ const theme = createTheme({
         color: '#42B3AF', // Green shade for titles
       },
     },
+    components: {
+        MuiCssBaseline: {
+          styleOverrides: {
+            'html, body': {
+              margin: 0,
+              padding: 0,
+              overflow: 'hidden',
+              height: '100%'
+            },
+            '#root': {
+              height: '100%',
+              overflow: 'hidden'
+            }
+          },
+        },
+      },
   });
 
 ReactDOM.render(

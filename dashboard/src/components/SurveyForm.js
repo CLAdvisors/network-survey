@@ -72,8 +72,8 @@ const SurveyForm = () => {
     <Box
       sx={{
         padding: '20px',
-        maxWidth: '80%',
-        margin: 'auto',
+        marginLeft: '10%',
+        marginRight: '10%',
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: '8px',
         boxShadow: theme.palette.mode === 'light' ? '0 4px 8px rgba(0, 0, 0, 0.1)' : '0 4px 8px rgba(0, 0, 0, 0.3)',

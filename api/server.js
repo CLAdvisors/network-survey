@@ -594,25 +594,36 @@ app.get('/api/surveys', async (req, res) => {
   const client = await pool.connect();
 
   const query = `
-  SELECT name
-  FROM Survey
+  SELECT 
+    s.name,
+    s.creation_date,
+    COUNT(r.respondent_id) AS number_of_respondents,
+    jsonb_array_length(s.questions->'elements') AS number_of_questions
+FROM 
+    Survey s
+LEFT JOIN 
+    Respondent r ON s.name = r.survey_name
+GROUP BY 
+    s.name, s.creation_date, s.questions;
   `;
 
-  const values = [];
-
-  client.query(query, values)
+  client.query(query)
     .then(result => {
-      const jsonData = result.rows;
-      const surveys = jsonData.map(survey => survey.name);
+      const surveys = result.rows.map((row, index) => ({
+        id: index + 1,
+        name: row.name,
+        respondents: row.number_of_respondents + "",
+        questions: row.number_of_questions + "",
+        date: row.creation_date,
+      }));
       // Process the returned JSON data
-      res.status(200).json({surveys: surveys});
+      res.status(200).json({ surveys });
     })
     .catch(error => {
       // Handle the error
       console.error(error);
     })
     .finally(() => client.release());
-    
 });
 
 // GET API endpoint for status of survey creation

@@ -15,7 +15,10 @@ export const AuthProvider = ({ children }) => {
 
   const checkAuth = async () => {
     try {
-      const response = await api.get('/check-auth');
+      const response = await api.get('/check-auth', {
+        credentials: 'include'
+      });
+      
       if (response.status === 200) {
         setUser(response.data.user);
         setIsAuthenticated(true);

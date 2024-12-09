@@ -149,43 +149,42 @@ const app = express();
 const port = 3000; // Choose your desired port number
 
 app.use(express.json());
+
 app.use(cors({
   origin: function(origin, callback) {
     const allowedOrigins = [
       process.env.FRONTEND_URL,
       process.env.SURVEY_URL
     ];
-    console.log("origin: ", origin);
-    console.log("allowedOrigins: ", allowedOrigins);
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
-  }, // or whatever port your frontend runs on
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-
 // Session configuration with PostgreSQL
 app.use(session({
   store: new pgSession({
     pool,
-    tableName: 'sessions',   // Name of the session table
-    createTableIfMissing: true, // Auto-create the session table
-    pruneSessionInterval: 60 * 15 // Clean expired sessions every 15 min
+    tableName: 'sessions',
+    createTableIfMissing: true,
+    pruneSessionInterval: 60 * 15
   }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   name: 'sessionId',
   cookie: {
-    secure: process.env.NODE_ENV === 'prod',
+    secure: process.env.NODE_ENV === 'prod', // Only true in production
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    sameSite: 'strict'
+    sameSite: 'lax', // Changed from 'strict' to 'lax'
+    domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined // Add in production
   }
 }));
 
@@ -281,22 +280,18 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// Login endpoint
+// Modified login endpoint to ensure proper session handling
 app.post('/api/login', async (req, res) => {
-  console.log('Login attempt received:', req.body); // Debug log
   const { username, password } = req.body;
-  console.log("username: ", username, "password: ", password);
+  
   try {
-
     const result = await pool.query(
       'SELECT * FROM users WHERE username = $1',
       [username]
     );
     
     const user = result.rows[0];
-    console.log("user: ", user);
-    console.log("password: ", password);
-    console.log("user password: ", user.password);
+    
     if (!user || !await bcrypt.compare(password, user.password)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -305,17 +300,24 @@ app.post('/api/login', async (req, res) => {
     req.session.userId = user.id;
     req.session.username = user.username;
 
-    // Return user data (excluding sensitive info)
-    res.json({
-      success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        // Add other user fields as needed
+    // Save session explicitly
+    req.session.save(err => {
+      if (err) {
+        console.error('Session save error:', err);
+        return res.status(500).json({ error: 'Session save failed' });
       }
+
+      // Return user data
+      res.json({
+        success: true,
+        user: {
+          id: user.id,
+          username: user.username
+        }
+      });
     });
   } catch (error) {
-    console.log('Login error:', error);
+    console.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -332,21 +334,29 @@ app.post('/api/logout', (req, res) => {
   });
 });
 
-// Check auth status endpoint
+// Modified check-auth endpoint with better error handling
 app.get('/api/check-auth', (req, res) => {
-  console.log(req.session)
+  console.log('Session data:', req.session);
+  console.log('Cookies:', req.headers.cookie);
+
+  if (!req.session) {
+    return res.status(500).json({ 
+      error: 'Session support not properly configured'
+    });
+  }
+
   if (req.session.userId) {
     res.json({
       isAuthenticated: true,
       user: {
         id: req.session.userId,
-        username: req.session.username,
-        // Add other user fields as needed
+        username: req.session.username
       }
     });
   } else {
     res.status(401).json({ 
-      isAuthenticated: false 
+      isAuthenticated: false,
+      message: 'No active session found'
     });
   }
 });

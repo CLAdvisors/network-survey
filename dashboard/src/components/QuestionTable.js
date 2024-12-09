@@ -25,6 +25,12 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
+  const [sortModel, setSortModel] = useState([
+    {
+      field: 'id',
+      sort: 'asc',
+    },
+  ]);
 
   useEffect(() => {
     if (rows) {
@@ -86,7 +92,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
       throw err;
     }
   };
-  const handleAddRow = () => {
+  
+ const handleAddRow = () => {
     const newId = tableRows.length > 0 ? Math.max(...tableRows.map(row => row.id)) + 1 : 1;
     const newRow = {
       id: newId,
@@ -95,8 +102,15 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
       required: true
     };
     
-    setTableRows([...tableRows, newRow]);
+    setTableRows([newRow, ...tableRows]);
     setHasChanges(true);
+
+    setSortModel([
+      {
+        field: 'id',
+        sort: 'desc',
+      },
+    ]);
   };
 
   return (
@@ -131,7 +145,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
           rows={tableRows}
           columns={columns}
           initialState={{
-            pagination: { paginationModel: { pageSize: 10 } }
+            pagination: { paginationModel: { pageSize: 10, page: 0 } },
           }}
           pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
           disableSelectionOnClick
@@ -139,6 +153,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
           components={{
             Toolbar: GridToolbar,
           }}
+          sortModel={sortModel}
+          onSortModelChange={(model) => setSortModel(model)}
           sx={{
             '& .MuiDataGrid-columnHeader:hover': {
               backgroundColor: 'rgba(66, 179, 175, 0.3)',

@@ -25,6 +25,12 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
+  const [sortModel, setSortModel] = useState([
+    {
+      field: 'id',
+      sort: 'asc',
+    },
+  ]);
 
   useEffect(() => {
     if (rows) {
@@ -96,9 +102,19 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       status: 'pending'
     };
     
-    setTableRows([...tableRows, newRow]);
+    // Add new row at the beginning of the array
+    setTableRows([newRow, ...tableRows]);
     setHasChanges(true);
+
+    // Ensure sorting is set to show newest first
+    setSortModel([
+      {
+        field: 'id',
+        sort: 'desc',
+      },
+    ]);
   };
+
 
   return (
     <Paper elevation={2} sx={{ p: 3, bgcolor: theme.palette.background.paper, borderRadius: 2 }}>
@@ -132,7 +148,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
           rows={tableRows}
           columns={columns}
           initialState={{
-            pagination: { paginationModel: { pageSize: 10 } }
+            pagination: { paginationModel: { pageSize: 10, page: 0 } },
           }}
           pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
           disableSelectionOnClick
@@ -140,6 +156,8 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
           components={{
             Toolbar: GridToolbar,
           }}
+          sortModel={sortModel}
+          onSortModelChange={(model) => setSortModel(model)}
           sx={{
             '& .MuiDataGrid-columnHeader:hover': {
               backgroundColor: 'rgba(66, 179, 175, 0.3)',

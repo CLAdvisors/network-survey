@@ -121,7 +121,7 @@ const SurveyTable = (props) => {
     if (props.rows) {
       const updatedRows = props.rows.map(row => ({
         ...row,
-        questions: row.questions === "null" ? "0" : row.questions
+        questions: row.questions && row.questions !== "null" ? row.questions : "0"
       }));
       console.log(updatedRows);
       setRows(updatedRows);
@@ -147,7 +147,7 @@ const SurveyTable = (props) => {
         initialState={{
           pagination: { paginationModel: { pageSize: 10 } }
         }}
-        pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
+        pageSizeOptions={[5, 10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
         processRowUpdate={handleProcessRowUpdate}
         onRowClick={handleRowClick}

@@ -180,14 +180,14 @@ app.use(session({
   saveUninitialized: false,
   name: 'sessionId',
   cookie: {
-    secure: process.env.NODE_ENV === 'prod', // Only true in production
+    secure: process.env.NODE_ENV === 'prod', // Only use secure in production
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    sameSite: 'lax', // Changed from 'strict' to 'lax'
-    domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined // Add in production
+    sameSite: 'lax',  // Changed from 'strict' to 'lax' for better compatibility
+    path: '/',
+    domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined
   }
 }));
-
 app.post('/api/create-test-user', async (req, res) => {
   try {
     const testUser = {
@@ -280,7 +280,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// Modified login endpoint to ensure proper session handling
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   
@@ -296,7 +295,7 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Store user info in session
+    // Set session data
     req.session.userId = user.id;
     req.session.username = user.username;
 
@@ -307,7 +306,7 @@ app.post('/api/login', async (req, res) => {
         return res.status(500).json({ error: 'Session save failed' });
       }
 
-      // Return user data
+      // Return response after session is saved
       res.json({
         success: true,
         user: {

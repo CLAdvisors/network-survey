@@ -294,7 +294,9 @@ app.post('/api/login', async (req, res) => {
     );
     
     const user = result.rows[0];
-    
+    console.log("user: ", user);
+    console.log("password: ", password);
+    console.log("user password: ", user.password);
     if (!user || !await bcrypt.compare(password, user.password)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }

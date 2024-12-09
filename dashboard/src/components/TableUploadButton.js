@@ -73,7 +73,7 @@ const TableUploadButton = ({ onUpload, templateData, tableName }) => {
           startIcon={<UploadFileIcon />}
           size="small"
         >
-          Upload CSV
+          Upload
           <input
             type="file"
             hidden

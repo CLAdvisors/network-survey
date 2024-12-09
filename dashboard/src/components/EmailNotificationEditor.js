@@ -254,7 +254,7 @@ const EmailNotificationEditor = ({ surveyId }) => {
             startIcon={<UploadFileIcon />}
             size="small"
           >
-            Upload CSV
+            Upload
             <input
               type="file"
               hidden

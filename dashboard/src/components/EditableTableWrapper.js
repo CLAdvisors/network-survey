@@ -41,7 +41,7 @@ const EditableTableWrapper = ({ children, onSave, hasChanges, setHasChanges }) =
                 px: 3,
               }}
             >
-              Save Changes
+              Save
             </Button>
           </Box>
         </Fade>

@@ -854,17 +854,18 @@ app.get('/api/targets', async(req, res) => {
   // NEW DB CODE
   const client = await pool.connect();
 
-  const query = `SELECT name, contact_info, response IS NULL AS response_status 
+  const query = `SELECT name, contact_info, respondent_id, response IS NULL AS response_status 
                FROM Respondent 
                WHERE survey_name = $1`;
   client.query(query, [surveyName])
     .then(response => {
         const respondents = response.rows.map((row, index) => ({
-            id: index + 1,
+            id: row.respondent_id,
             name: row.name,
             email: row.contact_info,
             status: row.response_status ? 'Incomplete' : 'Complete'
         }));
+        console.log(respondents);
         res.status(200).json(respondents); // This will be an array of respondent objects
     })
     .catch(e => console.error(e.stack))

@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
-import EditableTableWrapper from './EditableTableWrapper';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
 import api from '../api/axios';
-import { Box, Paper, Typography } from '@mui/material';
+import { Box, Paper, Typography, Button } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
+import SaveIcon from '@mui/icons-material/Save';
 
 const columns = [
   { field: 'id', headerName: 'ID', width: 90 },
@@ -22,18 +22,27 @@ const TEMPLATE_DATA = [
 
 const CSV_HEADER = 'First,Last,Email,Respondent,Location,Level,Gender,Race,Manager,VP,Business Group,Business Group - 1,Business Group - 2,Language';
 
-const formatRowsToCSV = (rows) => {
+const formatRowsToCSV = (rows, originalRows) => {
   const dataRows = rows.map(row => {
-    // Split name into first and last
+    // Find if this is a modification of an existing row
+    const originalRow = originalRows.find(origRow => origRow.id === row.id);
+    
     const nameParts = row.name.trim().split(/\s+/);
     const firstName = nameParts[0] || '';
     const lastName = nameParts.slice(1).join(' ') || '';
     
-    // Create CSV row with default values for unspecified fields
-    return `${firstName},${lastName},${row.email},true,,,,,,,,,,en`;
+    // If this is a modified row, keep its original UUID (which is stored in the originalRow)
+    // If it's a new row, let the server generate a new UUID
+    const additionalId = originalRow ? `,${originalRow.uuid}` : '';
+    
+    return `${firstName},${lastName},${row.email},true,,,,,,,,,,en${additionalId}`;
   });
 
-  return `${CSV_HEADER}\n${dataRows.join('\n')}`;
+  const headerWithId = originalRows.length > 0 ? 
+    `${CSV_HEADER},uuid` : 
+    CSV_HEADER;
+
+  return `${headerWithId}\n${dataRows.join('\n')}`;
 };
 
 const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
@@ -41,7 +50,6 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
-  const [originalRowIds, setOriginalRowIds] = useState(new Set());
   const [sortModel, setSortModel] = useState([
     {
       field: 'id',
@@ -57,8 +65,6 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       }));
       setTableRows(updatedRows);
       setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
-      // Store the IDs of original rows
-      setOriginalRowIds(new Set(updatedRows.map(row => row.id)));
     }
   }, [rows]);
 
@@ -77,45 +83,31 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
 
   const handleSave = async () => {
     try {
-      // Find all new rows by checking against originalRowIds
-      const newRows = tableRows.filter(row => {
-        return !originalRowIds.has(row.id) && row.name && row.email;
+      // Get all modified or new rows that have both name and email
+      const changedRows = tableRows.filter(row => {
+        const original = originalRows.find(origRow => origRow.id === row.id);
+        return (!original || original.name !== row.name || original.email !== row.email) && row.name && row.email;
       });
 
-      console.log('New rows to be saved:', newRows); // Debug log
-
-      // If there are new rows, send them all in one CSV request
-      if (newRows.length > 0) {
-        const csvData = formatRowsToCSV(newRows);
-        await api.post('/updateTargets', {
+      if (changedRows.length > 0) {
+        const csvData = formatRowsToCSV(changedRows, originalRows);
+        await api.post('/updateTarget', {
           csvData,
           surveyName
         });
-      }
 
-      // Handle modified existing rows
-      const modifiedRows = tableRows.filter(row => {
-        if (!originalRowIds.has(row.id)) return false;
-        const original = originalRows.find(origRow => origRow.id === row.id);
-        return original && (original.name !== row.name || original.email !== row.email);
-      });
+        // Refresh the respondent data
+        const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
+        const refreshedRows = respondentResponse.data;
+        setTableRows(refreshedRows);
+        setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+        setHasChanges(false);
 
-      if (modifiedRows.length > 0) {
-        await api.post('/update-respondents', { respondents: modifiedRows });
-      }
-
-      // Refresh the respondent data
-      const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
-      const refreshedRows = respondentResponse.data;
-      setTableRows(refreshedRows);
-      setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
-      setOriginalRowIds(new Set(refreshedRows.map(row => row.id)));
-      setHasChanges(false);
-
-      // Refresh the survey counts
-      const surveysResponse = await api.get('/surveys');
-      if (onRespondentsUpdate) {
-        onRespondentsUpdate(surveysResponse.data.surveys);
+        // Refresh the survey counts
+        const surveysResponse = await api.get('/surveys');
+        if (onRespondentsUpdate) {
+          onRespondentsUpdate(surveysResponse.data.surveys);
+        }
       }
     } catch (error) {
       console.error('Failed to save changes:', error);
@@ -132,7 +124,6 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
         const refreshedRows = respondentResponse.data;
         setTableRows(refreshedRows);
         setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
-        setOriginalRowIds(new Set(refreshedRows.map(row => row.id)));
         
         const surveysResponse = await api.get('/surveys');
         if (onRespondentsUpdate) {
@@ -178,45 +169,49 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
         <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold' }}>
           Survey Respondents
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <AddRowButton onClick={handleAddRow} />
           <TableUploadButton
             onUpload={handleUpload}
             templateData={TEMPLATE_DATA}
             tableName="Respondents"
           />
+          {hasChanges && (
+            <Button
+              variant="contained"
+              startIcon={<SaveIcon />}
+              onClick={handleSave}
+              size="small"
+            >
+              Save
+            </Button>
+          )}
         </Box>
       </Box>
 
-      <EditableTableWrapper 
-        onSave={handleSave}
-        hasChanges={hasChanges}
-        setHasChanges={setHasChanges}
-      >
-        <DataGrid
-          rows={tableRows}
-          columns={columns}
-          initialState={{
-            pagination: { paginationModel: { pageSize: 10, page: 0 } },
-          }}
-          pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
-          disableSelectionOnClick
-          processRowUpdate={handleProcessRowUpdate}
-          components={{
-            Toolbar: GridToolbar,
-          }}
-          sortModel={sortModel}
-          onSortModelChange={(model) => setSortModel(model)}
-          sx={{
-            '& .MuiDataGrid-columnHeader:hover': {
-              backgroundColor: 'rgba(66, 179, 175, 0.3)',
-            },
-            '& .MuiDataGrid-row:hover': {
-              backgroundColor: 'rgba(0, 178, 140, 0.2)',
-            },
-          }}
-        />
-      </EditableTableWrapper>
+      <DataGrid
+        rows={tableRows}
+        columns={columns}
+        initialState={{
+          pagination: { paginationModel: { pageSize: 10, page: 0 } },
+        }}
+        pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
+        disableSelectionOnClick
+        processRowUpdate={handleProcessRowUpdate}
+        components={{
+          Toolbar: GridToolbar,
+        }}
+        sortModel={sortModel}
+        onSortModelChange={(model) => setSortModel(model)}
+        sx={{
+          '& .MuiDataGrid-columnHeader:hover': {
+            backgroundColor: 'rgba(66, 179, 175, 0.3)',
+          },
+          '& .MuiDataGrid-row:hover': {
+            backgroundColor: 'rgba(0, 178, 140, 0.2)',
+          },
+        }}
+      />
     </Paper>
   );
 };

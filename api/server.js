@@ -155,7 +155,8 @@ app.use(cors({
       process.env.FRONTEND_URL,
       process.env.SURVEY_URL
     ];
-    
+    console.log("origin: ", origin);
+    console.log("allowedOrigins: ", allowedOrigins);
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {

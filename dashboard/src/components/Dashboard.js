@@ -93,8 +93,8 @@ const Dashboard = () => {
       sx={{
         marginTop: "20px",
         padding: "20px",
-        marginLeft: "20%",
-        marginRight: "20%",
+        marginLeft: "13%",
+        marginRight: "13%",
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: "8px",
         boxShadow: theme.palette.mode === "light"

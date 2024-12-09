@@ -5,16 +5,16 @@ const initialRows = [];
 
 const columns = [
   { field: 'id', headerName: 'ID', width: 90 },
-  { field: 'text', headerName: 'Question Text', width: 150},
-  { field: 'type', headerName: 'Question Type', width: 200 },
+  { field: 'text', headerName: 'Question Text', width: 150, editable: true },
+  { field: 'type', headerName: 'Question Type', width: 200, editable: true },
   { field: 'required', headerName: 'Required', width: 200 },
 ];
 
 const QuestionTable = (props) => {
   const [rows, setRows] = useState(initialRows);
-  const [lastClickedRow, setLastClickedRow] = useState(null);
 
   useEffect(() => {
+    console.log(props.rows);
     if (props.rows) {
         const updatedRows = props.rows.map(row => ({
           ...row,
@@ -31,10 +31,6 @@ const QuestionTable = (props) => {
     return newRow;
   };
 
-  const handleRowClick = (params) => {
-    setLastClickedRow(params.row);
-    props.selectRow(params.row)
-  };
 
   return (
     <div style={{ height: '100%', width: '100%' }}>
@@ -47,7 +43,6 @@ const QuestionTable = (props) => {
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
         processRowUpdate={handleProcessRowUpdate}
-        onRowClick={handleRowClick}
         components={{
           Toolbar: GridToolbar,
         }}

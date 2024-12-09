@@ -12,7 +12,7 @@ const Dashboard = () => {
   const theme = useTheme();
   const [surveyData, setSurveyData] = React.useState(null);
   const [selectSurvey, setselectSurvey] = React.useState(null);
-
+  const [questionData, setQuestionData] = React.useState(null);
   const [respondentData, setRespondentData] = React.useState(null);
 
   React.useEffect(() => {
@@ -33,7 +33,7 @@ const Dashboard = () => {
 
   React.useEffect(() => {
     // Define the fetch function
-    const fetchData = async () => {
+    const fetchRespondentData = async () => {
       try {
         const response = await api.get(`/targets?surveyName=${selectSurvey.name}`); // Fetch data from the API
         setRespondentData(response.data); // Set data from the API response
@@ -42,9 +42,18 @@ const Dashboard = () => {
         console.log(err);
       }
     };
-
+    const fetcQuestionData = async () => {
+        try {
+          const response = await api.get(`/listQuestions?surveyName=${selectSurvey.name}`); // Fetch data from the API
+          setQuestionData(response.data.questions); // Set data from the API response
+          // setRespondentData(response.data.surveys); // Set data from the API response
+        } catch (err) {
+          console.log(err);
+        }
+      };
     // Call the fetch function
-    fetchData();
+    fetchRespondentData();
+    fetcQuestionData();
   }, [selectSurvey]);
 
   const handleSelectRow = (childData) => {
@@ -137,7 +146,7 @@ const Dashboard = () => {
         >
           Questions
         </Typography>
-        <QuestionTable />
+        <QuestionTable rows={questionData}/>
         </DropdownWrapper>
       </Box>
     </Box>

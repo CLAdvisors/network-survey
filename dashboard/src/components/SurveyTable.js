@@ -13,7 +13,7 @@ const columns = [
 
 const SurveyTable = (props) => {
   const [rows, setRows] = useState(initialRows);
-  const [lastClickedRow, setLastClickedRow] = useState(null);
+  const [, setLastClickedRow] = useState(null);
 
   useEffect(() => {
     if (props.rows) {

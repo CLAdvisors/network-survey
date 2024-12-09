@@ -236,7 +236,7 @@ const EmailNotificationEditor = ({ surveyId }) => {
           color="primary"
           sx={{ fontWeight: 'bold' }}
         >
-          Email Notifications
+          Survey Notification Text
         </Typography>
         
         <Box sx={{ display: 'flex', gap: 2 }}>

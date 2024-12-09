@@ -184,7 +184,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
         pb: 1
       }}>
         <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold' }}>
-          Survey Respondents
+          Respondent Table
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <AddRowButton onClick={handleAddRow} />

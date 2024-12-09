@@ -209,8 +209,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
         borderBottom: `2px solid ${theme.palette.primary.main}`,
         pb: 1
       }}>
-        <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold' }}>
-          Survey Questions
+        <Typography variant="h7" color="primary" sx={{ fontWeight: 'bold' }}>
+          Question Table
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <AddRowButton onClick={handleAddRow} />

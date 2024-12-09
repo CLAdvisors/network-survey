@@ -1,15 +1,14 @@
 import React from "react";
 import SurveyTable from "./SurveyTable";
-import Typography from "@mui/material/Typography";
 import { Box, Button } from "@mui/material";
 import { useTheme } from "@emotion/react";
 import RespondentTable from "./RespondentTable";
 import AddIcon from "@mui/icons-material/Add";
-import DropdownWrapper from "./DropDownWrapper";
 import api from "../api/axios";
 import QuestionTable from "./QuestionTable";
 import CreateSurveyDialog from "./CreateSurveyDialog";
 import EmailNotificationEditor from "./EmailNotificationEditor";
+import CollapsibleSection from "./CollapsibleSection";
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -98,40 +97,27 @@ const Dashboard = () => {
         marginRight: "20%",
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: "8px",
-        boxShadow:
-          theme.palette.mode === "light"
-            ? "0 4px 8px rgba(0, 0, 0, 0.1)"
-            : "0 4px 8px rgba(0, 0, 0, 0.3)",
+        boxShadow: theme.palette.mode === "light"
+          ? "0 4px 8px rgba(0, 0, 0, 0.1)"
+          : "0 4px 8px rgba(0, 0, 0, 0.3)",
         backgroundColor: theme.palette.background.paper,
       }}
     >
-      <Box sx={{ padding: "10px", borderRadius: "8px", marginBottom: "40px"}}>
-        <DropdownWrapper label="Hide Survey Table">
-          <Box
-            sx={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              mb: 3,
-              borderBottom: `2px solid ${theme.palette.primary.main}`,
-              pb: 1,
-            }}
+      <CollapsibleSection 
+        title="Surveys"
+        actions={
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setCreateDialogOpen(true)}
+            size="small"
           >
-            <Typography variant="h6" color="primary" sx={{ fontWeight: "bold" }}>
-              Surveys
-            </Typography>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setCreateDialogOpen(true)}
-              size="small"
-            >
-              Create Survey
-            </Button>
-          </Box>
-          <SurveyTable rows={surveyData} selectRow={handleSelectRow} />
-        </DropdownWrapper>
-      </Box>
+            Create Survey
+          </Button>
+        }
+      >
+        <SurveyTable rows={surveyData} selectRow={handleSelectRow} />
+      </CollapsibleSection>
 
       <CreateSurveyDialog
         open={createDialogOpen}
@@ -139,31 +125,25 @@ const Dashboard = () => {
         onSubmit={handleCreateSurvey}
       />
 
-      <Box sx={{ padding: "10px", borderRadius: "8px", marginBottom: "40px" }}>
-        <DropdownWrapper label="Hide Question Table">
-          <QuestionTable 
-            rows={questionData} 
-            surveyName={selectSurvey?.name}
-            onQuestionsUpdate={handleQuestionsUpdate}
-          />
-        </DropdownWrapper>
-      </Box>
+      <CollapsibleSection title="Survey Questions">
+        <QuestionTable 
+          rows={questionData} 
+          surveyName={selectSurvey?.name}
+          onQuestionsUpdate={handleQuestionsUpdate}
+        />
+      </CollapsibleSection>
 
-      <Box sx={{ padding: "10px", borderRadius: "8px", marginBottom: "40px" }}>
-        <DropdownWrapper label="Hide Email Notifications">
-          <EmailNotificationEditor surveyId={selectSurvey?.id} />
-        </DropdownWrapper>
-      </Box>
+      <CollapsibleSection title="Email Notifications">
+        <EmailNotificationEditor surveyId={selectSurvey?.id} />
+      </CollapsibleSection>
 
-      <Box sx={{ padding: "10px", borderRadius: "8px",  marginBottom: "40px" }}>
-        <DropdownWrapper label="Hide Respondent Table">
-          <RespondentTable
-            rows={respondentData}
-            surveyName={selectSurvey?.name}
-            onRespondentsUpdate={handleRespondentsUpdate}
-          />
-        </DropdownWrapper>
-      </Box>
+      <CollapsibleSection title="Survey Respondents">
+        <RespondentTable
+          rows={respondentData}
+          surveyName={selectSurvey?.name}
+          onRespondentsUpdate={handleRespondentsUpdate}
+        />
+      </CollapsibleSection>
     </Box>
   );
 };

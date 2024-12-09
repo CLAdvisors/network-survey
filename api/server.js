@@ -706,6 +706,48 @@ app.get('/api/names', async (req, res) => {
   
 });
 
+// GET API list questions for dashboard
+app.get('/api/listQuestions', async (req, res) => {
+  const { surveyName = '' } = req.query;
+
+  if(surveyName === '' || surveyName === 'undefined' || surveyName === null || surveyName === 'null') {
+    res.status(404).json({ message: 'Survey name not found.' });
+    return;
+  }
+
+  // NEW DB CODE
+  const client = await pool.connect();
+
+  const query = `
+  SELECT questions, title
+  FROM Survey
+  WHERE name = $1;
+  `;
+
+  const values = [surveyName];
+
+  // Query the database for json question data
+  client.query(query, values)
+    .then(result => {
+      const questions = result.rows[0].questions.elements.map((q, index) => ({
+        id: index + 1,
+        text: q.title,
+        type: q.type,
+        required: q.isRequired
+      }));
+      res.status(200).json({ questions });
+    })
+    .catch(error => {
+      console.error(error);
+      res.status(500).json({ error: 'Failed to fetch questions' });
+    })
+    .finally(() => {
+      client.release();
+
+  });
+});
+
+
 // GET API endpoint for survey questions
 app.get('/api/questions', async (req, res) => {
   const { surveyName = '' } = req.query;

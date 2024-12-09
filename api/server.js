@@ -150,7 +150,18 @@ const port = 3000; // Choose your desired port number
 
 app.use(express.json());
 app.use(cors({
-  origin: process.env.FRONTEND_URL, // or whatever port your frontend runs on
+  origin: function(origin, callback) {
+    const allowedOrigins = [
+      process.env.FRONTEND_URL,
+      process.env.SURVEY_URL
+    ];
+    
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }, // or whatever port your frontend runs on
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']

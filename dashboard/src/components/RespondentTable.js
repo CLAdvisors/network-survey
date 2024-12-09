@@ -6,11 +6,45 @@ import api from '../api/axios';
 import { Box, Paper, Typography, Button } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
+import EmailIcon from '@mui/icons-material/Email';
+import DeleteIcon from '@mui/icons-material/Delete';
+import TableMenuCell from './TableMenuCell';
 
 const columns = [
   { field: 'name', headerName: 'User Name', width: 150, editable: true },
   { field: 'email', headerName: 'Email', width: 200, editable: true },
   { field: 'status', headerName: 'Status', width: 200 },
+  {
+    field: 'actions',
+    headerName: 'Actions',
+    width: 100,
+    sortable: false,
+    filterable: false,
+    renderCell: (params) => (
+      <TableMenuCell
+        row={params.row}
+        actions={[
+          {
+            label: 'Send Reminder',
+            icon: <EmailIcon fontSize="small" />,
+            handler: async (row) => {
+              console.log('Send reminder to:', row);
+              // Add your reminder email logic here
+            }
+          },
+          {
+            label: 'Delete Respondent',
+            icon: <DeleteIcon fontSize="small" />,
+            color: 'error.main',
+            handler: async (row) => {
+              console.log('Delete respondent:', row);
+              // Add your delete logic here
+            }
+          }
+        ]}
+      />
+    ),
+  }
 ];
 
 const TEMPLATE_DATA = [

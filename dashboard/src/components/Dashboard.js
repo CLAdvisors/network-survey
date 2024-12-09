@@ -92,7 +92,7 @@ const Dashboard = () => {
     <Box
       sx={{
         marginTop: "20px",
-        padding: "20px",
+        padding: "40px",
         marginLeft: "13%",
         marginRight: "13%",
         border: `1px solid ${theme.palette.divider}`,

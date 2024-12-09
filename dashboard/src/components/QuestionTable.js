@@ -6,12 +6,38 @@ import api from '../api/axios';
 import { Box, Paper, Typography, Button } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
+import DeleteIcon from '@mui/icons-material/Delete';
+import TableMenuCell from './TableMenuCell';
+
 
 const columns = [
   { field: 'id', headerName: 'ID', width: 90 },
   { field: 'text', headerName: 'Question Text', width: 500, editable: true },
   { field: 'type', headerName: 'Question Type', width: 150, editable: true },
   { field: 'required', headerName: 'Required', width: 100 },
+  {
+    field: 'actions',
+    headerName: 'Actions',
+    width: 100,
+    sortable: false,
+    filterable: false,
+    renderCell: (params) => (
+      <TableMenuCell
+        row={params.row}
+        actions={[
+          {
+            label: 'Delete Question',
+            icon: <DeleteIcon fontSize="small" />,
+            color: 'error.main',
+            handler: async (row) => {
+              console.log('Delete question:', row);
+              // Add your delete logic here
+            }
+          }
+        ]}
+      />
+    ),
+  }
 ];
 
 const TEMPLATE_DATA = [

@@ -8,7 +8,6 @@ import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 
 const columns = [
-  { field: 'id', headerName: 'ID', width: 90 },
   { field: 'name', headerName: 'User Name', width: 150, editable: true },
   { field: 'email', headerName: 'Email', width: 200, editable: true },
   { field: 'status', headerName: 'Status', width: 200 },

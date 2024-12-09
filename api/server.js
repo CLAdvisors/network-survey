@@ -334,6 +334,7 @@ app.post('/api/logout', (req, res) => {
 
 // Check auth status endpoint
 app.get('/api/check-auth', (req, res) => {
+  console.log(req.session)
   if (req.session.userId) {
     res.json({
       isAuthenticated: true,

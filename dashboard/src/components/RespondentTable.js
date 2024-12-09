@@ -20,29 +20,34 @@ const TEMPLATE_DATA = [
   'Jane Smith,jane@example.com,pending'
 ];
 
-const CSV_HEADER = 'First,Last,Email,Respondent,Location,Level,Gender,Race,Manager,VP,Business Group,Business Group - 1,Business Group - 2,Language';
+const CSV_HEADER = 'First,Last,Email,Respondent,Location,Level,Gender,Race,Manager,VP,Business Group,Business Group - 1,Business Group - 2,Language,uuid';
 
-const formatRowsToCSV = (rows, originalRows) => {
+const formatRowsToCSV = (rows) => {
   const dataRows = rows.map(row => {
-    // Find if this is a modification of an existing row
-    const originalRow = originalRows.find(origRow => origRow.id === row.id);
-    
     const nameParts = row.name.trim().split(/\s+/);
     const firstName = nameParts[0] || '';
     const lastName = nameParts.slice(1).join(' ') || '';
     
-    // If this is a modified row, keep its original UUID (which is stored in the originalRow)
-    // If it's a new row, let the server generate a new UUID
-    const additionalId = originalRow ? `,${originalRow.uuid}` : '';
-    
-    return `${firstName},${lastName},${row.email},true,,,,,,,,,,en${additionalId}`;
+    // Create CSV row with all required fields
+    return [
+      firstName,
+      lastName,
+      row.email,
+      'true', // Respondent
+      '', // Location
+      '', // Level
+      '', // Gender
+      '', // Race
+      '', // Manager
+      '', // VP
+      '', // Business Group
+      '', // Business Group - 1
+      '', // Business Group - 2
+      'en' // Language
+    ].join(',');
   });
 
-  const headerWithId = originalRows.length > 0 ? 
-    `${CSV_HEADER},uuid` : 
-    CSV_HEADER;
-
-  return `${headerWithId}\n${dataRows.join('\n')}`;
+  return `${CSV_HEADER}\n${dataRows.join('\n')}`;
 };
 
 const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
@@ -83,27 +88,38 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
 
   const handleSave = async () => {
     try {
-      // Get all modified or new rows that have both name and email
+      // Get modified rows that have both name and email
       const changedRows = tableRows.filter(row => {
         const original = originalRows.find(origRow => origRow.id === row.id);
-        return (!original || original.name !== row.name || original.email !== row.email) && row.name && row.email;
+        return (!original || original.name !== row.name || original.email !== row.email) && 
+               row.name && row.email;
       });
-
+  
       if (changedRows.length > 0) {
-        const csvData = formatRowsToCSV(changedRows, originalRows);
-        await api.post('/updateTarget', {
-          csvData,
-          surveyName
-        });
-
-        // Refresh the respondent data
+        // For each changed row, if it's a name change, we need to delete the old row
+        for (const changedRow of changedRows) {
+          const original = originalRows.find(origRow => origRow.id === changedRow.id);
+          const csvData = formatRowsToCSV([changedRow]);
+  
+          // If this is a name change on an existing row, include the original row for deletion
+          const deleteRow = original && original.name !== changedRow.name ? 
+            { name: original.name, surveyName } : null;
+  
+          await api.post('/updateTarget', {
+            csvData,
+            surveyName,
+            deleteRow
+          });
+        }
+  
+        // Refresh data after successful save
         const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
         const refreshedRows = respondentResponse.data;
         setTableRows(refreshedRows);
         setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
         setHasChanges(false);
-
-        // Refresh the survey counts
+  
+        // Update survey counts
         const surveysResponse = await api.get('/surveys');
         if (onRespondentsUpdate) {
           onRespondentsUpdate(surveysResponse.data.surveys);
@@ -115,10 +131,12 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
   };
 
   const handleUpload = async (csvContent) => {
-    const data = { csvData: csvContent, surveyName: surveyName };
-
     try {
-      const response = await api.post('/updateTargets', data);
+      const response = await api.post('/updateTargets', {
+        csvData: csvContent,
+        surveyName
+      });
+
       if (response.status === 200) {
         const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
         const refreshedRows = respondentResponse.data;

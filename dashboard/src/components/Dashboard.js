@@ -105,7 +105,7 @@ const Dashboard = () => {
         backgroundColor: theme.palette.background.paper,
       }}
     >
-      <Box sx={{ padding: "10px", borderRadius: "8px" }}>
+      <Box sx={{ padding: "10px", borderRadius: "8px", marginBottom: "40px"}}>
         <DropdownWrapper label="Hide Survey Table">
           <Box
             sx={{
@@ -139,7 +139,7 @@ const Dashboard = () => {
         onSubmit={handleCreateSurvey}
       />
 
-      <Box sx={{ padding: "10px", borderRadius: "8px" }}>
+      <Box sx={{ padding: "10px", borderRadius: "8px", marginBottom: "40px" }}>
         <DropdownWrapper label="Hide Question Table">
           <QuestionTable 
             rows={questionData} 
@@ -149,13 +149,13 @@ const Dashboard = () => {
         </DropdownWrapper>
       </Box>
 
-      <Box sx={{ padding: "10px", borderRadius: "8px" }}>
+      <Box sx={{ padding: "10px", borderRadius: "8px", marginBottom: "40px" }}>
         <DropdownWrapper label="Hide Email Notifications">
           <EmailNotificationEditor surveyId={selectSurvey?.id} />
         </DropdownWrapper>
       </Box>
 
-      <Box sx={{ padding: "10px", borderRadius: "8px" }}>
+      <Box sx={{ padding: "10px", borderRadius: "8px",  marginBottom: "40px" }}>
         <DropdownWrapper label="Hide Respondent Table">
           <RespondentTable
             rows={respondentData}

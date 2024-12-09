@@ -9,9 +9,9 @@ import { useTheme } from '@mui/material/styles';
 
 const columns = [
   { field: 'id', headerName: 'ID', width: 90 },
-  { field: 'text', headerName: 'Question Text', width: 150, editable: true },
-  { field: 'type', headerName: 'Question Type', width: 200, editable: true },
-  { field: 'required', headerName: 'Required', width: 200 },
+  { field: 'text', headerName: 'Question Text', width: 500, editable: true },
+  { field: 'type', headerName: 'Question Type', width: 150, editable: true },
+  { field: 'required', headerName: 'Required', width: 100 },
 ];
 
 const TEMPLATE_DATA = [

@@ -379,14 +379,23 @@ async function insertSurvey(name, title) {
   // Handle the result as needed
   console.log('Survey added successfully!');
 }
-async function insertUsers(users) {
+async function insertUsers(users, deleteRow = null) {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
+    // If there's a row to delete, delete it first
+    if (deleteRow) {
+      const deleteQuery = `
+        DELETE FROM Respondent 
+        WHERE name = $1 AND survey_name = $2
+      `;
+      await client.query(deleteQuery, [deleteRow.name, deleteRow.surveyName]);
+    }
+
+    // Then insert/update the modified rows
     for (const user of users) {
-      // Use ON CONFLICT DO UPDATE to handle duplicates
       const query = `
         INSERT INTO Respondent 
           (name, contact_info, uuid, survey_name, can_respond, lang) 
@@ -395,7 +404,6 @@ async function insertUsers(users) {
         ON CONFLICT (name, survey_name) 
         DO UPDATE SET
           contact_info = EXCLUDED.contact_info,
-          uuid = EXCLUDED.uuid,
           can_respond = EXCLUDED.can_respond,
           lang = EXCLUDED.lang
       `;
@@ -403,20 +411,19 @@ async function insertUsers(users) {
       const values = [
         user.userName,
         user.email,
-        user.userId,
+        nanoid(),  // Generate new UUID for all rows
         user.surveyName,
-        user.respondent,
-        user.language
+        user.respondent || true,
+        user.language || 'en'
       ];
       
       await client.query(query, values);
     }
 
     await client.query('COMMIT');
-    console.log('Users inserted/updated successfully!');
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Error inserting/updating users:', error);
+    console.error('Error in database operation:', error);
     throw error;
   } finally {
     client.release();
@@ -603,6 +610,59 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
   insertEmails(csvArray);
 
   res.status(200).json({ message: 'Email data updated successfully.' }); 
+});
+// PUT API endpoint for updating targets
+app.post('/api/updateTarget', async (req, res) => {
+  const { csvData, surveyName, deleteRow } = req.body;
+
+  if (!surveyName) {
+    return res.status(400).json({ message: 'Survey name is required.' });
+  }
+  if (!csvData) {
+    return res.status(400).json({ message: 'CSV data is required.' });
+  }
+
+  try {
+    let csvArray = csvData.split('\n');
+    const header = csvArray.shift().split(',');
+    const headerDict = {};
+
+    header.forEach((name, index) => {
+      headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
+    });
+
+    if (csvArray.length === 0 || csvArray[0].length === 0) {
+      return res.status(400).json({ message: 'CSV data is empty.' });
+    }
+
+    // Convert to json
+    const surveyTargets = csvArray.filter(x => x !== '').map(row => {
+      const columns = row.split(',');
+      return {
+        userName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, "") + " " + 
+                 columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
+        email: columns[headerDict['Email']].replace(/(\r\n|\n|\r)/gm, ""),
+        respondent: true,
+        language: 'en',
+        surveyName: surveyName
+      };
+    });
+
+    // Handle the database operations with potential deletion
+    await insertUsers(surveyTargets, deleteRow);
+
+    res.status(200).json({ 
+      message: 'Respondents updated successfully.',
+      updatedCount: surveyTargets.length
+    });
+
+  } catch (error) {
+    console.error('Error updating respondents:', error);
+    res.status(500).json({ 
+      message: 'Failed to update respondents', 
+      error: error.message 
+    });
+  }
 });
 
 // PUT API endpoint for uploading a csv file of names

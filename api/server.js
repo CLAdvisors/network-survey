@@ -597,7 +597,7 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   const data  = req.body;
   const csvData = data.csvData;
   const surveyName = data.surveyName;
-
+  console.log("DATA:", data);
 
   if (!surveyName) {
     res.status(400).json({ message: 'Survey name is required.' });
@@ -665,6 +665,8 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   // NEW DB CODE
   insertQuestions(surveyName, surveyData.title, surveyData.questions);
 
+  //TODO add proper repsonse handling
+  res.status(200).json({ message: 'Questions created successfully.' });
   
 });
 
@@ -754,12 +756,12 @@ app.get('/api/listQuestions', async (req, res) => {
   // Query the database for json question data
   client.query(query, values)
     .then(result => {
-      const questions = result.rows[0].questions.elements.map((q, index) => ({
+      const questions = result.rows[0]?.questions?.elements?.map((q, index) => ({
         id: index + 1,
         text: q.title,
         type: q.type,
         required: q.isRequired
-      }));
+      })) || [];
       res.status(200).json({ questions });
     })
     .catch(error => {
@@ -834,7 +836,7 @@ app.get('/api/results', async (req, res) => {
 // GET API endpoint for a list of survey targets and the status of their responses
 app.get('/api/targets', async(req, res) => {
   const { surveyName = '' } = req.query;
-  console.log("Survey name: " + surveyName)
+  console.log("Survey name!!!:  " + surveyName)
 
   // NEW DB CODE
   const client = await pool.connect();

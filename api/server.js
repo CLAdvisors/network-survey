@@ -380,32 +380,45 @@ async function insertSurvey(name, title) {
   console.log('Survey added successfully!');
 }
 async function insertUsers(users) {
-  // Start a PostgreSQL client from the pool
   const client = await pool.connect();
 
   try {
-    // Begin a transaction
     await client.query('BEGIN');
 
-    // Iterate through the users and insert them
     for (const user of users) {
-      const query = 'INSERT INTO Respondent (name, contact_info, uuid, survey_name, can_respond, lang) VALUES ($1, $2, $3, $4, $5, $6)';
-      const values = [user.userName, user.email, user.userId, user.surveyName, user.respondent, user.language];
+      // Use ON CONFLICT DO UPDATE to handle duplicates
+      const query = `
+        INSERT INTO Respondent 
+          (name, contact_info, uuid, survey_name, can_respond, lang) 
+        VALUES 
+          ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (name, survey_name) 
+        DO UPDATE SET
+          contact_info = EXCLUDED.contact_info,
+          uuid = EXCLUDED.uuid,
+          can_respond = EXCLUDED.can_respond,
+          lang = EXCLUDED.lang
+      `;
+      
+      const values = [
+        user.userName,
+        user.email,
+        user.userId,
+        user.surveyName,
+        user.respondent,
+        user.language
+      ];
+      
       await client.query(query, values);
     }
 
-    // Commit the transaction
     await client.query('COMMIT');
-
-    // Release the client back to the pool
-    client.release();
-
-    console.log('Users inserted successfully!');
+    console.log('Users inserted/updated successfully!');
   } catch (error) {
-    // If an error occurs, rollback the transaction
-    console.log(error)
     await client.query('ROLLBACK');
-    console.error('Error inserting users:', error);
+    console.error('Error inserting/updating users:', error);
+    throw error;
+  } finally {
     client.release();
   }
 }

@@ -20,11 +20,28 @@ const TEMPLATE_DATA = [
   'Jane Smith,jane@example.com,pending'
 ];
 
+const CSV_HEADER = 'First,Last,Email,Respondent,Location,Level,Gender,Race,Manager,VP,Business Group,Business Group - 1,Business Group - 2,Language';
+
+const formatRowsToCSV = (rows) => {
+  const dataRows = rows.map(row => {
+    // Split name into first and last
+    const nameParts = row.name.trim().split(/\s+/);
+    const firstName = nameParts[0] || '';
+    const lastName = nameParts.slice(1).join(' ') || '';
+    
+    // Create CSV row with default values for unspecified fields
+    return `${firstName},${lastName},${row.email},true,,,,,,,,,,en`;
+  });
+
+  return `${CSV_HEADER}\n${dataRows.join('\n')}`;
+};
+
 const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
+  const [originalRowIds, setOriginalRowIds] = useState(new Set());
   const [sortModel, setSortModel] = useState([
     {
       field: 'id',
@@ -40,6 +57,8 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       }));
       setTableRows(updatedRows);
       setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+      // Store the IDs of original rows
+      setOriginalRowIds(new Set(updatedRows.map(row => row.id)));
     }
   }, [rows]);
 
@@ -47,9 +66,9 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
-    const hasUnsavedChanges = updatedRows.some((row, index) => {
-      const original = originalRows[index];
-      return original && (original.name !== row.name || original.email !== row.email);
+    const hasUnsavedChanges = updatedRows.some((row) => {
+      const original = originalRows.find(origRow => origRow.id === row.id);
+      return !original || original.name !== row.name || original.email !== row.email;
     });
     
     setHasChanges(hasUnsavedChanges);
@@ -58,14 +77,46 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
 
   const handleSave = async () => {
     try {
-      const modifiedRows = tableRows.filter((row, index) => {
-        const original = originalRows[index];
+      // Find all new rows by checking against originalRowIds
+      const newRows = tableRows.filter(row => {
+        return !originalRowIds.has(row.id) && row.name && row.email;
+      });
+
+      console.log('New rows to be saved:', newRows); // Debug log
+
+      // If there are new rows, send them all in one CSV request
+      if (newRows.length > 0) {
+        const csvData = formatRowsToCSV(newRows);
+        await api.post('/updateTargets', {
+          csvData,
+          surveyName
+        });
+      }
+
+      // Handle modified existing rows
+      const modifiedRows = tableRows.filter(row => {
+        if (!originalRowIds.has(row.id)) return false;
+        const original = originalRows.find(origRow => origRow.id === row.id);
         return original && (original.name !== row.name || original.email !== row.email);
       });
 
-      await api.post('/update-respondents', { respondents: modifiedRows });
-      setOriginalRows(JSON.parse(JSON.stringify(tableRows)));
+      if (modifiedRows.length > 0) {
+        await api.post('/update-respondents', { respondents: modifiedRows });
+      }
+
+      // Refresh the respondent data
+      const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
+      const refreshedRows = respondentResponse.data;
+      setTableRows(refreshedRows);
+      setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+      setOriginalRowIds(new Set(refreshedRows.map(row => row.id)));
       setHasChanges(false);
+
+      // Refresh the survey counts
+      const surveysResponse = await api.get('/surveys');
+      if (onRespondentsUpdate) {
+        onRespondentsUpdate(surveysResponse.data.surveys);
+      }
     } catch (error) {
       console.error('Failed to save changes:', error);
     }
@@ -77,11 +128,12 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
     try {
       const response = await api.post('/updateTargets', data);
       if (response.status === 200) {
-        // Original API call to fetch updated respondent data
         const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
-        setTableRows(respondentResponse.data);
+        const refreshedRows = respondentResponse.data;
+        setTableRows(refreshedRows);
+        setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+        setOriginalRowIds(new Set(refreshedRows.map(row => row.id)));
         
-        // Additional API call to update survey counts
         const surveysResponse = await api.get('/surveys');
         if (onRespondentsUpdate) {
           onRespondentsUpdate(surveysResponse.data.surveys);
@@ -94,7 +146,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
   };
 
   const handleAddRow = () => {
-    const newId = tableRows.length > 0 ? Math.max(...tableRows.map(row => row.id)) + 1 : 1;
+    const newId = Math.max(0, ...tableRows.map(row => row.id)) + 1;
     const newRow = {
       id: newId,
       name: '',
@@ -102,11 +154,9 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       status: 'pending'
     };
     
-    // Add new row at the beginning of the array
     setTableRows([newRow, ...tableRows]);
     setHasChanges(true);
 
-    // Ensure sorting is set to show newest first
     setSortModel([
       {
         field: 'id',
@@ -114,7 +164,6 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       },
     ]);
   };
-
 
   return (
     <Paper elevation={2} sx={{ p: 3, bgcolor: theme.palette.background.paper, borderRadius: 2 }}>

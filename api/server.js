@@ -180,12 +180,12 @@ app.use(session({
   saveUninitialized: false,
   name: 'sessionId',
   cookie: {
-    secure: process.env.NODE_ENV === 'prod', // Only use secure in production
+    // secure: process.env.NODE_ENV === 'prod', // Only use secure in production
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
     sameSite: 'lax',  // Changed from 'strict' to 'lax' for better compatibility
     path: '/',
-    domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined
+    // domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined
   }
 }));
 app.post('/api/create-test-user', async (req, res) => {

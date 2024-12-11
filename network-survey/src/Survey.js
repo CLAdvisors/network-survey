@@ -17,12 +17,12 @@ const Survey = () => {
   return (
     <Box sx={{ 
       minHeight: '100vh',
-      bgcolor: 'background.default',
+      bgcolor: '#F9F9F9',
       pb: 4
     }}>
       <Header svgComponent={<Logo />} title={title} />
       
-      <Container maxWidth="lg" sx={{ mt: 3 }}>
+      <Container maxWidth="lg" sx={{ mt: 3}}>
         <Paper
           elevation={1}
           sx={{

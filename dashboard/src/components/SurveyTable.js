@@ -5,6 +5,7 @@ import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayCircle from '@mui/icons-material/PlayCircle';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import EmailIcon from '@mui/icons-material/Email';
 
 const MenuCell = ({ row, selectedRow }) => {
   const [anchorEl, setAnchorEl] = useState(null);
@@ -22,11 +23,18 @@ const MenuCell = ({ row, selectedRow }) => {
     setAnchorEl(null);
   };
 
-  const handleEdit = (event) => {
+  const handleStart = (event) => {
     event.stopPropagation();
     console.log('Start survey:', row);
     handleClose();
   };
+
+  const handleSendDemo = (event) => {
+    event.stopPropagation();
+    console.log('Start survey:', row);
+    handleClose();
+  };
+
 
   const handleDelete = (event) => {
     event.stopPropagation();
@@ -77,7 +85,11 @@ const MenuCell = ({ row, selectedRow }) => {
           <VisibilityIcon fontSize="small" />
           Demo Survey
         </MenuItem>
-        <MenuItem onClick={handleEdit}>
+        <MenuItem onClick={handleSendDemo}>
+          <EmailIcon fontSize="small" />
+          Send Demo Email
+        </MenuItem>
+        <MenuItem onClick={handleStart}>
           <PlayCircle fontSize="small" />
           Start Survey
         </MenuItem>

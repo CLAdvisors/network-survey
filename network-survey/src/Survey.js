@@ -24,12 +24,12 @@ const Survey = () => {
       
       <Container maxWidth="lg" sx={{ mt: 3 }}>
         <Paper
-          elevation={0}  // Changed from 1 to 0
+          elevation={1}
           sx={{
             borderRadius: 1,
             overflow: 'hidden',
-            bgcolor: 'transparent',  // Changed from 'background.paper' to 'transparent'
-            border: 'none'  // Changed from border to none
+            bgcolor: 'background.paper',
+            border: `1px solid ${theme.palette.divider}`
           }}
         >
           {/* Instructions Section */}

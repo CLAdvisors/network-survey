@@ -123,7 +123,6 @@ const SurveyTable = (props) => {
         ...row,
         questions: row.questions && row.questions !== "null" ? row.questions : "0"
       }));
-      console.log(updatedRows);
       setRows(updatedRows);
     }
   }, [props]);

@@ -134,7 +134,7 @@ const Dashboard = () => {
       </CollapsibleSection>
 
       <CollapsibleSection title="Email Notifications">
-        <EmailNotificationEditor surveyId={selectSurvey?.id} />
+        <EmailNotificationEditor surveyId={selectSurvey?.name} />
       </CollapsibleSection>
 
       <CollapsibleSection title="Survey Respondents">

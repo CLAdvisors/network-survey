@@ -336,8 +336,6 @@ app.post('/api/logout', (req, res) => {
 
 // Modified check-auth endpoint with better error handling
 app.get('/api/check-auth', (req, res) => {
-  console.log('Session data:', req.session);
-  console.log('Cookies:', req.headers.cookie);
 
   if (!req.session) {
     return res.status(500).json({ 
@@ -432,15 +430,20 @@ async function insertUsers(users, deleteRow = null) {
 async function insertEmails(data) {
   // Start a PostgreSQL client from the pool
   const client = await pool.connect();
-
+  console.log(data);
   try {
     // Begin a transaction
     await client.query('BEGIN');
 
-    // Iterate through the users and insert them
+    // Iterate through the emails and insert or update them
     for (const email of data) {
-      const query = 'INSERT INTO email (survey_name, lang, text) VALUES ($1, $2, $3)';
-      const values = [email.surveyName, email.language, email.text];
+      const query = `
+        INSERT INTO email (survey_name, lang, text)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (survey_name, lang) DO UPDATE
+        SET text = EXCLUDED.text
+      `;
+      const values = [email.surveyName, email.language, email.text.replace(/"/g, "").replace(/'/g, "")];
       await client.query(query, values);
     }
 
@@ -450,15 +453,16 @@ async function insertEmails(data) {
     // Release the client back to the pool
     client.release();
 
-    console.log('Email data inserted successfully!');
+    console.log('Email data inserted or updated successfully!');
   } catch (error) {
     // If an error occurs, rollback the transaction
-    console.log(error)
+    console.log(error);
     await client.query('ROLLBACK');
-    console.error('Error inserting users:', error);
+    console.error('Error inserting or updating emails:', error);
     client.release();
   }
 }
+
 async function insertQuestions(name, title, json) {
   const client = await pool.connect();
 
@@ -665,12 +669,44 @@ app.post('/api/updateTarget', async (req, res) => {
   }
 });
 
+// GET API endpoint for retrieving email texts and available languages
+app.get('/api/survey-notifications/:surveyId', async (req, res) => {
+  const surveyId = req.params.surveyId;
+  if (!surveyId) {
+    res.status(400).json({ message: 'Survey ID is required.' });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    const query = `
+      SELECT lang, text
+      FROM EMAIL
+      WHERE survey_name = $1
+    `;
+
+    const result = await client.query(query, [surveyId]);
+
+    const notifications = result.rows.reduce((acc, row) => {
+      acc[row.lang] = row.text;
+      return acc;
+    }, {});
+
+    res.status(200).json({ notifications });
+  } catch (error) {
+    console.error('Error retrieving email texts:', error);
+    res.status(500).json({ message: 'Failed to retrieve email texts.' });
+  } finally {
+    client.release();
+  }
+});
+
 // PUT API endpoint for uploading a csv file of names
 app.post('/api/updateTargets', express.json(), (req, res) => {
   const data  = req.body;
   const csvData = data.csvData;
   const surveyName = data.surveyName;
-  console.log("DATA:", data);
 
   if (!surveyName) {
     res.status(400).json({ message: 'Survey name is required.' });
@@ -680,7 +716,6 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
     res.status(400).json({ message: 'CSV data is required.' });
     return;
   }
-  console.log(csvData);
   let csvArray = csvData.split('\n');
   const header = csvArray.shift().split(',');
   const headerDict = {};
@@ -688,7 +723,6 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
   header.forEach((name, index) => {
     headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
   });
-  console.log("csv " + csvArray);
   if (csvArray.length === 0 || csvArray[0].length === 0) {
     res.status(400).json({ message: 'CSV data is empty.' });
     return;
@@ -731,10 +765,8 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   const surveyQuestions = data.questions;
   const surveyName = data.surveyName;
   // move to another endpoint
-  console.log("SURVEY QUESTIONS:", surveyQuestions);
   const surveyData = csvToJson(surveyQuestions);
 
-  console.log("DATA:", data);
   // NEW DB CODE
   insertQuestions(surveyName, surveyData.title, surveyData.questions);
 
@@ -746,7 +778,6 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
 // PUT API endpoint for answer submission
 app.post('/api/user', express.json(), (req, res) => {
     const data  = req.body;
-    console.log(data);
     const userId  = data.userId;
     const surveyName = data.surveyName;
     const answers = JSON.parse(data.answers);
@@ -763,7 +794,6 @@ app.post('/api/user', express.json(), (req, res) => {
 app.get('/api/names', async (req, res) => {
   const { skip = 0, take = 10, filter = '', surveyName = '' } = req.query;
 
-  console.log("skip:", skip, "take:", take, "filter:", filter, "surveyName:", surveyName);
   // NEW DB CODE
     
   const client = await pool.connect();
@@ -795,7 +825,6 @@ app.get('/api/names', async (req, res) => {
       //TODO check that this length/total even works
       total: filteredNames.length
     };
-    console.log("RESPONSE:", response);
     res.status(200).json(response);
   })
   .catch(error => {
@@ -898,7 +927,6 @@ app.get('/api/results', async (req, res) => {
           if (row.response === null) return combined;
           return {...combined, [row.name]: row.response};
         }, {});
-        console.log(responses); // This will be an array of response JSON objects
         res.status(200).json({responses});
     })
     .catch(e => console.error(e.stack))
@@ -909,7 +937,6 @@ app.get('/api/results', async (req, res) => {
 // GET API endpoint for a list of survey targets and the status of their responses
 app.get('/api/targets', async(req, res) => {
   const { surveyName = '' } = req.query;
-  console.log("Survey name!!!:  " + surveyName)
 
   // NEW DB CODE
   const client = await pool.connect();
@@ -925,7 +952,6 @@ app.get('/api/targets', async(req, res) => {
             email: row.contact_info,
             status: row.response_status ? 'Incomplete' : 'Complete'
         }));
-        console.log(respondents);
         res.status(200).json(respondents); // This will be an array of respondent objects
     })
     .catch(e => console.error(e.stack))
@@ -1003,7 +1029,6 @@ GROUP BY
     .then(result => {
       const { number_of_respondents, is_questions_null } = result.rows[0];
       // Process the returned values
-      console.log(number_of_respondents, is_questions_null)
       res.status(200).json( {
         userDataStatus: number_of_respondents >  1 ? true : false,
         questionDataStatus: !is_questions_null

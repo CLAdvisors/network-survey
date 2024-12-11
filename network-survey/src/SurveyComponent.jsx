@@ -2,54 +2,61 @@ import React from "react";
 import { Model } from "survey-core";
 import { Survey } from "survey-react-ui";
 import "survey-core/defaultV2.min.css";
-import "./index.css";
+import "./survey.css";
 
 function SurveyComponent({setTitle}) {
+    const [json, setJson] = React.useState(null);
+    const [survey, setSurvey] = React.useState(null);
     const searchParams = new URLSearchParams(window.location.search);
     const userId = searchParams.get("userId"); 
     const surveyName = searchParams.get("surveyName"); 
 
-    console.log(userId, surveyName);
-
-    // Get survey question json from questions api
-    const [json, setJson] = React.useState(null);
     React.useEffect(() => {
+      if (!userId || !surveyName) return;
+      
       const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/questions?surveyName=${surveyName}`;
-      sendRequest(url, (data) => { setJson(data.questions); setTitle(data.title); });
-    }, [surveyName, setTitle]);
-    
-    
-    if (!userId || !surveyName) {
-      return <h1>Invalid URL, please use the unique url provided by email.</h1>
-    }
+      sendRequest(url, (data) => { 
+        setJson(data.questions); 
+        setTitle(data.title); 
+      });
+    }, [surveyName, setTitle, userId]);
 
-    const survey = new Model(json);
+    React.useEffect(() => {
+      if (!json) return;
 
-    survey.onComplete.add((sender, options) => {
+      const newSurvey = new Model(json);
+      
+      // Configure survey settings
+      newSurvey.showQuestionNumbers = false;
+      newSurvey.showProgressBar = "bottom";
+      newSurvey.progressBarType = "questions";
+      
+      // Set modern theme
+      Model.cssType = "defaultV2";
+      
+      // Survey event handlers
+      newSurvey.onComplete.add((sender, options) => {
+        if (userId === 'demo') return;
         let data = JSON.stringify(sender.data, null, 3);
-        let url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user`
+        let url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user`;
+        postRequest(url, {userId: userId, surveyName: surveyName, answers: data});
+      });
 
-        if (userId === 'demo') {
-          return;
-        }
-        
-        postRequest(url, {userId: userId, surveyName: surveyName, answers: data})
-
-    });
-
-    survey.onChoicesLazyLoad.add((_, options) => {
-        console.log("YES IT WENT HERE")
+      newSurvey.onChoicesLazyLoad.add((_, options) => {
         const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
         sendRequest(url, (data) => { options.setItems(data.names, data.total); });
-    });
-    
+      });
+
+      setSurvey(newSurvey);
+    }, [json, userId, surveyName]);
+
+    // API handlers
     function sendRequest(url, onloadSuccessCallback) {
       const xhr = new XMLHttpRequest();
       xhr.open("GET", url);
       xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
       xhr.onload = () => {
         if (xhr.status === 200) {
-          console.log(xhr.response)
           onloadSuccessCallback(JSON.parse(xhr.response));
         }
       };
@@ -77,8 +84,19 @@ function SurveyComponent({setTitle}) {
           throw error;
         }
     }
-    return (json != null ?
-      <Survey model={survey} /> : <div></div>
+
+    if (!userId || !surveyName) {
+      return <h1>Invalid URL, please use the unique url provided by email.</h1>;
+    }
+
+    if (!survey) {
+      return <div></div>;
+    }
+
+    return (
+      <div className="modern-survey-container">
+        <Survey model={survey} />
+      </div>
     );
 }
 

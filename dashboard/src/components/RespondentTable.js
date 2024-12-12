@@ -3,17 +3,64 @@ import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
 import api from '../api/axios';
-import { Box, Paper, Typography, Button } from '@mui/material';
+import { Box, Paper, Typography, Button, Switch, Select, MenuItem, FormControl } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import EmailIcon from '@mui/icons-material/Email';
 import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
 
+const LANGUAGES = [
+  { code: 'en', label: 'English' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+  { code: 'it', label: 'Italian' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'nl', label: 'Dutch' },
+  { code: 'pl', label: 'Polish' },
+  { code: 'ru', label: 'Russian' },
+  { code: 'ja', label: 'Japanese' },
+  { code: 'zh', label: 'Chinese' },
+  { code: 'ko', label: 'Korean' }
+];
+
 const columns = [
   { field: 'name', headerName: 'User Name', width: 150, editable: true },
   { field: 'email', headerName: 'Email', width: 200, editable: true },
-  { field: 'status', headerName: 'Status', width: 200 },
+  { 
+    field: 'language', 
+    headerName: 'Language', 
+    width: 130,
+    editable: true,
+    type: 'singleSelect',
+    valueOptions: LANGUAGES.map(lang => lang.label),
+    renderCell: (params) => {
+      const language = LANGUAGES.find(lang => lang.label === params.value);
+      return language ? language.label : 'English';
+    }
+  },
+  {
+    field: 'canRespond',
+    headerName: 'Can Respond',
+    width: 120,
+    editable: true,
+    type: 'boolean',
+    renderCell: (params) => (
+      <Switch
+        checked={params.value}
+        onChange={(e) => {
+          e.stopPropagation();
+          params.api.setEditCellValue({
+            id: params.id,
+            field: 'canRespond',
+            value: e.target.checked
+          }, e);
+        }}
+      />
+    )
+  },
+  { field: 'status', headerName: 'Status', width: 120 },
   {
     field: 'actions',
     headerName: 'Actions',
@@ -28,8 +75,15 @@ const columns = [
             label: 'Send Reminder',
             icon: <EmailIcon fontSize="small" />,
             handler: async (row) => {
-              console.log('Send reminder to:', row);
-              // Add your reminder email logic here
+              try {
+                await api.post('/testEmail', {
+                  email: row.email,
+                  surveyName: params.row.surveyName,
+                  language: row.language
+                });
+              } catch (error) {
+                console.error('Error sending reminder:', error);
+              }
             }
           },
           {
@@ -37,8 +91,17 @@ const columns = [
             icon: <DeleteIcon fontSize="small" />,
             color: 'error.main',
             handler: async (row) => {
-              console.log('Delete respondent:', row);
-              // Add your delete logic here
+              try {
+                await api.delete('/user', {
+                  data: {
+                    userName: row.name,
+                    surveyName: params.row.surveyName
+                  }
+                });
+                params.row.onRespondentDeleted();
+              } catch (error) {
+                console.error('Error deleting respondent:', error);
+              }
             }
           }
         ]}
@@ -48,12 +111,12 @@ const columns = [
 ];
 
 const TEMPLATE_DATA = [
-  'name,email,status',
-  'John Doe,john@example.com,pending',
-  'Jane Smith,jane@example.com,pending'
+  'First,Last,Email,Respondent,Location,Level,Gender,Race,Manager,VP,Business Group,Business Group - 1,Business Group - 2,Language',
+  'Alicia,Smith,AliciaSmith@test.com,FALSE,Medical Towers,5,Female,Black,Sarah Currier,Sarah Currier,HR,System,Talent Management,English',
+  'Andrea,Terrell,AndreaTerrell@test.com,TRUE,Medical Towers,6,Female,White,Alicia Smith,Brian Reed,HR,System,Talent Acquisition,English',
 ];
 
-const CSV_HEADER = 'First,Last,Email,Respondent,Location,Level,Gender,Race,Manager,VP,Business Group,Business Group - 1,Business Group - 2,Language,uuid';
+const CSV_HEADER = 'First,Last,Email,Language,Can Respond';
 
 const formatRowsToCSV = (rows) => {
   const dataRows = rows.map(row => {
@@ -61,22 +124,12 @@ const formatRowsToCSV = (rows) => {
     const firstName = nameParts[0] || '';
     const lastName = nameParts.slice(1).join(' ') || '';
     
-    // Create CSV row with all required fields
     return [
       firstName,
       lastName,
       row.email,
-      'true', // Respondent
-      '', // Location
-      '', // Level
-      '', // Gender
-      '', // Race
-      '', // Manager
-      '', // VP
-      '', // Business Group
-      '', // Business Group - 1
-      '', // Business Group - 2
-      'en' // Language
+      row.language || 'English',
+      row.canRespond === undefined ? true : row.canRespond
     ].join(',');
   });
 
@@ -99,12 +152,35 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
     if (rows) {
       const updatedRows = rows.map(row => ({
         ...row,
-        questions: row.questions === "null" ? "0" : row.questions
+        language: row.language || 'English',
+        canRespond: row.canRespond === undefined ? true : row.canRespond,
+        onRespondentDeleted: fetchRespondentData
       }));
       setTableRows(updatedRows);
       setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
     }
   }, [rows]);
+
+  const fetchRespondentData = async () => {
+    try {
+      const response = await api.get(`/targets?surveyName=${surveyName}`);
+      const refreshedRows = response.data.map(row => ({
+        ...row,
+        language: row.language || 'English',
+        canRespond: row.canRespond === undefined ? true : row.canRespond,
+        onRespondentDeleted: fetchRespondentData
+      }));
+      setTableRows(refreshedRows);
+      setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+      
+      const surveysResponse = await api.get('/surveys');
+      if (onRespondentsUpdate) {
+        onRespondentsUpdate(surveysResponse.data.surveys);
+      }
+    } catch (error) {
+      console.error('Error fetching respondents:', error);
+    }
+  };
 
   const handleProcessRowUpdate = (newRow) => {
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
@@ -112,7 +188,11 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
     
     const hasUnsavedChanges = updatedRows.some((row) => {
       const original = originalRows.find(origRow => origRow.id === row.id);
-      return !original || original.name !== row.name || original.email !== row.email;
+      return !original || 
+             original.name !== row.name || 
+             original.email !== row.email ||
+             original.language !== row.language ||
+             original.canRespond !== row.canRespond;
     });
     
     setHasChanges(hasUnsavedChanges);
@@ -121,20 +201,21 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
 
   const handleSave = async () => {
     try {
-      // Get modified rows that have both name and email
       const changedRows = tableRows.filter(row => {
         const original = originalRows.find(origRow => origRow.id === row.id);
-        return (!original || original.name !== row.name || original.email !== row.email) && 
-               row.name && row.email;
+        return (!original || 
+                original.name !== row.name || 
+                original.email !== row.email ||
+                original.language !== row.language ||
+                original.canRespond !== row.canRespond) && 
+                row.name && row.email;
       });
   
       if (changedRows.length > 0) {
-        // For each changed row, if it's a name change, we need to delete the old row
         for (const changedRow of changedRows) {
           const original = originalRows.find(origRow => origRow.id === changedRow.id);
           const csvData = formatRowsToCSV([changedRow]);
   
-          // If this is a name change on an existing row, include the original row for deletion
           const deleteRow = original && original.name !== changedRow.name ? 
             { name: original.name, surveyName } : null;
   
@@ -145,18 +226,8 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
           });
         }
   
-        // Refresh data after successful save
-        const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
-        const refreshedRows = respondentResponse.data;
-        setTableRows(refreshedRows);
-        setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+        await fetchRespondentData();
         setHasChanges(false);
-  
-        // Update survey counts
-        const surveysResponse = await api.get('/surveys');
-        if (onRespondentsUpdate) {
-          onRespondentsUpdate(surveysResponse.data.surveys);
-        }
       }
     } catch (error) {
       console.error('Failed to save changes:', error);
@@ -171,15 +242,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       });
 
       if (response.status === 200) {
-        const respondentResponse = await api.get(`/targets?surveyName=${surveyName}`);
-        const refreshedRows = respondentResponse.data;
-        setTableRows(refreshedRows);
-        setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
-        
-        const surveysResponse = await api.get('/surveys');
-        if (onRespondentsUpdate) {
-          onRespondentsUpdate(surveysResponse.data.surveys);
-        }
+        await fetchRespondentData();
       }
     } catch (err) {
       console.error('Error updating respondents:', err);
@@ -193,18 +256,14 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       id: newId,
       name: '',
       email: '',
-      status: 'pending'
+      language: 'English',
+      canRespond: true,
+      status: 'pending',
+      onRespondentDeleted: fetchRespondentData
     };
     
     setTableRows([newRow, ...tableRows]);
     setHasChanges(true);
-
-    setSortModel([
-      {
-        field: 'id',
-        sort: 'desc',
-      },
-    ]);
   };
 
   return (

@@ -413,8 +413,8 @@ async function insertUsers(users, deleteRow = null) {
         user.email,
         nanoid(),  // Generate new UUID for all rows
         user.surveyName,
-        user.respondent || true,
-        user.language || 'en'
+        user.canRespond !== undefined ? user.canRespond : true, // Default to true if not specified
+        user.language || 'English' // Default to English if not specified
       ];
       
       await client.query(query, values);
@@ -617,7 +617,7 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
 
   res.status(200).json({ message: 'Email data updated successfully.' }); 
 });
-// PUT API endpoint for updating targets
+// Modify the POST /api/updateTarget endpoint to handle the new fields
 app.post('/api/updateTarget', async (req, res) => {
   const { csvData, surveyName, deleteRow } = req.body;
 
@@ -633,26 +633,53 @@ app.post('/api/updateTarget', async (req, res) => {
     const header = csvArray.shift().split(',');
     const headerDict = {};
 
+    // Clean up header names and create dictionary
     header.forEach((name, index) => {
-      headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
+      const cleanName = name.replace(/(\r\n|\n|\r|")/gm, "").trim();
+      headerDict[cleanName] = index;
     });
 
     if (csvArray.length === 0 || csvArray[0].length === 0) {
       return res.status(400).json({ message: 'CSV data is empty.' });
     }
 
-    // Convert to json
-    const surveyTargets = csvArray.filter(x => x !== '').map(row => {
-      const columns = row.split(',');
-      return {
-        userName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, "") + " " + 
-                 columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
-        email: columns[headerDict['Email']].replace(/(\r\n|\n|\r)/gm, ""),
-        respondent: true,
-        language: 'en',
-        surveyName: surveyName
-      };
-    });
+    // Convert to json with safer column access
+    const surveyTargets = csvArray
+      .filter(x => x !== '')
+      .map((row) => {
+        const columns = row.split(',').map(col => col.replace(/(\r\n|\n|\r|")/gm, "").trim());
+        
+        // Safely access required columns
+        const firstName = (columns[headerDict['First']] || '').trim();
+        const lastName = (columns[headerDict['Last']] || '').trim();
+        const email = (columns[headerDict['Email']] || '').trim();
+        
+        // Safely access optional columns with defaults
+        const language = headerDict['Language'] !== undefined 
+          ? (columns[headerDict['Language']] || 'English').trim()
+          : 'English';
+          
+        // Check for either "Respondent" or "Can Respond" column
+        const canRespond = headerDict['Respondent'] !== undefined
+          ? (columns[headerDict['Respondent']] || 'true').toLowerCase() === 'true'
+          : (headerDict['Can Respond'] !== undefined
+              ? (columns[headerDict['Can Respond']] || 'true').toLowerCase() === 'true'
+              : true);
+
+        return {
+          userName: `${firstName} ${lastName}`.trim(),
+          email: email,
+          language: language,
+          canRespond: canRespond,
+          surveyName: surveyName
+        };
+      })
+      .filter(target => target.userName && target.email); // Filter out invalid entries
+
+    // Validate that we have valid data
+    if (surveyTargets.length === 0) {
+      return res.status(400).json({ message: 'No valid respondent data found in CSV.' });
+    }
 
     // Handle the database operations with potential deletion
     await insertUsers(surveyTargets, deleteRow);
@@ -670,7 +697,6 @@ app.post('/api/updateTarget', async (req, res) => {
     });
   }
 });
-
 // GET API endpoint for retrieving email texts and available languages
 app.get('/api/survey-notifications/:surveyId', async (req, res) => {
   const surveyId = req.params.surveyId;
@@ -704,9 +730,9 @@ app.get('/api/survey-notifications/:surveyId', async (req, res) => {
   }
 });
 
-// PUT API endpoint for uploading a csv file of names
+// Modify the POST /api/updateTargets endpoint to handle the new fields
 app.post('/api/updateTargets', express.json(), (req, res) => {
-  const data  = req.body;
+  const data = req.body;
   const csvData = data.csvData;
   const surveyName = data.surveyName;
 
@@ -714,51 +740,81 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
     res.status(400).json({ message: 'Survey name is required.' });
     return;
   }
-  if (!csvData ) {
+  if (!csvData) {
     res.status(400).json({ message: 'CSV data is required.' });
     return;
   }
-  let csvArray = csvData.split('\n');
-  const header = csvArray.shift().split(',');
-  const headerDict = {};
 
-  header.forEach((name, index) => {
-    headerDict[name.replace(/(\r\n|\n|\r)/gm, "")] = index;
-  });
-  if (csvArray.length === 0 || csvArray[0].length === 0) {
-    res.status(400).json({ message: 'CSV data is empty.' });
-    return;
-  }
-  // Convert to json
-  const surveyTargets = csvArray.filter(x => x !== '').map((row, index) => {
-    const columns = row.split(',');
-    return {
-      userName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, "") + " " + columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
-      firstName: columns[headerDict['First']].replace(/(\r\n|\n|\r)/gm, ""),
-      lastName: columns[headerDict['Last']].replace(/(\r\n|\n|\r)/gm, ""),
-      email: columns[headerDict['Email']].replace(/(\r\n|\n|\r)/gm, ""),
-      respondent: columns[headerDict['Respondent']].replace(/(\r\n|\n|\r)/gm, ""),
-      location: columns[headerDict['Location']].replace(/(\r\n|\n|\r)/gm, ""),
-      level: columns[headerDict['Level']].replace(/(\r\n|\n|\r)/gm, ""),
-      gender: columns[headerDict['Gender']].replace(/(\r\n|\n|\r)/gm, ""),
-      race: columns[headerDict['Race']].replace(/(\r\n|\n|\r)/gm, ""),
-      manager: columns[headerDict['Manager']].replace(/(\r\n|\n|\r)/gm, ""),
-      vp:columns[headerDict['VP']].replace(/(\r\n|\n|\r)/gm, ""),
-      businessGroup:columns[headerDict['Business Group']].replace(/(\r\n|\n|\r)/gm, ""),
-      businessGroup1:columns[headerDict['Business Group - 1']].replace(/(\r\n|\n|\r)/gm, ""),
-      businessGroup2:columns[headerDict['Business Group - 2']].replace(/(\r\n|\n|\r)/gm, ""),
-      language:columns[headerDict['Language']].replace(/(\r\n|\n|\r)/gm, ""),
-      userId: nanoid(),
-      surveyName: surveyName,
-      answers: []
+  try {
+    let csvArray = csvData.split('\n');
+    const header = csvArray.shift().split(',');
+    const headerDict = {};
+
+    // Clean up header names and create dictionary
+    header.forEach((name, index) => {
+      const cleanName = name.replace(/(\r\n|\n|\r|")/gm, "").trim();
+      headerDict[cleanName] = index;
+    });
+
+    if (csvArray.length === 0 || csvArray[0].length === 0) {
+      res.status(400).json({ message: 'CSV data is empty.' });
+      return;
     }
-  });
-  // NEW DB CODE
-  // Insert the users into the database
-  insertUsers(surveyTargets);
 
-  // make this a promise response
-  res.status(200).json({ message: 'Survey created successfully.' }); 
+    // Convert to json with safer column access
+    const surveyTargets = csvArray
+      .filter(x => x !== '')
+      .map((row) => {
+        const columns = row.split(',').map(col => col.replace(/(\r\n|\n|\r|")/gm, "").trim());
+        
+        // Safely access required columns
+        const firstName = (columns[headerDict['First']] || '').trim();
+        const lastName = (columns[headerDict['Last']] || '').trim();
+        const email = (columns[headerDict['Email']] || '').trim();
+        
+        // Safely access optional columns with defaults
+        const language = headerDict['Language'] !== undefined 
+          ? (columns[headerDict['Language']] || 'English').trim()
+          : 'English';
+          
+        // Check for either "Respondent" or "Can Respond" column
+        const canRespond = headerDict['Respondent'] !== undefined
+          ? (columns[headerDict['Respondent']] || 'true').toLowerCase() === 'true'
+          : (headerDict['Can Respond'] !== undefined
+              ? (columns[headerDict['Can Respond']] || 'true').toLowerCase() === 'true'
+              : true);
+
+        return {
+          userName: `${firstName} ${lastName}`.trim(),
+          email: email,
+          language: language,
+          canRespond: canRespond,
+          surveyName: surveyName
+        };
+      })
+      .filter(target => target.userName && target.email); // Filter out invalid entries
+
+    // Validate that we have valid data
+    if (surveyTargets.length === 0) {
+      res.status(400).json({ message: 'No valid respondent data found in CSV.' });
+      return;
+    }
+
+    // Insert the users into the database
+    insertUsers(surveyTargets);
+
+    res.status(200).json({ 
+      message: 'Survey created successfully.',
+      processedCount: surveyTargets.length
+    }); 
+
+  } catch (error) {
+    console.error('Error processing CSV:', error);
+    res.status(500).json({ 
+      message: 'Failed to process CSV data',
+      error: error.message
+    });
+  }
 });
 
 // PUT API endpoint for uploading a json file of questions
@@ -940,10 +996,9 @@ app.get('/api/results', async (req, res) => {
 app.get('/api/targets', async(req, res) => {
   const { surveyName = '' } = req.query;
 
-  // NEW DB CODE
   const client = await pool.connect();
 
-  const query = `SELECT name, contact_info, respondent_id, response IS NULL AS response_status 
+  const query = `SELECT name, contact_info, respondent_id, can_respond, lang, response IS NULL AS response_status 
                FROM Respondent 
                WHERE survey_name = $1`;
   client.query(query, [surveyName])
@@ -952,9 +1007,11 @@ app.get('/api/targets', async(req, res) => {
             id: row.respondent_id,
             name: row.name,
             email: row.contact_info,
+            language: row.lang,
+            canRespond: row.can_respond,
             status: row.response_status ? 'Incomplete' : 'Complete'
         }));
-        res.status(200).json(respondents); // This will be an array of respondent objects
+        res.status(200).json(respondents);
     })
     .catch(e => console.error(e.stack))
     .finally(() => client.release());

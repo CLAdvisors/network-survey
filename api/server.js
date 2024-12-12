@@ -70,7 +70,7 @@ async function sendMail(email, id, surveyName, text) {
     text = "<p>" + text.replace(/"/g, '') + "</p>";
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
 
-    let customLink = `https://survey.bennetts.work/?surveyName=${surveyName}&userId=${id}`;
+    let customLink = `${process.env.SURVEY_URL}/?surveyName=${surveyName}&userId=${id}`;
     const data = await resend.emails.send({
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
@@ -1150,7 +1150,7 @@ app.delete('/api/user', requireAuth, async (req, res) => {
   const { userName, surveyName } = req.body;
   console.log("userName", userName);
   console.log("surveyName", surveyName);
-  
+
   if (!userName || !surveyName) {
     return res.status(400).json({ 
       message: 'Both user name and survey name are required.' 

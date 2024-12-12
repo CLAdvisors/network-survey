@@ -55,17 +55,7 @@ const AppContent = () => {
       router: router,
       theme: theme,
       branding: {
-        title: (
-          <span
-            style={{
-              color: theme.palette.primary.main,
-              fontWeight: 900,
-              fontSize: '1.5rem',
-            }}
-          >
-            CLA Survey Dashboard
-          </span>
-        ),
+        title: 'CLA Survey Dashboard',
         logo: (
           <img
             src="https://contemporaryleadership.com/wp-content/uploads/2021/09/favicon.svg"

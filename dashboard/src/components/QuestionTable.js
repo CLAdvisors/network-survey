@@ -3,95 +3,11 @@ import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
 import api from '../api/axios';
-import { Box, Paper, Typography, Button } from '@mui/material';
+import { Box, Paper, Typography, Button, Snackbar, Alert } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
-
-
-const columns = [
-  { field: 'id', headerName: 'ID', width: 90 },
-  { field: 'text', headerName: 'Question Text', width: 500, editable: true },
-  { field: 'type', headerName: 'Question Type', width: 150, editable: true },
-  { field: 'required', headerName: 'Required', width: 100 },
-  {
-    field: 'actions',
-    headerName: 'Actions',
-    width: 100,
-    sortable: false,
-    filterable: false,
-    renderCell: (params) => (
-      <TableMenuCell
-        row={params.row}
-        actions={[
-          {
-            label: 'Delete Question',
-            icon: <DeleteIcon fontSize="small" />,
-            color: 'error.main',
-            handler: async (row) => {
-              console.log('Delete question:', row);
-              // Add your delete logic here
-            }
-          }
-        ]}
-      />
-    ),
-  }
-];
-
-const TEMPLATE_DATA = [
-  'text,type,required',
-  'Who do you work with most closely?,tagbox,true',
-  'Who do you go to for technical advice?,tagbox,true'
-];
-
-const parseCSV = (csvContent) => {
-  // Split by newline, handling both \n and \r\n
-  const lines = csvContent.split(/\r?\n/).filter(line => line.trim());
-  const headers = lines[0].split(',');
-  
-  // Skip header row and parse data rows
-  const questions = [];
-  for (let i = 1; i < lines.length; i++) {
-    if (!lines[i].trim()) continue; // Skip empty lines
-    
-    // Split line by comma, but preserve commas within quotes
-    const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-    const text = values[2] ? values[2].replace(/^"|"$/g, '') : ''; // Remove quotes if present
-    
-    if (text) {
-      questions.push({
-        text: text,
-        type: values[3]?.trim() || 'tagbox',
-        required: true
-      });
-    }
-  }
-  
-  return questions;
-};
-
-const formatRowsToCSV = (rows) => {
-  // Create CSV header
-  const csvRows = ['Title,Question name,Question title,Question type'];
-  
-  // Sort rows by ID to maintain order
-  const sortedRows = [...rows].sort((a, b) => a.id - b.id);
-  
-  // Add each question row
-  sortedRows.forEach((row, index) => {
-    const csvRow = [
-      index === 0 ? 'Survey Title' : '', // Title only on first row
-      `question_${index + 1}`,
-      `"${row.text}"`, // Wrap text in quotes to handle commas
-      row.type
-    ].join(',');
-    csvRows.push(csvRow);
-  });
-
-  return csvRows.join('\n');
-};
 
 const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
   const theme = useTheme();
@@ -104,18 +20,148 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
       sort: 'asc',
     },
   ]);
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: '',
+    severity: 'success'
+  });
 
   useEffect(() => {
     if (rows) {
       const updatedRows = rows.map((row, index) => ({
         ...row,
-        id: index + 1, // Ensure IDs are sequential
+        id: index + 1,
         questions: row.questions === "null" ? "0" : row.questions
       }));
       setTableRows(updatedRows);
       setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
     }
   }, [rows]);
+
+  const handleDeleteQuestion = async (row) => {
+    try {
+      const response = await api.delete('/question', {
+        data: {
+          questionName: `question_${row.id}`,
+          surveyName: surveyName
+        }
+      });
+
+      if (response.status === 200) {
+        // Remove the question from the local state
+        const updatedRows = tableRows
+          .filter(tableRow => tableRow.id !== row.id)
+          .map((tableRow, index) => ({
+            ...tableRow,
+            id: index + 1 // Reindex remaining rows
+          }));
+        
+        setTableRows(updatedRows);
+        setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+        setHasChanges(false);
+
+        // Update survey counts if callback provided
+        if (onQuestionsUpdate) {
+          const surveysResponse = await api.get('/surveys');
+          onQuestionsUpdate(surveysResponse.data.surveys);
+        }
+
+        setSnackbar({
+          open: true,
+          message: 'Question deleted successfully',
+          severity: 'success'
+        });
+      }
+    } catch (error) {
+      console.error('Failed to delete question:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to delete question. Please try again.',
+        severity: 'error'
+      });
+    }
+  };
+
+  const columns = [
+    { field: 'id', headerName: 'ID', width: 90 },
+    { field: 'text', headerName: 'Question Text', width: 500, editable: true },
+    { field: 'type', headerName: 'Question Type', width: 150, editable: true },
+    { field: 'required', headerName: 'Required', width: 100 },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 100,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <TableMenuCell
+          row={params.row}
+          actions={[
+            {
+              label: 'Delete Question',
+              icon: <DeleteIcon fontSize="small" />,
+              color: 'error.main',
+              handler: handleDeleteQuestion
+            }
+          ]}
+        />
+      ),
+    }
+  ];
+
+  const TEMPLATE_DATA = [
+    'Title,Question name,Question title,Question type',
+    ',question_1,Who do you go to when you need help with a problem on your job?,tagbox',
+    ',question_2,Who do you collaborate with most frequently on projects or tasks?,tagbox',
+    ',question_3,Whats your favorite thing about your job?,tagbox',
+  ];
+
+  const parseCSV = (csvContent) => {
+    // Split by newline, handling both \n and \r\n
+    const lines = csvContent.split(/\r?\n/).filter(line => line.trim());
+    const headers = lines[0].split(',');
+    
+    // Skip header row and parse data rows
+    const questions = [];
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue; // Skip empty lines
+      
+      // Split line by comma, but preserve commas within quotes
+      const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+      const text = values[2] ? values[2].replace(/^"|"$/g, '') : ''; // Remove quotes if present
+      
+      if (text) {
+        questions.push({
+          text: text,
+          type: values[3]?.trim() || 'tagbox',
+          required: true
+        });
+      }
+    }
+    
+    return questions;
+  };
+
+  const formatRowsToCSV = (rows) => {
+    // Create CSV header
+    const csvRows = ['Title,Question name,Question title,Question type'];
+    
+    // Sort rows by ID to maintain order
+    const sortedRows = [...rows].sort((a, b) => a.id - b.id);
+    
+    // Add each question row
+    sortedRows.forEach((row, index) => {
+      const csvRow = [
+        index === 0 ? 'Survey Title' : '', // Title only on first row
+        `question_${index + 1}`,
+        `"${row.text}"`, // Wrap text in quotes to handle commas
+        row.type
+      ].join(',');
+      csvRows.push(csvRow);
+    });
+
+    return csvRows.join('\n');
+  };
 
   const handleProcessRowUpdate = (newRow) => {
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
@@ -158,9 +204,20 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
         if (onQuestionsUpdate) {
           onQuestionsUpdate(surveysResponse.data.surveys);
         }
+
+        setSnackbar({
+          open: true,
+          message: 'Changes saved successfully',
+          severity: 'success'
+        });
       }
     } catch (error) {
       console.error('Failed to save changes:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to save changes. Please try again.',
+        severity: 'error'
+      });
     }
   };
 
@@ -200,9 +257,20 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
         if (onQuestionsUpdate) {
           onQuestionsUpdate(surveysResponse.data.surveys);
         }
+
+        setSnackbar({
+          open: true,
+          message: 'Questions uploaded successfully',
+          severity: 'success'
+        });
       }
     } catch (err) {
       console.error('Error updating questions:', err);
+      setSnackbar({
+        open: true,
+        message: 'Failed to upload questions. Please try again.',
+        severity: 'error'
+      });
       throw err;
     }
   };
@@ -223,6 +291,13 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
     
     setTableRows(updatedRows);
     setHasChanges(true);
+  };
+
+  const handleCloseSnackbar = (event, reason) => {
+    if (reason === 'clickaway') {
+      return;
+    }
+    setSnackbar(prev => ({ ...prev, open: false }));
   };
 
   return (
@@ -281,6 +356,22 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
           },
         }}
       />
+
+      <Snackbar 
+        open={snackbar.open} 
+        autoHideDuration={6000} 
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbar.severity}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Paper>
   );
 };

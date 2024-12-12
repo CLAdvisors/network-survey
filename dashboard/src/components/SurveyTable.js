@@ -9,13 +9,13 @@ import EmailIcon from '@mui/icons-material/Email';
 import SendDemoDialog from './SendDemoDialog';
 import api from '../api/axios';
 
-const MenuCell = ({ row, selectedRow }) => {
+const MenuCell = ({ row, onSurveyDeleted }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [sendDemoOpen, setSendDemoOpen] = useState(false);
   const open = Boolean(anchorEl);
   
   const handleClick = (event) => {
-    event.stopPropagation(); // Prevent row selection when clicking menu
+    event.stopPropagation();
     setAnchorEl(event.currentTarget);
   };
   
@@ -26,24 +26,38 @@ const MenuCell = ({ row, selectedRow }) => {
     setAnchorEl(null);
   };
 
-  const handleStart = (event) => {
+  const handleStart = async (event) => {
     event.stopPropagation();
-    console.log('Start survey:', row);
+    try {
+      await api.post('/startSurvey', { surveyName: row.name });
+      // Could add success notification here
+    } catch (error) {
+      console.error('Error starting survey:', error);
+      // Could add error notification here
+    }
     handleClose();
   };
 
-  const handleDelete = (event) => {
+  const handleDelete = async (event) => {
     event.stopPropagation();
-    console.log('Delete survey:', row);
+    try {
+      const response = await api.delete(`/survey/${row.name}`);
+      if (response.status === 200) {
+        onSurveyDeleted(); // Trigger refetch of survey data
+      }
+    } catch (error) {
+      console.error('Error deleting survey:', error);
+      // Could add error notification here
+    }
     handleClose();
   };
 
   const handleView = (event) => {
     event.stopPropagation();
-    // Use the row prop directly since it contains the current row's data
     window.open(`${process.env.REACT_APP_SURVEY_PROTOCOL}://${process.env.REACT_APP_SURVEY_ENDPOINT}/?surveyName=${row.name}&userId=demo`);
     handleClose();
   };
+
   const handleSendDemo = (event) => {
     event.stopPropagation();
     setSendDemoOpen(true);
@@ -58,12 +72,11 @@ const MenuCell = ({ row, selectedRow }) => {
         language: language
       });
       setSendDemoOpen(false);
-      // You might want to add a success notification here
     } catch (error) {
       console.error('Error sending demo email:', error);
-      // You might want to add an error notification here
     }
   };
+
   return (
     <>
       <IconButton
@@ -112,7 +125,7 @@ const MenuCell = ({ row, selectedRow }) => {
           <DeleteIcon fontSize="small" />
           Delete Survey
         </MenuItem>
-        </Menu>
+      </Menu>
       <SendDemoDialog
         open={sendDemoOpen}
         onClose={() => setSendDemoOpen(false)}
@@ -122,8 +135,6 @@ const MenuCell = ({ row, selectedRow }) => {
     </>
   );
 };
-
-const initialRows = [];
 
 const columns = [
   { field: 'id', headerName: 'ID', width: 90 },
@@ -137,51 +148,60 @@ const columns = [
     width: 100,
     sortable: false,
     filterable: false,
-    renderCell: (params) => (
-      <MenuCell 
-        row={params.row} 
-        selectedRow={params.row}
-      />
-    ),
+    renderCell: (params) => <MenuCell row={params.row} onSurveyDeleted={params.row.onSurveyDeleted} />
   },
 ];
 
-const SurveyTable = (props) => {
-  const [rows, setRows] = useState(initialRows);
-  const [, setLastClickedRow] = useState(null);
+const SurveyTable = ({ rows, selectRow }) => {
+  const [tableRows, setTableRows] = useState([]);
+  const [selectedRow, setSelectedRow] = useState(null);
 
   useEffect(() => {
-    if (props.rows) {
-      const updatedRows = props.rows.map(row => ({
-        ...row,
-        questions: row.questions && row.questions !== "null" ? row.questions : "0"
-      }));
-      setRows(updatedRows);
-    }
-  }, [props]);
+    const fetchSurveyData = async () => {
+      try {
+        const response = await api.get('/surveys');
+        const processedRows = response.data.surveys.map(row => ({
+          ...row,
+          questions: row.questions === "null" ? "0" : row.questions,
+          onSurveyDeleted: fetchSurveyData
+        }));
+        setTableRows(processedRows);
+        
+        // Clear selected row if it was deleted
+        if (selectedRow && !processedRows.find(row => row.id === selectedRow.id)) {
+          setSelectedRow(null);
+          selectRow(null);
+        }
+      } catch (error) {
+        console.error('Error fetching surveys:', error);
+      }
+    };
 
-  const handleProcessRowUpdate = (newRow) => {
-    const updatedRows = rows.map((row) => (row.id === newRow.id ? newRow : row));
-    setRows(updatedRows);
-    return newRow;
-  };
+    if (rows) {
+      const processedRows = rows.map(row => ({
+        ...row,
+        questions: row.questions === "null" ? "0" : row.questions,
+        onSurveyDeleted: fetchSurveyData
+      }));
+      setTableRows(processedRows);
+    }
+  }, [rows, selectedRow, selectRow]);
 
   const handleRowClick = (params) => {
-    setLastClickedRow(params.row);
-    props.selectRow(params.row);
+    setSelectedRow(params.row);
+    selectRow(params.row);
   };
 
   return (
     <div style={{ height: '100%', width: '100%' }}>
       <DataGrid
-        rows={rows}
+        rows={tableRows}
         columns={columns}
         initialState={{
           pagination: { paginationModel: { pageSize: 10 } }
         }}
         pageSizeOptions={[5, 10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={handleProcessRowUpdate}
         onRowClick={handleRowClick}
         components={{
           Toolbar: GridToolbar,

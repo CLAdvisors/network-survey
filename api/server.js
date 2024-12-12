@@ -1044,6 +1044,148 @@ GROUP BY
 
 });
 
+
+// Delete survey endpoint
+app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
+  const surveyName = req.params.surveyName;
+  console.log("surveyName", surveyName);
+  if (!surveyName) {
+    return res.status(400).json({ message: 'Survey name is required.' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Delete related records first due to foreign key constraints
+    await client.query('DELETE FROM email WHERE survey_name = $1', [surveyName]);
+    await client.query('DELETE FROM respondent WHERE survey_name = $1', [surveyName]);
+    
+    // Delete the survey
+    const result = await client.query('DELETE FROM survey WHERE name = $1 RETURNING name', [surveyName]);
+    
+    await client.query('COMMIT');
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ message: 'Survey not found.' });
+    }
+
+    res.status(200).json({ 
+      message: 'Survey and all related data deleted successfully.',
+      deletedSurvey: result.rows[0].name
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error deleting survey:', error);
+    res.status(500).json({ 
+      message: 'Failed to delete survey', 
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// Delete user endpoint
+app.delete('/api/user', requireAuth, async (req, res) => {
+  const { userName, surveyName } = req.body;
+
+  if (!userName || !surveyName) {
+    return res.status(400).json({ 
+      message: 'Both user name and survey name are required.' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    const result = await client.query(
+      'DELETE FROM respondent WHERE name = $1 AND survey_name = $2 RETURNING name, survey_name',
+      [userName, surveyName]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ 
+        message: 'User not found in the specified survey.' 
+      });
+    }
+
+    res.status(200).json({
+      message: 'User deleted successfully from survey.',
+      deletedUser: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ 
+      message: 'Failed to delete user', 
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// Delete question endpoint
+app.delete('/api/question', requireAuth, async (req, res) => {
+  const { questionName, surveyName } = req.body;
+
+  if (!questionName || !surveyName) {
+    return res.status(400).json({ 
+      message: 'Both question name and survey name are required.' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    // First, get the current questions
+    const surveyResult = await client.query(
+      'SELECT questions FROM survey WHERE name = $1',
+      [surveyName]
+    );
+
+    if (surveyResult.rowCount === 0) {
+      return res.status(404).json({ message: 'Survey not found.' });
+    }
+
+    const questions = surveyResult.rows[0].questions;
+    
+    // Find and remove the question
+    const questionIndex = questions.elements.findIndex(q => q.name === questionName);
+    
+    if (questionIndex === -1) {
+      return res.status(404).json({ message: 'Question not found in survey.' });
+    }
+
+    // Remove the question
+    questions.elements.splice(questionIndex, 1);
+
+    // Update the survey with the modified questions
+    const updateResult = await client.query(
+      'UPDATE survey SET questions = $1 WHERE name = $2 RETURNING name',
+      [questions, surveyName]
+    );
+
+    res.status(200).json({
+      message: 'Question deleted successfully.',
+      surveyName: updateResult.rows[0].name,
+      deletedQuestion: questionName
+    });
+
+  } catch (error) {
+    console.error('Error deleting question:', error);
+    res.status(500).json({ 
+      message: 'Failed to delete question', 
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
 app.get('/', async (req, res) => {
   res.status(200).json({ message: 'Health Check: All Good!.' });
 });

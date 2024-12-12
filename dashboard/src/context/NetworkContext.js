@@ -43,7 +43,7 @@ export const NetworkProvider = ({ children }) => {
         startScaleTransition(newScale);
       }
     }
-  }, []);
+  }, [FRAME_TIME_THRESHOLD]);
 
   const startScaleTransition = (targetScale) => {
     const startScale = performanceScaleRef.current;
@@ -78,8 +78,8 @@ export const NetworkProvider = ({ children }) => {
     const isMobile = window.innerWidth < 768;
 
     const config = {
-      nodeCount: isMobile ? 50 : 400,
-      linkCount: isMobile ? 150 : 800,
+      nodeCount: isMobile ? 50 : 300,
+      linkCount: isMobile ? 150 : 500,
       nodeSize: { 
         min: isMobile ? 1.5 : 2, 
         max: isMobile ? 4 : 6 
@@ -88,8 +88,8 @@ export const NetworkProvider = ({ children }) => {
       linkStrengthRange: { min: 0.01, max: 1.4 },
       chargeStrength: isMobile ? -300 : -500,
       velocityDecay: 0.2,
-      speedFactor: 0.25,
-      orbitForce: isMobile ? 0.04 : 0.025,
+      speedFactor: 0.8,
+      orbitForce: isMobile ? 0.12 : 0.045,
       centralForce: isMobile ? 0.65 : 0.6,
       orbitSpeedRange: { min: 0.0002, max: 0.0008 },
       orbitRadiusRanges: [
@@ -97,7 +97,7 @@ export const NetworkProvider = ({ children }) => {
         { min: 0.35, max: 0.45 },
         { min: 0.55, max: 0.65 }
       ],
-      oscillationPeriod: 30000,
+      oscillationPeriod: 20000,
       oscillationMagnitude: isMobile ? 15 : 25
     };
 

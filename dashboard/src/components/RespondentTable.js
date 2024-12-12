@@ -3,7 +3,7 @@ import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
 import api from '../api/axios';
-import { Box, Paper, Typography, Button, Switch, Select, MenuItem, FormControl } from '@mui/material';
+import { Box, Paper, Typography, Button, Switch } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import EmailIcon from '@mui/icons-material/Email';
@@ -23,91 +23,6 @@ const LANGUAGES = [
   { code: 'ja', label: 'Japanese' },
   { code: 'zh', label: 'Chinese' },
   { code: 'ko', label: 'Korean' }
-];
-
-const columns = [
-  { field: 'name', headerName: 'User Name', width: 150, editable: true },
-  { field: 'email', headerName: 'Email', width: 200, editable: true },
-  { 
-    field: 'language', 
-    headerName: 'Language', 
-    width: 130,
-    editable: true,
-    type: 'singleSelect',
-    valueOptions: LANGUAGES.map(lang => lang.label),
-    renderCell: (params) => {
-      const language = LANGUAGES.find(lang => lang.label === params.value);
-      return language ? language.label : 'English';
-    }
-  },
-  {
-    field: 'canRespond',
-    headerName: 'Can Respond',
-    width: 120,
-    editable: true,
-    type: 'boolean',
-    renderCell: (params) => (
-      <Switch
-        checked={params.value}
-        onChange={(e) => {
-          e.stopPropagation();
-          params.api.setEditCellValue({
-            id: params.id,
-            field: 'canRespond',
-            value: e.target.checked
-          }, e);
-        }}
-      />
-    )
-  },
-  { field: 'status', headerName: 'Status', width: 120 },
-  {
-    field: 'actions',
-    headerName: 'Actions',
-    width: 100,
-    sortable: false,
-    filterable: false,
-    renderCell: (params) => (
-      <TableMenuCell
-        row={params.row}
-        actions={[
-          {
-            label: 'Send Reminder',
-            icon: <EmailIcon fontSize="small" />,
-            handler: async (row) => {
-              try {
-                await api.post('/testEmail', {
-                  email: row.email,
-                  surveyName: params.row.surveyName,
-                  language: row.language
-                });
-              } catch (error) {
-                console.error('Error sending reminder:', error);
-              }
-            }
-          },
-          {
-            label: 'Delete Respondent',
-            icon: <DeleteIcon fontSize="small" />,
-            color: 'error.main',
-            handler: async (row) => {
-              try {
-                await api.delete('/user', {
-                  data: {
-                    userName: row.name,
-                    surveyName: params.row.surveyName
-                  }
-                });
-                params.row.onRespondentDeleted();
-              } catch (error) {
-                console.error('Error deleting respondent:', error);
-              }
-            }
-          }
-        ]}
-      />
-    ),
-  }
 ];
 
 const TEMPLATE_DATA = [
@@ -147,6 +62,93 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       sort: 'asc',
     },
   ]);
+
+  const columns = [
+    { field: 'name', headerName: 'User Name', width: 150, editable: true },
+    { field: 'email', headerName: 'Email', width: 200, editable: true },
+    { 
+      field: 'language', 
+      headerName: 'Language', 
+      width: 130,
+      editable: true,
+      type: 'singleSelect',
+      valueOptions: LANGUAGES.map(lang => lang.label),
+      renderCell: (params) => {
+        const language = LANGUAGES.find(lang => lang.label === params.value);
+        return language ? language.label : 'English';
+      }
+    },
+    {
+      field: 'canRespond',
+      headerName: 'Can Respond',
+      width: 120,
+      editable: true,
+      type: 'boolean',
+      renderCell: (params) => (
+        <Switch
+          checked={params.value}
+          onChange={(e) => {
+            e.stopPropagation();
+            params.api.setEditCellValue({
+              id: params.id,
+              field: 'canRespond',
+              value: e.target.checked
+            }, e);
+          }}
+        />
+      )
+    },
+    { field: 'status', headerName: 'Status', width: 120 },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 100,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <TableMenuCell
+          row={params.row}
+          actions={[
+            {
+              label: 'Send Reminder',
+              icon: <EmailIcon fontSize="small" />,
+              handler: async (row) => {
+                try {
+                  await api.post('/testEmail', {
+                    email: row.email,
+                    surveyName: params.row.surveyName,
+                    language: row.language
+                  });
+                } catch (error) {
+                  console.error('Error sending reminder:', error);
+                }
+              }
+            },
+            {
+              label: 'Delete Respondent',
+              icon: <DeleteIcon fontSize="small" />,
+              color: 'error.main',
+              handler: async (row) => {
+                try {
+                  await api.delete('/user', {
+                    data: {
+                      userName: row.name,
+                      surveyName: surveyName
+                    }
+                  });
+                  params.row.onRespondentDeleted();
+                } catch (error) {
+                  console.error('Error deleting respondent:', error);
+                }
+              }
+            }
+          ]}
+        />
+      ),
+    }
+  ];
+
+
 
   useEffect(() => {
     if (rows) {

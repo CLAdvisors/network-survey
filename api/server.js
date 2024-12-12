@@ -1148,7 +1148,9 @@ app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
 // Delete user endpoint
 app.delete('/api/user', requireAuth, async (req, res) => {
   const { userName, surveyName } = req.body;
-
+  console.log("userName", userName);
+  console.log("surveyName", surveyName);
+  
   if (!userName || !surveyName) {
     return res.status(400).json({ 
       message: 'Both user name and survey name are required.' 

@@ -21,8 +21,9 @@ const pool = new Pool({
   port: process.env.DB_PORT,
   database: 'ONA',
 });
+console.log(process.env.RESEND_API_KEY)
 
-const resend = new Resend('re_UNs8VgH6_HhcK6GEjQM7pk3BczHt9dKB3');
+const resend = new Resend(process.env.RESEND_KEY);
 
 const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
@@ -40,7 +41,7 @@ const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//
             <table align="center" width="100%" data-id="react-email-section" style="padding:0 48px" border="0" cellPadding="0" cellSpacing="0" role="presentation">
               <tbody>
                 <tr>
-                  <td><img data-id="react-email-img" alt="Logo" src="https://i.postimg.cc/4nkbg08K/logo.png" width="189" height="49" style="display:block;outline:none;border:none;text-decoration:none" />
+                  <td><img data-id="react-email-img" alt="Logo" src="https://i.postimg.cc/4nkbg08K/logo.png" width="189" height="49" style="display:block;outline:none;border:none;text-decoration:none;margin-top:1.0rem;" />
                     <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />`, 
                     `<a href="`, `" data-id="react-email-button" target="_blank" style="background-color:#42B4AF;border-radius:5px;color:#fff;font-size:16px;font-weight:bold;text-decoration:none;text-align:center;display:inline-block;width:100%;line-height:100%;max-width:100%;padding:10px 10px"><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%;mso-text-raise:15" hidden>&nbsp;</i><![endif]--></span><span style="max-width:100%;display:inline-block;line-height:120%;mso-padding-alt:0px;mso-text-raise:7.5px">Start your survey</span><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%" hidden>&nbsp;</i><![endif]--></span></a>
                     <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
@@ -66,6 +67,7 @@ const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. 
 
 async function sendMail(email, id, surveyName, text) {
   try {
+    text = "<p>" + text.replace(/"/g, '') + "</p>";
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
 
     let customLink = `https://survey.bennetts.work/?surveyName=${surveyName}&userId=${id}`;
@@ -85,7 +87,7 @@ async function sendTestMail(email, surveyName, lang) {
   const client = await pool.connect();
   const query = 'SELECT text FROM email WHERE survey_name = $1 AND lang = $2';
   const values = [surveyName, lang];
-
+  console.log(values);
   await client.query(query, values).then(response => {
     const text = response.rows[0].text;
 
@@ -560,7 +562,7 @@ app.post('/api/testEmail', express.json(), (req, res) => {
     res.status(400).json({ message: 'Email name is required.' });
     return;
   }
-
+  console.log()
   // Call the function to add a new survey
   sendTestMail(email, surveyName, language)
   .catch(error => console.error(error))

@@ -6,9 +6,12 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import PlayCircle from '@mui/icons-material/PlayCircle';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import EmailIcon from '@mui/icons-material/Email';
+import SendDemoDialog from './SendDemoDialog';
+import api from '../api/axios';
 
 const MenuCell = ({ row, selectedRow }) => {
   const [anchorEl, setAnchorEl] = useState(null);
+  const [sendDemoOpen, setSendDemoOpen] = useState(false);
   const open = Boolean(anchorEl);
   
   const handleClick = (event) => {
@@ -29,13 +32,6 @@ const MenuCell = ({ row, selectedRow }) => {
     handleClose();
   };
 
-  const handleSendDemo = (event) => {
-    event.stopPropagation();
-    console.log('Start survey:', row);
-    handleClose();
-  };
-
-
   const handleDelete = (event) => {
     event.stopPropagation();
     console.log('Delete survey:', row);
@@ -48,7 +44,26 @@ const MenuCell = ({ row, selectedRow }) => {
     window.open(`${process.env.REACT_APP_SURVEY_PROTOCOL}://${process.env.REACT_APP_SURVEY_ENDPOINT}/?surveyName=${row.name}&userId=demo`);
     handleClose();
   };
+  const handleSendDemo = (event) => {
+    event.stopPropagation();
+    setSendDemoOpen(true);
+    handleClose();
+  };
 
+  const handleSendDemoSubmit = async (email, language) => {
+    try {
+      await api.post('/testEmail', {
+        surveyName: row.name,
+        email: email,
+        language: language
+      });
+      setSendDemoOpen(false);
+      // You might want to add a success notification here
+    } catch (error) {
+      console.error('Error sending demo email:', error);
+      // You might want to add an error notification here
+    }
+  };
   return (
     <>
       <IconButton
@@ -97,7 +112,13 @@ const MenuCell = ({ row, selectedRow }) => {
           <DeleteIcon fontSize="small" />
           Delete Survey
         </MenuItem>
-      </Menu>
+        </Menu>
+      <SendDemoDialog
+        open={sendDemoOpen}
+        onClose={() => setSendDemoOpen(false)}
+        onSubmit={handleSendDemoSubmit}
+        surveyName={row.name}
+      />
     </>
   );
 };

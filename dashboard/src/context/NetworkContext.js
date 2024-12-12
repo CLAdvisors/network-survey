@@ -85,7 +85,7 @@ export const NetworkProvider = ({ children }) => {
         max: isMobile ? 4 : 6 
       },
       linkDistance: isMobile ? 40 : 60,
-      linkStrengthRange: { min: 0.01, max: 1.4 },
+      linkStrengthRange: { min: 0.3, max: 1.4 },
       chargeStrength: isMobile ? -300 : -500,
       velocityDecay: 0.2,
       speedFactor: 0.8,

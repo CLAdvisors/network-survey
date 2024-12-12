@@ -30,10 +30,8 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     event.stopPropagation();
     try {
       await api.post('/startSurvey', { surveyName: row.name });
-      // Could add success notification here
     } catch (error) {
       console.error('Error starting survey:', error);
-      // Could add error notification here
     }
     handleClose();
   };
@@ -43,11 +41,10 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     try {
       const response = await api.delete(`/survey/${row.name}`);
       if (response.status === 200) {
-        onSurveyDeleted(); // Trigger refetch of survey data
+        onSurveyDeleted(row.name);
       }
     } catch (error) {
       console.error('Error deleting survey:', error);
-      // Could add error notification here
     }
     handleClose();
   };
@@ -152,43 +149,21 @@ const columns = [
   },
 ];
 
-const SurveyTable = ({ rows, selectRow }) => {
+const SurveyTable = ({ rows, selectRow, onSurveyDeleted, selectedSurvey }) => {
   const [tableRows, setTableRows] = useState([]);
-  const [selectedRow, setSelectedRow] = useState(null);
 
   useEffect(() => {
-    const fetchSurveyData = async () => {
-      try {
-        const response = await api.get('/surveys');
-        const processedRows = response.data.surveys.map(row => ({
-          ...row,
-          questions: row.questions === "null" ? "0" : row.questions,
-          onSurveyDeleted: fetchSurveyData
-        }));
-        setTableRows(processedRows);
-        
-        // Clear selected row if it was deleted
-        if (selectedRow && !processedRows.find(row => row.id === selectedRow.id)) {
-          setSelectedRow(null);
-          selectRow(null);
-        }
-      } catch (error) {
-        console.error('Error fetching surveys:', error);
-      }
-    };
-
     if (rows) {
       const processedRows = rows.map(row => ({
         ...row,
         questions: row.questions === "null" ? "0" : row.questions,
-        onSurveyDeleted: fetchSurveyData
+        onSurveyDeleted: onSurveyDeleted
       }));
       setTableRows(processedRows);
     }
-  }, [rows, selectedRow, selectRow]);
+  }, [rows, onSurveyDeleted]);
 
   const handleRowClick = (params) => {
-    setSelectedRow(params.row);
     selectRow(params.row);
   };
 

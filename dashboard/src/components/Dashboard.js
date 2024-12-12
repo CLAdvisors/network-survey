@@ -13,70 +13,82 @@ import CollapsibleSection from "./CollapsibleSection";
 const Dashboard = () => {
   const theme = useTheme();
   const [surveyData, setSurveyData] = React.useState(null);
-  const [selectSurvey, setselectSurvey] = React.useState(null);
+  const [selectSurvey, setSelectSurvey] = React.useState(null);
   const [questionData, setQuestionData] = React.useState(null);
   const [respondentData, setRespondentData] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
 
-  React.useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const response = await api.get("/surveys");
-        setSurveyData(response.data.surveys);
-      } catch (err) {
-        console.log(err);
+  const fetchSurveyData = async () => {
+    try {
+      const response = await api.get("/surveys");
+      setSurveyData(response.data.surveys);
+      
+      // Update selected survey if it still exists
+      if (selectSurvey) {
+        const surveyStillExists = response.data.surveys.find(
+          survey => survey.name === selectSurvey.name
+        );
+        if (!surveyStillExists) {
+          setSelectSurvey(null);
+          setQuestionData(null);
+          setRespondentData(null);
+        }
       }
-    };
-    fetchData();
+    } catch (err) {
+      console.log(err);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchSurveyData();
   }, []);
 
   React.useEffect(() => {
-    const fetchRespondentData = async () => {
+    const fetchRelatedData = async () => {
+      if (!selectSurvey) return;
+
       try {
-        if (selectSurvey) {
-          const response = await api.get(
-            `/targets?surveyName=${selectSurvey.name}`
-          );
-          setRespondentData(response.data);
-        }
+        // Fetch respondent data
+        const respondentResponse = await api.get(
+          `/targets?surveyName=${selectSurvey.name}`
+        );
+        setRespondentData(respondentResponse.data);
+
+        // Fetch question data
+        const questionResponse = await api.get(
+          `/listQuestions?surveyName=${selectSurvey.name}`
+        );
+        setQuestionData(questionResponse.data.questions);
       } catch (err) {
         console.log(err);
       }
     };
 
-    const fetchQuestionData = async () => {
-      try {
-        if (selectSurvey) {
-          const response = await api.get(
-            `/listQuestions?surveyName=${selectSurvey.name}`
-          );
-          setQuestionData(response.data.questions);
-        }
-      } catch (err) {
-        console.log(err);
-      }
-    };
-
-    if (selectSurvey) {
-      fetchRespondentData();
-      fetchQuestionData();
-    }
+    fetchRelatedData();
   }, [selectSurvey]);
 
   const handleSelectRow = (childData) => {
-    setselectSurvey(childData);
+    setSelectSurvey(childData);
   };
 
   const handleCreateSurvey = async (surveyName) => {
     try {
       const response = await api.post("/survey", { surveyName: surveyName });
       if (response.status === 200) {
-        const surveysResponse = await api.get("/surveys");
-        setSurveyData(surveysResponse.data.surveys);
+        await fetchSurveyData();
       }
       setCreateDialogOpen(false);
     } catch (err) {
       console.error("Failed to create survey:", err);
+    }
+  };
+
+  const handleSurveyDeleted = async (deletedSurveyName) => {
+    await fetchSurveyData();
+    if (selectSurvey && selectSurvey.name === deletedSurveyName) {
+      setSelectSurvey(null);
+      setQuestionData(null);
+      setRespondentData(null);
     }
   };
 
@@ -116,7 +128,12 @@ const Dashboard = () => {
           </Button>
         }
       >
-        <SurveyTable rows={surveyData} selectRow={handleSelectRow} />
+        <SurveyTable 
+          rows={surveyData} 
+          selectRow={handleSelectRow}
+          onSurveyDeleted={handleSurveyDeleted}
+          selectedSurvey={selectSurvey}
+        />
       </CollapsibleSection>
 
       <CreateSurveyDialog

@@ -53,7 +53,7 @@ const NetworkBackground = () => {
     // Reduced maximum node size
     const sizeScale = d3.scaleSqrt()
       .domain([0, maxDegree])
-      .range([1.5, 6]); // Reduced from [2, 12] to [1.5, 6]
+      .range([2, 12]); // Reduced from [2, 12] to [1.5, 6]
 
     const defs = svg.append("defs");
 
@@ -81,7 +81,7 @@ const NetworkBackground = () => {
       .data(linksRef.current)
       .join("line")
       .style("stroke", theme.palette.primary.main)
-      .style("stroke-width", 0.4) // Reduced from 0.5 to match smaller nodes
+      .style("stroke-width", 0.8) // Reduced from 0.5 to match smaller nodes
       .style("opacity", 0.25);
 
     const node = visualsRef.current.append("g")

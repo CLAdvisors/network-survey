@@ -78,8 +78,8 @@ export const NetworkProvider = ({ children }) => {
     const isMobile = window.innerWidth < 768;
 
     const config = {
-      nodeCount: isMobile ? 50 : 300,
-      linkCount: isMobile ? 150 : 500,
+      nodeCount: isMobile ? 100 : 300,
+      linkCount: isMobile ? 75 : 250,
       nodeSize: { 
         min: isMobile ? 1.5 : 2, 
         max: isMobile ? 4 : 6 

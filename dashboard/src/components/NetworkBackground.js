@@ -12,7 +12,6 @@ const NetworkBackground = () => {
   const getViewportSize = () => {
     const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth;
     const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    // Larger scale for mobile
     const scaleFactor = window.innerWidth < 768 ? 2 : 1.5;
     return {
       width: vw * scaleFactor,
@@ -30,20 +29,50 @@ const NetworkBackground = () => {
       .attr("width", width)
       .attr("height", height);
 
+    // Calculate node degrees
+    const nodeDegrees = new Map();
+    linksRef.current.forEach(link => {
+      nodeDegrees.set(link.source, (nodeDegrees.get(link.source) || 0) + 1);
+      nodeDegrees.set(link.target, (nodeDegrees.get(link.target) || 0) + 1);
+    });
+
+    const maxDegree = Math.max(...nodeDegrees.values());
+    
+    // Create scales
+    const intensityScale = d3.scaleLinear()
+      .domain([0, maxDegree])
+      .range([0.2, 1]);
+
+    const colorScale = d3.scaleLinear()
+      .domain([0, maxDegree])
+      .range([
+        d3.color(theme.palette.primary.light).darker(-0.5),
+        d3.color(theme.palette.primary.main).darker(0.5)
+      ]);
+
+    // Reduced maximum node size
+    const sizeScale = d3.scaleSqrt()
+      .domain([0, maxDegree])
+      .range([1.5, 6]); // Reduced from [2, 12] to [1.5, 6]
+
     const defs = svg.append("defs");
-    const linkGradient = defs.append("linearGradient")
-      .attr("id", `linkGradient-${Math.random()}`)
-      .attr("gradientUnits", "userSpaceOnUse");
 
-    linkGradient.append("stop")
-      .attr("offset", "0%")
-      .attr("stop-color", theme.palette.primary.light)
-      .attr("stop-opacity", 0.2);
+    // Create gradients considering node sizes
+    Array.from(new Set(nodeDegrees.values())).forEach(degree => {
+      const baseColor = colorScale(degree);
+      const gradient = defs.append("radialGradient")
+        .attr("id", `node-gradient-${degree}`);
 
-    linkGradient.append("stop")
-      .attr("offset", "100%")
-      .attr("stop-color", theme.palette.primary.main)
-      .attr("stop-opacity", 0.4);
+      gradient.append("stop")
+        .attr("offset", "0%")
+        .attr("stop-color", baseColor)
+        .attr("stop-opacity", intensityScale(degree));
+
+      gradient.append("stop")
+        .attr("offset", "100%")
+        .attr("stop-color", baseColor)
+        .attr("stop-opacity", intensityScale(degree) * 0.3);
+    });
 
     visualsRef.current = svg.append("g");
 
@@ -51,24 +80,30 @@ const NetworkBackground = () => {
       .selectAll("line")
       .data(linksRef.current)
       .join("line")
-      .style("stroke", `url(#${linkGradient.attr("id")})`)
-      .style("stroke-width", 0.5)
-      .style("opacity", 0.6);
+      .style("stroke", theme.palette.primary.main)
+      .style("stroke-width", 0.4) // Reduced from 0.5 to match smaller nodes
+      .style("opacity", 0.25);
 
     const node = visualsRef.current.append("g")
-      .selectAll("circle")
+      .selectAll("g")
       .data(nodesRef.current)
-      .join("circle")
-      .attr("r", d => d.radius)
-      .style("fill", theme.palette.primary.main)
-      .style("opacity", 0.4);
+      .join("g");
 
+    // Main node circle
     node.append("circle")
-      .attr("r", d => d.radius * 1.2)
+      .attr("r", d => sizeScale(nodeDegrees.get(d) || 0))
+      .style("fill", d => `url(#node-gradient-${nodeDegrees.get(d) || 0})`)
+      .style("stroke", d => colorScale(nodeDegrees.get(d) || 0))
+      .style("stroke-width", 0.3) // Reduced from 0.5
+      .style("stroke-opacity", d => intensityScale(nodeDegrees.get(d) || 0) * 0.5);
+
+    // Outer glow with reduced size
+    node.append("circle")
+      .attr("r", d => sizeScale(nodeDegrees.get(d) || 0) * 1.3) // Reduced multiplier from 1.4
       .style("fill", "none")
-      .style("stroke", theme.palette.primary.light)
-      .style("stroke-width", 0.5)
-      .style("opacity", 0.2);
+      .style("stroke", d => colorScale(nodeDegrees.get(d) || 0))
+      .style("stroke-width", 0.3) // Reduced from 0.5
+      .style("stroke-opacity", d => intensityScale(nodeDegrees.get(d) || 0) * 0.2);
 
     const updatePositions = () => {
       const { width: currentWidth, height: currentHeight } = getViewportSize();
@@ -86,11 +121,15 @@ const NetworkBackground = () => {
         .attr("y2", d => d.target.y);
 
       node
-        .attr("cx", d => d.x)
-        .attr("cy", d => d.y);
+        .attr("transform", d => `translate(${d.x},${d.y})`);
     };
 
-    simulationRef.current.on("tick", updatePositions);
+    // Update collision radius for smaller nodes
+    simulationRef.current
+      .force("collision", d3.forceCollide()
+        .radius(d => sizeScale(nodeDegrees.get(d) || 0) * 1.4) // Reduced multiplier from 1.5
+        .strength(0.9))
+      .on("tick", updatePositions);
 
     const handleResize = () => {
       const { width: newWidth, height: newHeight } = getViewportSize();
@@ -117,7 +156,8 @@ const NetworkBackground = () => {
     };
   }, [theme, initializeSimulation, isInitialized, linksRef, nodesRef, simulationRef]);
 
-  // Use larger offset for mobile
+  
+
   const offset = window.innerWidth < 768 ? '-50%' : '-25%';
 
   return (

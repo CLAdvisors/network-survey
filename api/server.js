@@ -69,17 +69,62 @@ async function sendMail(email, id, surveyName, text) {
   try {
     text = "<p>" + text.replace(/"/g, '') + "</p>";
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
-
     let customLink = `${process.env.SURVEY_URL}/?surveyName=${surveyName}&userId=${id}`;
-    const data = await resend.emails.send({
+
+    const emailData = {
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
       subject: 'CLA Network Survey',
       html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2]
-    });
+    };
+
+    // Add delay to respect rate limit
+    await rateLimitedSend(emailData);
+
   } catch (error) {
-    console.error(error);
+    console.error(`Failed to send email to ${email}:`, error);
+    throw error;
   }
+}
+
+// Queue for managing email sending with rate limiting
+const emailQueue = [];
+let isProcessing = false;
+const RATE_LIMIT = 10; // emails per second
+const DELAY = 1000; // 1 second delay between batches
+
+async function rateLimitedSend(emailData) {
+  // Add email to queue
+  emailQueue.push(emailData);
+  
+  // Start processing if not already running
+  if (!isProcessing) {
+    isProcessing = true;
+    await processEmailQueue();
+  }
+}
+
+async function processEmailQueue() {
+  while (emailQueue.length > 0) {
+    // Process up to RATE_LIMIT emails at once
+    const batch = emailQueue.splice(0, RATE_LIMIT);
+    
+    // Send batch of emails
+    await Promise.all(batch.map(async (emailData) => {
+      try {
+        await resend.emails.send(emailData);
+      } catch (error) {
+        console.error(`Failed to send email to ${emailData.to}:`, error);
+      }
+    }));
+
+    // Wait for rate limit window if more emails remain
+    if (emailQueue.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, DELAY));
+    }
+  }
+  
+  isProcessing = false;
 }
 
 // User test email function (allow admin user to send test email to themselves)

@@ -165,10 +165,13 @@ const EmailNotificationEditor = ({ surveyId }) => {
         const header = csvArray.shift().split(",");
 
         const newNotifications = csvArray.reduce((acc, row) => {
-          const [langCode, text] = row
-            .split(",")
-            .map((item) => item.trim().replace(/(^"|"$)/g, ""));
-          acc[langCode] = text;
+          // Handle quotes and commas properly using regex
+          const matches = row.match(/(?:^|,)("(?:[^"]|"")*"|[^,]*)/g);
+          if (matches && matches.length >= 2) {
+            const langCode = matches[0].replace(/^,|"/g, '').trim();
+            const text = matches[1].replace(/^,|"/g, '').replace(/""/g, '"').trim();
+            acc[langCode] = text;
+          }
           return acc;
         }, {});
 

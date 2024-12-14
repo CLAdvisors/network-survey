@@ -79,7 +79,7 @@ export const NetworkProvider = ({ children }) => {
 
     const config = {
       nodeCount: isMobile ? 100 : 300,
-      linkCount: isMobile ? 75 : 250,
+      linkCount: isMobile ? 200 : 500,
       nodeSize: { 
         min: isMobile ? 1.5 : 2, 
         max: isMobile ? 4 : 6 

@@ -8,7 +8,9 @@ import {
   DialogContent,
   DialogActions,
   Button,
-  Typography
+  Typography,
+  Snackbar,
+  Alert
 } from '@mui/material';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -23,7 +25,21 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
   const [sendDemoOpen, setSendDemoOpen] = useState(false);
   const [startConfirmOpen, setStartConfirmOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: '',
+    severity: 'success'
+  });
   const open = Boolean(anchorEl);
+
+  // Add handler for closing snackbar
+  const handleCloseSnackbar = (event, reason) => {
+    if (reason === 'clickaway') {
+      return;
+    }
+    setSnackbar(prev => ({ ...prev, open: false }));
+  };
+
   
   const handleClick = (event) => {
     event.stopPropagation();
@@ -43,12 +59,23 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     handleClose();
   };
 
+  // Modify handleStartConfirm
   const handleStartConfirm = async () => {
     try {
       await api.post('/startSurvey', { surveyName: row.name });
       setStartConfirmOpen(false);
+      setSnackbar({
+        open: true,
+        message: 'Survey started successfully',
+        severity: 'success'
+      });
     } catch (error) {
       console.error('Error starting survey:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to start survey. Please try again.',
+        severity: 'error'
+      });
     }
   };
 
@@ -104,8 +131,18 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
         language: language
       });
       setSendDemoOpen(false);
+      setSnackbar({
+        open: true,
+        message: 'Demo email sent successfully',
+        severity: 'success'
+      });
     } catch (error) {
       console.error('Error sending demo email:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to send demo email. Please try again.',
+        severity: 'error'
+      });
     }
   };
 
@@ -122,6 +159,23 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
       >
         <MoreHorizIcon />
       </IconButton>
+
+      <Snackbar 
+        open={snackbar.open} 
+        autoHideDuration={6000} 
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbar.severity}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+      
       <Menu
         anchorEl={anchorEl}
         open={open}
@@ -203,6 +257,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
         onSubmit={handleSendDemoSubmit}
         surveyName={row.name}
       />
+      
     </>
   );
 };

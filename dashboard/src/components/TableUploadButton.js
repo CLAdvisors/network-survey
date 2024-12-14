@@ -1,21 +1,12 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { 
   Box, 
-  Button, 
-  Alert, 
-  Collapse, 
-  IconButton 
+  Button,
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
-import CloseIcon from '@mui/icons-material/Close';
 
 const TableUploadButton = ({ onUpload, templateData, tableName }) => {
-  const [alert, setAlert] = useState({ show: false, type: 'info', message: '' });
-
-  const handleCloseAlert = () => {
-    setAlert({ ...alert, show: false });
-  };
 
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
@@ -26,17 +17,8 @@ const TableUploadButton = ({ onUpload, templateData, tableName }) => {
       try {
         const csv = e.target?.result;
         await onUpload(csv);
-        setAlert({
-          show: true,
-          type: 'success',
-          message: `${tableName} updated successfully from CSV`
-        });
       } catch (error) {
-        setAlert({
-          show: true,
-          type: 'error',
-          message: error.message || `Failed to process CSV file`
-        });
+        console.log('Error uploading file:', error);
       }
     };
     reader.readAsText(file);
@@ -82,24 +64,6 @@ const TableUploadButton = ({ onUpload, templateData, tableName }) => {
           />
         </Button>
       </Box>
-      <Collapse in={alert.show}>
-        <Alert 
-          severity={alert.type}
-          action={
-            <IconButton
-              aria-label="close"
-              color="inherit"
-              size="small"
-              onClick={handleCloseAlert}
-            >
-              <CloseIcon fontSize="inherit" />
-            </IconButton>
-          }
-          sx={{ mt: 2, position: 'absolute', right: '24px', zIndex: 1000 }}
-        >
-          {alert.message}
-        </Alert>
-      </Collapse>
     </Box>
   );
 };

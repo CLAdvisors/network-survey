@@ -555,6 +555,11 @@ function csvToJson(csvString, title) {
         skipEmptyLines: true,
     });
 
+    // Add question name validation/correction logic
+    result.data.forEach((item, index) => {
+      item['Question name'] = `question_${index + 1}`;
+    });
+
     // Iterate through each parsed data and create the corresponding question object
     result.data.forEach(item => {
         let questionObject = {

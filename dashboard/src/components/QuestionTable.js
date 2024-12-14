@@ -85,7 +85,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
   const columns = [
     { field: 'id', headerName: 'ID', width: 90 },
     { field: 'text', headerName: 'Question Text', width: 500, editable: true },
-    { field: 'type', headerName: 'Question Type', width: 150, editable: true },
+    { field: 'type', headerName: 'Question Type', width: 150, editable: false },
     { field: 'required', headerName: 'Required', width: 100 },
     {
       field: 'actions',
@@ -119,7 +119,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
   const parseCSV = (csvContent) => {
     // Split by newline, handling both \n and \r\n
     const lines = csvContent.split(/\r?\n/).filter(line => line.trim());
-    const headers = lines[0].split(',');
+    // const headers = lines[0].split(',');
     
     // Skip header row and parse data rows
     const questions = [];
@@ -225,7 +225,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
     try {
       // Parse the new CSV content
       const newQuestions = parseCSV(csvContent);
-      
+      console.log('New questions:', newQuestions);
       // Create new rows with sequential IDs after existing questions
       const newRows = newQuestions.map((q, index) => ({
         id: tableRows.length + index + 1,

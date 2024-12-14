@@ -162,7 +162,7 @@ const EmailNotificationEditor = ({ surveyId }) => {
         const csvData = e.target?.result;
 
         const csvArray = csvData.split("\n");
-        const header = csvArray.shift().split(",");
+        // const header = csvArray.shift().split(",");
 
         const newNotifications = csvArray.reduce((acc, row) => {
           // Handle quotes and commas properly using regex

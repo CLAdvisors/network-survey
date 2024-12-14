@@ -102,20 +102,71 @@ const Results = () => {
     }));
   };
 
+  const convertToEdgeList = (responses) => {
+    const edges = [];
+    
+    // Iterate through each respondent
+    Object.entries(responses).forEach(([respondent, answers]) => {
+      // For each question
+      Object.entries(answers).forEach(([questionId, nominees]) => {
+        // Ensure nominees is an array
+        const nomineeArray = Array.isArray(nominees) ? nominees : [nominees];
+        
+        // Skip if no nominees or undefined
+        if (!nomineeArray || nomineeArray.length === 0) return;
+        
+        // For each nominee in the answer
+        nomineeArray.forEach(nominee => {
+          // Skip if nominee is undefined or empty
+          if (!nominee) return;
+          
+          // Split nominee string to get name and email
+          const [nomineeName, nomineeEmail] = nominee.split(' (');
+          const cleanEmail = (nomineeEmail || '').replace(')', '');
+          
+          edges.push({
+            source: respondent,
+            target: `${nomineeName}${cleanEmail ? ` (${cleanEmail})` : ''}`,
+            weight: questionId.replace('question_', '')
+          });
+        });
+      });
+    });
+    
+    return edges;
+  };
+
+
+  const convertToCSV = (edges) => {
+    // CSV header
+    const header = ['Source', 'Target', 'Weight'];
+    
+    // Convert each edge to CSV row
+    const rows = edges.map(edge => 
+      `${edge.source},${edge.target},${edge.weight}`
+    );
+    
+    // Combine header and rows
+    return [header.join(','), ...rows].join('\n');
+  };
+
   const handleDownload = () => {
     if (!surveyData || !surveyData.responses) return;
 
-    // Create the file content
-    const fileContent = JSON.stringify(surveyData.responses, null, 2);
+    // Convert responses to edge list
+    const edges = convertToEdgeList(surveyData.responses);
     
-    // Create a blob from the content
-    const blob = new Blob([fileContent], { type: 'application/json' });
+    // Convert edge list to CSV
+    const csvContent = convertToCSV(edges);
+    
+    // Create a blob from the CSV content
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     
     // Create download link
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${selectedSurvey}_responses.json`;
+    a.download = `${selectedSurvey}_edge_list.csv`;
     
     // Trigger download
     document.body.appendChild(a);

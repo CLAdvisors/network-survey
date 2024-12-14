@@ -43,7 +43,7 @@ function SurveyComponent({setTitle}) {
       });
 
       newSurvey.onChoicesLazyLoad.add((_, options) => {
-        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}`;
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}&userId=${userId}`;
         sendRequest(url, (data) => { options.setItems(data.names, data.total); });
       });
 

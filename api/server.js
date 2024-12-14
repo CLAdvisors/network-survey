@@ -895,47 +895,44 @@ app.post('/api/user', express.json(), (req, res) => {
 
 // GET API endpoint for lazy loading the names list
 app.get('/api/names', async (req, res) => {
-  const { skip = 0, take = 10, filter = '', surveyName = '' } = req.query;
+  const { skip = 0, take = 10, filter = '', surveyName = '', userId = '' } = req.query;
 
-  // NEW DB CODE
-    
   const client = await pool.connect();
   
-  const query = `
-  SELECT r.name, r.contact_info
-  FROM Respondent r
-  JOIN Survey s ON r.survey_name = s.name
-  WHERE s.name = $1
-  AND (r.name ILIKE $2 OR r.contact_info ILIKE $2)
-  OFFSET $3
-  LIMIT $4;
-  `;
+  try {
+    // Modified query to exclude the current user based on UUID
+    const query = `
+      SELECT r.name, r.contact_info
+      FROM Respondent r
+      JOIN Survey s ON r.survey_name = s.name
+      WHERE s.name = $1
+      AND r.uuid != $2
+      AND (r.name ILIKE $3 OR r.contact_info ILIKE $3)
+      OFFSET $4
+      LIMIT $5;
+    `;
 
-  const values = [surveyName, `%${filter}%`, skip, take];
-  client.query(query, values)
-  .then(result => {
-    const users = result.rows;
-    // Process the returned users
-    filteredNames = [];
-    // iterate over name, contact_info pairs
-    for (let i = 0; i < users.length; i++) {
-      const user = users[i];
-      // add to response
-      filteredNames.push(user.name + " (" + user.contact_info + ")");
-    }
-    const response = {
+    const values = [surveyName, userId, `%${filter}%`, skip, take];
+    const result = await client.query(query, values);
+
+    const filteredNames = result.rows.map(user => 
+      `${user.name} (${user.contact_info})`
+    );
+
+    res.status(200).json({
       names: filteredNames,
-      //TODO check that this length/total even works
       total: filteredNames.length
-    };
-    res.status(200).json(response);
-  })
-  .catch(error => {
-    // Handle the error
-    console.error(error);
-  });
-  client.release();
-  
+    });
+
+  } catch (error) {
+    console.error('Error fetching names:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch names',
+      message: error.message 
+    });
+  } finally {
+    client.release();
+  }
 });
 
 // GET API list questions for dashboard

@@ -959,7 +959,7 @@ app.get('/api/listQuestions', async (req, res) => {
   client.query(query, values)
     .then(result => {
       const questions = result.rows[0]?.questions?.elements?.map((q, index) => ({
-        id: index + 1,
+        id: q.name.replace('question_', ''),
         text: q.title,
         type: q.type,
         required: q.isRequired

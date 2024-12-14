@@ -28,6 +28,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
 
   useEffect(() => {
     if (rows) {
+      console.log('rows:', rows);
       const updatedRows = rows.map((row, index) => ({
         ...row,
         id: index + 1,
@@ -250,6 +251,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
           ...row,
           id: index + 1
         }));
+        
+
         setTableRows(refreshedRows);
         setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
         

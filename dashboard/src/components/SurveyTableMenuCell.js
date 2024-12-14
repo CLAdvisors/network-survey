@@ -22,6 +22,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [sendDemoOpen, setSendDemoOpen] = useState(false);
   const [startConfirmOpen, setStartConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const open = Boolean(anchorEl);
   
   const handleClick = (event) => {
@@ -58,8 +59,13 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     setStartConfirmOpen(false);
   };
 
-  const handleDelete = async (event) => {
+  const handleDeleteClick = (event) => {
     event.stopPropagation();
+    setDeleteConfirmOpen(true);
+    handleClose();
+  };
+
+  const handleDeleteConfirm = async () => {
     try {
       const response = await api.delete(`/survey/${row.name}`);
       if (response.status === 200) {
@@ -68,7 +74,14 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     } catch (error) {
       console.error('Error deleting survey:', error);
     }
-    handleClose();
+    setDeleteConfirmOpen(false);
+  };
+
+  const handleDeleteCancel = (event) => {
+    if (event) {
+      event.stopPropagation();
+    }
+    setDeleteConfirmOpen(false);
   };
 
   const handleView = (event) => {
@@ -140,7 +153,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
           <PlayCircle fontSize="small" />
           Start Survey
         </MenuItem>
-        <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }}>
+        <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
           <DeleteIcon fontSize="small" />
           Delete Survey
         </MenuItem>
@@ -161,6 +174,25 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
           <Button onClick={handleStartCancel}>Cancel</Button>
           <Button onClick={handleStartConfirm} variant="contained" color="primary">
             Start Survey
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={deleteConfirmOpen}
+        onClose={handleDeleteCancel}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <DialogTitle>Delete Survey</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete the survey "{row.name}"? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeleteCancel}>Cancel</Button>
+          <Button onClick={handleDeleteConfirm} variant="contained" color="error">
+            Delete Survey
           </Button>
         </DialogActions>
       </Dialog>

@@ -7,4 +7,5 @@
 
     <!-- Include individual change sets -->
     <include file="v1_0_create_initial_tables.sql" relativeToChangelogFile="true" />
+    <include file="v1_1_add_sent_email_count.sql" relativeToChangelogFile="true" />
 </databaseChangeLog>

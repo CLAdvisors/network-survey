@@ -109,14 +109,30 @@ async function processEmailQueue() {
     // Process up to RATE_LIMIT emails at once
     const batch = emailQueue.splice(0, RATE_LIMIT);
     
-    // Send batch of emails
-    await Promise.all(batch.map(async (emailData) => {
+    // Send batch of emails and track successful sends
+    const results = await Promise.all(batch.map(async (emailData) => {
       try {
         await resend.emails.send(emailData);
+        // Extract recipient email from emailData
+        return { success: true, email: emailData.to };
       } catch (error) {
         console.error(`Failed to send email to ${emailData.to}:`, error);
+        return { success: false, email: emailData.to };
       }
     }));
+
+    // Update email_sent status for successful sends
+    const successfulEmails = results.filter(r => r.success).map(r => r.email);
+    if (successfulEmails.length > 0) {
+      try {
+        await pool.query(
+          'UPDATE Respondent SET email_sent = true WHERE contact_info = ANY($1)',
+          [successfulEmails]
+        );
+      } catch (error) {
+        console.error('Failed to update email_sent status:', error);
+      }
+    }
 
     // Wait for rate limit window if more emails remain
     if (emailQueue.length > 0) {

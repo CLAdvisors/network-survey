@@ -3,19 +3,6 @@ import './Header.css';
 import {BrowserView, MobileView} from 'react-device-detect';
 
 const Header = ({ svgComponent: SvgComponent, title }) => {
-  const [width, setWidth] = React.useState(window.innerWidth);
-  const breakpoint = 1000;
-
-  const handleWindowSizeChange = () => {
-    setWidth(window.innerWidth);
-  };
-
-  React.useEffect(() => {
-    window.addEventListener('resize', handleWindowSizeChange);
-    return () => {
-        window.removeEventListener('resize', handleWindowSizeChange);
-    }
-  }, []);
 
   return (
     <header className="header" style={{ 

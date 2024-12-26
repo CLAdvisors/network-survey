@@ -30,7 +30,8 @@ function SurveyComponent({setTitle}) {
       newSurvey.showQuestionNumbers = false;
       newSurvey.showProgressBar = "bottom";
       newSurvey.progressBarType = "questions";
-      
+      newSurvey.completedHtml  = "Thank you for completing the survey.";
+
       // Set modern theme
       Model.cssType = "defaultV2";
       

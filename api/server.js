@@ -931,6 +931,7 @@ app.get('/api/names', async (req, res) => {
       WHERE s.name = $1
       AND r.uuid != $2
       AND (r.name ILIKE $3 OR r.contact_info ILIKE $3)
+      ORDER BY r.name
       OFFSET $4
       LIMIT $5;
     `;

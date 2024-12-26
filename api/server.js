@@ -159,7 +159,7 @@ async function sendTestMail(email, surveyName, lang) {
 async function startSurvey(surveyName){
   // Pull all users from the database
   const client = await pool.connect();
-  const query = 'SELECT name, contact_info, uuid, lang FROM Respondent WHERE survey_name = $1';
+  const query = 'SELECT name, contact_info, uuid, lang FROM Respondent WHERE survey_name = $1 AND can_respond = true';
   const values = [surveyName];
   let respondents = [];
   let emails = [];

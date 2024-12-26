@@ -26,14 +26,6 @@ const Header = ({ svgComponent: SvgComponent, title }) => {
       padding: '12px 24px'
     }}>
       <BrowserView>
-        {width < breakpoint ? 
-          <h1 style={{ 
-            color: '#42B4AF',
-            fontSize: '1.5rem',
-            fontWeight: 600,
-            margin: 0
-          }}>{title}</h1> 
-          :
           <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
             <div className="header-svg">
               <a href='https://contemporaryleadership.com/' target="_blank" rel="noreferrer">
@@ -41,7 +33,6 @@ const Header = ({ svgComponent: SvgComponent, title }) => {
               </a>
             </div>
           </div>
-        }
       </BrowserView>
       <MobileView>
         <h1 style={{ 

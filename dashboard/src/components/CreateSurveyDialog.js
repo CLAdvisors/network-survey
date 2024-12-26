@@ -19,9 +19,23 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit }) => {
       setError('Survey name is required');
       return;
     }
+    if (!/^[a-zA-Z0-9]+$/.test(surveyName)) {
+      setError('Only letters and numbers are allowed');
+      return;
+    }
     onSubmit(surveyName);
     setSurveyName('');
     setError('');
+  };
+
+  const handleInputChange = (e) => {
+    const value = e.target.value;
+    if (value && !/^[a-zA-Z0-9]*$/.test(value)) {
+      setError('Only letters and numbers are allowed');
+    } else {
+      setError('');
+    }
+    setSurveyName(value);
   };
 
   const handleClose = () => {
@@ -59,10 +73,7 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit }) => {
           fullWidth
           variant="outlined"
           value={surveyName}
-          onChange={(e) => {
-            setSurveyName(e.target.value);
-            setError('');
-          }}
+          onChange={handleInputChange}
           error={!!error}
           helperText={error}
           sx={{ mt: 1 }}

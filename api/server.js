@@ -578,14 +578,16 @@ function csvToJson(csvString, title) {
 
     // Iterate through each parsed data and create the corresponding question object
     result.data.forEach(item => {
+      console.log(item);
         let questionObject = {
             "type": item['Question type'],
             "name": item['Question name'],
             "title": item['Question title'],
             "isRequired": true,
             "choicesLazyLoadEnabled": true,
-            "choicesLazyLoadPageSize": 25
-        };
+            "choicesLazyLoadPageSize": 25,
+            "maxSelectedChoices": item['Max answers'] ? parseInt(item['Max answers']) : null,
+         };
 
         json.elements.push(questionObject);
     });
@@ -983,7 +985,8 @@ app.get('/api/listQuestions', async (req, res) => {
         id: q.name.replace('question_', ''),
         text: q.title,
         type: q.type,
-        required: q.isRequired
+        required: q.isRequired,
+        max: q.maxSelectedChoices ? q.maxSelectedChoices : null,
       })) || [];
       res.status(200).json({ questions });
     })

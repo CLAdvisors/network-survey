@@ -85,9 +85,10 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'text', headerName: 'Question Text', width: 500, editable: true },
-    { field: 'type', headerName: 'Question Type', width: 150, editable: false },
+    { field: 'text', headerName: 'Question text', width: 500, editable: true },
+    { field: 'type', headerName: 'Question type', width: 150, editable: false },
     { field: 'required', headerName: 'Required', width: 100 },
+    { field: 'max', headerName: 'Max answers', width: 150,  editable: true  },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -145,7 +146,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
 
   const formatRowsToCSV = (rows) => {
     // Create CSV header
-    const csvRows = ['Title,Question name,Question title,Question type'];
+    const csvRows = ['Title,Question name,Question title,Question type,Max answers'];
     
     // Sort rows by ID to maintain order
     const sortedRows = [...rows].sort((a, b) => a.id - b.id);
@@ -156,7 +157,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
         index === 0 ? 'Survey Title' : '', // Title only on first row
         `question_${index + 1}`,
         `"${row.text}"`, // Wrap text in quotes to handle commas
-        row.type
+        row.type,
+        row.max || ''
       ].join(',');
       csvRows.push(csvRow);
     });
@@ -170,7 +172,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
     
     const hasUnsavedChanges = updatedRows.some((row) => {
       const original = originalRows.find(origRow => origRow.id === row.id);
-      return !original || original.text !== row.text || original.type !== row.type;
+      return !original || original.text !== row.text || original.type !== row.type || original.max !== row.max;
     });
     
     setHasChanges(hasUnsavedChanges);
@@ -181,7 +183,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
     try {
       // Convert current table state to CSV format
       const csvData = formatRowsToCSV(tableRows);
-      
+      console.log(csvData)
       // Send update request
       const response = await api.post('/updateQuestions', {
         questions: csvData,

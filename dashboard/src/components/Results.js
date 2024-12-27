@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Button, Typography, Select, MenuItem, FormControl, InputLabel, Switch, FormControlLabel } from '@mui/material';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Box, Button, Typography, Select, MenuItem, FormControl, InputLabel, Switch, FormControlLabel, Checkbox } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import NetworkGraph from './NetworkGraph';
 import api from '../api/axios';
@@ -14,6 +14,7 @@ const Results = () => {
   const [selectedRespondent, setSelectedRespondent] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [showAllUsers, setShowAllUsers] = useState(false);
+  const [enabledQuestions, setEnabledQuestions] = useState({});
 
   // Fetch available surveys
   useEffect(() => {
@@ -40,13 +41,54 @@ const Results = () => {
         ]);
         setSurveyData(resultsResponse.data);
         setQuestions(questionsResponse.data.questions);
+        
+        // Initialize all questions as enabled
+        const initialQuestionStates = {};
+        questionsResponse.data.questions.forEach((_, index) => {
+          initialQuestionStates[`question_${index + 1}`] = true;
+        });
+        setEnabledQuestions(initialQuestionStates);
       } catch (error) {
         console.error('Error fetching survey data:', error);
       }
     };
 
     fetchSurveyData();
+    setSelectedRespondent(null); // Reset selection when changing surveys
   }, [selectedSurvey]);
+
+  // Memoize filtered survey data
+  const filteredSurveyData = useMemo(() => {
+    if (!surveyData) return null;
+
+    // Create a deep copy of the survey data to avoid modifying the original
+    const filteredData = {
+      ...surveyData,
+      responses: {},
+      users: surveyData.users ? [...surveyData.users] : []
+    };
+
+    // Filter responses based on enabled questions
+    Object.entries(surveyData.responses).forEach(([respondent, answers]) => {
+      filteredData.responses[respondent] = {};
+      Object.entries(answers).forEach(([questionId, recipients]) => {
+        if (questionId === 'timeStamp' || enabledQuestions[questionId]) {
+          filteredData.responses[respondent][questionId] = recipients;
+        }
+      });
+    });
+
+    return filteredData;
+  }, [surveyData, enabledQuestions]);
+
+  // Handle respondent selection
+  const handleRespondentSelect = (newRespondent) => {
+    if (selectedRespondent === newRespondent) {
+      setSelectedRespondent(null);
+    } else {
+      setSelectedRespondent(newRespondent);
+    }
+  };
 
   // Respondent table columns
   const respondentColumns = [
@@ -99,29 +141,35 @@ const Results = () => {
     if (!questions) return [];
     return questions.map((question, index) => ({
       questionNumber: `question_${index + 1}`,
-      questionText: question.text
+      questionText: question.text,
+      enabled: enabledQuestions[`question_${index + 1}`]
     }));
   };
 
-  const convertToEdgeList = (responses) => {
+  // Handle question toggle
+  const handleQuestionToggle = (questionNumber) => {
+    setEnabledQuestions(prev => ({
+      ...prev,
+      [questionNumber]: !prev[questionNumber]
+    }));
+    setSelectedRespondent(null);
+  };
+
+  // Handle download
+  const handleDownload = () => {
+    if (!surveyData || !surveyData.responses) return;
+
     const edges = [];
-    
-    // Iterate through each respondent
-    Object.entries(responses).forEach(([respondent, answers]) => {
-      // For each question
+    Object.entries(surveyData.responses).forEach(([respondent, answers]) => {
       Object.entries(answers).forEach(([questionId, nominees]) => {
-        // Ensure nominees is an array
-        const nomineeArray = Array.isArray(nominees) ? nominees : [nominees];
+        if (!enabledQuestions[questionId] || questionId === 'timeStamp') return;
         
-        // Skip if no nominees or undefined
+        const nomineeArray = Array.isArray(nominees) ? nominees : [nominees];
         if (!nomineeArray || nomineeArray.length === 0) return;
         
-        // For each nominee in the answer
         nomineeArray.forEach(nominee => {
-          // Skip if nominee is undefined or empty
           if (!nominee) return;
           
-          // Split nominee string to get name and email
           const [nomineeName, nomineeEmail] = nominee.split(' (');
           const cleanEmail = (nomineeEmail || '').replace(')', '');
           
@@ -133,54 +181,25 @@ const Results = () => {
         });
       });
     });
-    
-    return edges;
-  };
 
+    const csvContent = [
+      ['Source', 'Target', 'Weight'].join(','),
+      ...edges.map(edge => `${edge.source},${edge.target},${edge.weight}`)
+    ].join('\n');
 
-  const convertToCSV = (edges) => {
-    // CSV header
-    const header = ['Source', 'Target', 'Weight'];
-    
-    // Convert each edge to CSV row
-    const rows = edges.map(edge => 
-      `${edge.source},${edge.target},${edge.weight}`
-    );
-    
-    // Combine header and rows
-    return [header.join(','), ...rows].join('\n');
-  };
-
-  const handleDownload = () => {
-    if (!surveyData || !surveyData.responses) return;
-
-    // Convert responses to edge list
-    const edges = convertToEdgeList(surveyData.responses);
-    
-    // Convert edge list to CSV
-    const csvContent = convertToCSV(edges);
-    
-    // Create a blob from the CSV content
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    
-    // Create download link
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${selectedSurvey}_edge_list.csv`;
-    
-    // Trigger download
     document.body.appendChild(a);
     a.click();
-    
-    // Cleanup
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
   };
 
   return (
     <Box sx={{ p: 4 }}>
-      {/* Survey selector and download button */}
       <Box sx={{ display: 'flex', gap: 2, mb: 4 }}>
         <FormControl sx={{ flex: 1 }}>
           <InputLabel>Select Survey</InputLabel>
@@ -211,7 +230,6 @@ const Results = () => {
 
       {selectedSurvey && (
         <Box sx={{ display: 'flex', gap: 4 }}>
-          {/* Left side - Tables */}
           <Box sx={{ width: '25%', display: 'flex', flexDirection: 'column', gap: 4 }}>
             <CollapsibleSection title="Respondents">
               <Box sx={{ height: '300px', width: '100%' }}>
@@ -219,7 +237,8 @@ const Results = () => {
                   rows={respondentRows}
                   columns={respondentColumns}
                   pageSize={5}
-                  onRowClick={(params) => setSelectedRespondent(params.row.name)}
+                  onRowClick={(params) => handleRespondentSelect(params.row.name)}
+                  selectionModel={selectedRespondent ? [respondentRows.find(r => r.name === selectedRespondent)?.id] : []}
                   sx={{
                     '& .MuiDataGrid-row': {
                       cursor: 'pointer',
@@ -247,21 +266,19 @@ const Results = () => {
             </CollapsibleSection>
           </Box>
 
-          {/* Center - Network Graph */}
           <Box sx={{ flex: 1 }}>
             <CollapsibleSection title="Network Visualization">
               <Box sx={{ height: '700px', width: '100%' }}>
                 <NetworkGraph
-                  data={surveyData}
+                  data={filteredSurveyData}
                   selectedRespondent={selectedRespondent}
-                  onNodeClick={setSelectedRespondent}
+                  onNodeClick={handleRespondentSelect}
                   showAllUsers={showAllUsers}
                 />
               </Box>
             </CollapsibleSection>
           </Box>
 
-          {/* Right side - Legend and Settings */}
           <Box sx={{ width: '20%', display: 'flex', flexDirection: 'column', gap: 2 }}>
             <CollapsibleSection title="Legend">
               <Box sx={{ p: 2 }}>
@@ -275,15 +292,30 @@ const Results = () => {
                       gap: 1
                     }}
                   >
+                    <Checkbox
+                      checked={item.enabled}
+                      onChange={() => handleQuestionToggle(item.questionNumber)}
+                      sx={{ 
+                        color: d3.schemeTableau10[index],
+                        '&.Mui-checked': {
+                          color: d3.schemeTableau10[index],
+                        }
+                      }}
+                    />
                     <Box 
                       sx={{ 
                         width: 20, 
                         height: 3, 
-                        backgroundColor: d3.schemeTableau10[index],
+                        backgroundColor: item.enabled ? d3.schemeTableau10[index] : '#ccc',
                         borderRadius: 1
                       }} 
                     />
-                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                    <Typography 
+                      variant="caption" 
+                      sx={{ 
+                        color: item.enabled ? 'text.secondary' : 'text.disabled'
+                      }}
+                    >
                       {item.questionText}
                     </Typography>
                   </Box>

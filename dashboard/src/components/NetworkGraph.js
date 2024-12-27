@@ -7,11 +7,13 @@ const NetworkGraph = ({
   selectedRespondent,
   onNodeClick,
   width = 800,
-  height = 600
+  height = 600,
+  showAllUsers = false
 }) => {
   const svgRef = useRef(null);
   const [nodes, setNodes] = useState([]);
   const [links, setLinks] = useState([]);
+  const transformRef = useRef(null);
   const theme = useTheme();
   
   useEffect(() => {
@@ -20,10 +22,16 @@ const NetworkGraph = ({
     const nodesMap = new Map();
     const linksArray = [];
     
+    // Add all respondents
     Object.entries(data.responses).forEach(([respondent]) => {
-      nodesMap.set(respondent, { id: respondent, degree: 0 });
+      nodesMap.set(respondent, { 
+        id: respondent, 
+        degree: 0,
+        isRespondent: true
+      });
     });
 
+    // Add all nominations and create links
     Object.entries(data.responses).forEach(([respondent, answers]) => {
       Object.entries(answers).forEach(([question, recipients]) => {
         if (question === 'timeStamp') return;
@@ -32,7 +40,11 @@ const NetworkGraph = ({
           const recipientName = recipient.split(' (')[0];
           
           if (!nodesMap.has(recipientName)) {
-            nodesMap.set(recipientName, { id: recipientName, degree: 0 });
+            nodesMap.set(recipientName, { 
+              id: recipientName, 
+              degree: 0,
+              isRespondent: false 
+            });
           }
           
           linksArray.push({
@@ -47,12 +59,32 @@ const NetworkGraph = ({
       });
     });
 
-    setNodes(Array.from(nodesMap.values()));
+    // Add remaining users if showAllUsers is true
+    if (showAllUsers && data.users) {
+      data.users.forEach(user => {
+        if (!nodesMap.has(user.name)) {
+          nodesMap.set(user.name, { 
+            id: user.name, 
+            degree: 2,
+            isRespondent: user.isRespondent,
+            isNonParticipant: true
+          });
+        }
+      });
+    }
+
+    const filteredNodesMap = new Map(
+      Array.from(nodesMap.entries()).filter(([_, node]) => 
+        showAllUsers || !node.isNonParticipant
+      )
+    );
+
+    setNodes(Array.from(filteredNodesMap.values()));
     setLinks(linksArray);
-  }, [data]);
+  }, [data, showAllUsers]);
 
   useEffect(() => {
-    if (!nodes.length || !links.length) return;
+    if (!nodes.length) return;
 
     d3.select(svgRef.current).selectAll("*").remove();
 
@@ -60,17 +92,17 @@ const NetworkGraph = ({
       .attr("width", width)
       .attr("height", height);
 
+    const container = svg.append("g");
+
     const zoom = d3.zoom()
       .scaleExtent([0.5, 5])
       .on("zoom", (event) => {
+        transformRef.current = event.transform;
         container.attr("transform", event.transform);
       });
 
     svg.call(zoom);
 
-    const container = svg.append("g");
-
-    // Create gradient definitions
     const defs = svg.append("defs");
 
     // Create arrow markers for each possible question
@@ -79,7 +111,6 @@ const NetworkGraph = ({
       .domain(questions)
       .range(d3.schemeTableau10);
 
-    // Add arrow markers for each question color
     questions.forEach(question => {
       const color = questionColorScale(question);
       defs.append("marker")
@@ -95,7 +126,6 @@ const NetworkGraph = ({
         .attr("fill", color);
     });
 
-    // Calculate node degrees for styling
     const nodeDegrees = new Map();
     links.forEach(link => {
       nodeDegrees.set(link.source.id || link.source, (nodeDegrees.get(link.source.id || link.source) || 0) + 1);
@@ -104,10 +134,9 @@ const NetworkGraph = ({
 
     const maxDegree = Math.max(...nodeDegrees.values());
     
-    // Create scales
     const intensityScale = d3.scaleLinear()
       .domain([0, maxDegree])
-      .range([0.2, 1]);
+      .range([0.5, 1]);
 
     const colorScale = d3.scaleLinear()
       .domain([0, maxDegree])
@@ -118,9 +147,8 @@ const NetworkGraph = ({
 
     const sizeScale = d3.scaleSqrt()
       .domain([0, maxDegree])
-      .range([3, 12]);
+      .range([5, 12]);
 
-    // Create gradients for each degree
     Array.from(new Set(nodeDegrees.values())).forEach(degree => {
       const baseColor = colorScale(degree);
       const gradient = defs.append("radialGradient")
@@ -137,7 +165,6 @@ const NetworkGraph = ({
         .attr("stop-opacity", intensityScale(degree) * 0.3);
     });
 
-    // Calculate viewport boundaries with padding
     const padding = 50;
 
     const simulation = d3.forceSimulation(nodes)
@@ -161,25 +188,29 @@ const NetworkGraph = ({
       .data(nodes)
       .join("g");
 
-    // Main node circle
     nodeGroup.append("circle")
-      .attr("r", d => sizeScale(nodeDegrees.get(d.id)))
-      .style("fill", d => `url(#node-gradient-${nodeDegrees.get(d.id)})`)
+      .attr("r", d => sizeScale(nodeDegrees.get(d.id) ? nodeDegrees.get(d.id) : 0))
+      .style("fill", d => `url(#node-gradient-${nodeDegrees.get(d.id) ? nodeDegrees.get(d.id) : 1})`) 
       .style("stroke", d => colorScale(nodeDegrees.get(d.id)))
       .style("stroke-width", 0.3)
-      .style("stroke-opacity", d => intensityScale(nodeDegrees.get(d.id)) * 0.5);
+      .style("stroke-opacity", d => {
+        const baseOpacity = intensityScale(nodeDegrees.get(d.id)) * 0.5;
+        return d.isNonParticipant ? baseOpacity * 0.8 : baseOpacity;
+      })
+      .style("opacity", d => d.isNonParticipant ? 0.8 : 1);
 
-    // Outer glow
     nodeGroup.append("circle")
-      .attr("r", d => sizeScale(nodeDegrees.get(d.id)) * 1.3)
+      .attr("r", d => sizeScale(nodeDegrees.get(d.id) ? nodeDegrees.get(d.id) : 0) * 1.3)
       .style("fill", "none")
       .style("stroke", d => colorScale(nodeDegrees.get(d.id)))
       .style("stroke-width", 0.3)
-      .style("stroke-opacity", d => intensityScale(nodeDegrees.get(d.id)) * 0.2);
+      .style("stroke-opacity", d => {
+        const baseOpacity = intensityScale(nodeDegrees.get(d.id)) * 0.2;
+        return d.isNonParticipant ? baseOpacity * 0.3 : baseOpacity;
+      });
 
-    // Selection highlight circle
     nodeGroup.append("circle")
-      .attr("r", d => sizeScale(nodeDegrees.get(d.id)) * 1.5)
+      .attr("r", d => sizeScale(nodeDegrees.get(d.id) ? nodeDegrees.get(d.id) : 0) * 1.5)
       .style("fill", "none")
       .style("stroke", theme.palette.primary.main)
       .style("stroke-width", 1.2)
@@ -193,12 +224,11 @@ const NetworkGraph = ({
       .text(d => d.id)
       .attr("font-size", "8px")
       .attr("fill", theme.palette.text.primary)
-      .attr("dx", d => sizeScale(nodeDegrees.get(d.id)) + 2)
+      .attr("dx", d => sizeScale(nodeDegrees.get(d.id) ? nodeDegrees.get(d.id) : 0) + 2)
       .attr("dy", "0.35em")
       .style("pointer-events", "none")
-      .style("opacity", 0.7);
+      .style("opacity", d => d.isNonParticipant ? 0.3 : 0.7);
 
-    // Function to highlight node and its connections
     const highlightNode = (nodeId, highlight = true) => {
       nodeGroup.selectAll("circle.selection-highlight")
         .style("stroke-opacity", d => d.id === nodeId && highlight ? 0.8 : 0);
@@ -252,7 +282,6 @@ const NetworkGraph = ({
       }));
 
     simulation.on("tick", () => {
-      // Constrain nodes within viewport
       nodes.forEach(d => {
         d.x = Math.max(padding, Math.min(width - padding, d.x));
         d.y = Math.max(padding, Math.min(height - padding, d.y));
@@ -272,7 +301,14 @@ const NetworkGraph = ({
         .attr("y", d => d.y);
     });
 
-    // Handle selected respondent
+    // Apply stored transform after container is created
+    if (transformRef.current && !selectedRespondent) {
+      svg.transition()
+        .duration(300)
+        .call(zoom.transform, transformRef.current);
+    }
+
+    // Handle selected respondent zoom after container is created
     if (selectedRespondent) {
       const selectedNode = nodes.find(n => n.id === selectedRespondent);
       if (selectedNode) {
@@ -282,11 +318,15 @@ const NetworkGraph = ({
           height / 2 - scale * selectedNode.y
         ];
         
+        const newTransform = d3.zoomIdentity
+          .translate(translate[0], translate[1])
+          .scale(scale);
+        
+        transformRef.current = newTransform;
+        
         svg.transition()
           .duration(750)
-          .call(zoom.transform, d3.zoomIdentity
-            .translate(translate[0], translate[1])
-            .scale(scale));
+          .call(zoom.transform, newTransform);
 
         highlightNode(selectedRespondent);
       }

@@ -1046,7 +1046,8 @@ app.get('/api/results', async (req, res) => {
   // NEW DB CODE
   const client = await pool.connect();
   
-  const query = 'SELECT name, response FROM Respondent WHERE survey_name = $1';
+
+  const query = 'SELECT name, can_respond, response FROM Respondent WHERE survey_name = $1';
   const values = [surveyName];
   client.query(query, values)
     .then(response => {
@@ -1054,7 +1055,11 @@ app.get('/api/results', async (req, res) => {
           if (row.response === null) return combined;
           return {...combined, [row.name]: row.response};
         }, {});
-        res.status(200).json({responses});
+        const users = response.rows.map(row => {
+          return {name: row.name, isRespondent: row.can_respond}
+        });
+        console.log(users);
+        res.status(200).json({responses, users});
     })
     .catch(e => console.error(e.stack))
     .finally(() => client.release());

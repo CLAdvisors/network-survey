@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Button, Typography, Select, MenuItem, FormControl, InputLabel } from '@mui/material';
+import { Box, Button, Typography, Select, MenuItem, FormControl, InputLabel, Switch, FormControlLabel } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import NetworkGraph from './NetworkGraph';
 import api from '../api/axios';
@@ -13,6 +13,7 @@ const Results = () => {
   const [surveyData, setSurveyData] = useState(null);
   const [selectedRespondent, setSelectedRespondent] = useState(null);
   const [questions, setQuestions] = useState([]);
+  const [showAllUsers, setShowAllUsers] = useState(false);
 
   // Fetch available surveys
   useEffect(() => {
@@ -254,13 +255,14 @@ const Results = () => {
                   data={surveyData}
                   selectedRespondent={selectedRespondent}
                   onNodeClick={setSelectedRespondent}
+                  showAllUsers={showAllUsers}
                 />
               </Box>
             </CollapsibleSection>
           </Box>
 
-          {/* Right side - Legend */}
-          <Box sx={{ width: '20%' }}>
+          {/* Right side - Legend and Settings */}
+          <Box sx={{ width: '20%', display: 'flex', flexDirection: 'column', gap: 2 }}>
             <CollapsibleSection title="Legend">
               <Box sx={{ p: 2 }}>
                 {getLegendData().map((item, index) => (
@@ -286,6 +288,23 @@ const Results = () => {
                     </Typography>
                   </Box>
                 ))}
+              </Box>
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Settings">
+              <Box sx={{ p: 2 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={showAllUsers}
+                      onChange={(e) => {
+                        setSelectedRespondent(null);
+                        return setShowAllUsers(e.target.checked)
+                      }}
+                    />
+                  }
+                  label="Show all users"
+                />
               </Box>
             </CollapsibleSection>
           </Box>

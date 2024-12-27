@@ -517,6 +517,7 @@ const NetworkGraph = ({
 
     return () => simulation.stop();
   }, [
+    questions,
     data,
     nodes,
     links,

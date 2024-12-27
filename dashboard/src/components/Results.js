@@ -176,16 +176,6 @@ const Results = () => {
       .filter((row) => row.answers.length > 0);
   };
 
-  // Create legend data
-  const getLegendData = () => {
-    if (!questions) return [];
-    return questions.map((question, index) => ({
-      questionNumber: `question_${index + 1}`,
-      questionText: question.text,
-      enabled: enabledQuestions[`question_${index + 1}`],
-    }));
-  };
-
   // Handle question toggle
   const handleQuestionToggle = (questionNumber) => {
     setEnabledQuestions((prev) => ({

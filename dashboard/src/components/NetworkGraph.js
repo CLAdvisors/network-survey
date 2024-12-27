@@ -16,6 +16,9 @@ const NetworkGraph = ({
   const transformRef = useRef(null);
   const theme = useTheme();
   
+  const linkStrokeWidth = 1.5;
+  const linkStrokeWidthSelected = 2;
+
   useEffect(() => {
     if (!data || !data.responses) return;
     
@@ -36,26 +39,28 @@ const NetworkGraph = ({
       Object.entries(answers).forEach(([question, recipients]) => {
         if (question === 'timeStamp') return;
         
-        recipients.forEach(recipient => {
-          const recipientName = recipient.split(' (')[0];
-          
-          if (!nodesMap.has(recipientName)) {
-            nodesMap.set(recipientName, { 
-              id: recipientName, 
-              degree: 0,
-              isRespondent: false 
+        if (Array.isArray(recipients)) {
+          recipients.forEach(recipient => {
+            const recipientName = recipient.split(' (')[0];
+            
+            if (!nodesMap.has(recipientName)) {
+              nodesMap.set(recipientName, { 
+                id: recipientName, 
+                degree: 0,
+                isRespondent: false 
+              });
+            }
+            
+            linksArray.push({
+              source: respondent,
+              target: recipientName,
+              question
             });
-          }
-          
-          linksArray.push({
-            source: respondent,
-            target: recipientName,
-            question: question
+            
+            nodesMap.get(respondent).degree++;
+            nodesMap.get(recipientName).degree++;
           });
-          
-          nodesMap.get(respondent).degree++;
-          nodesMap.get(recipientName).degree++;
-        });
+        }
       });
     });
 
@@ -180,8 +185,8 @@ const NetworkGraph = ({
       .data(links)
       .join("line")
       .style("stroke", d => questionColorScale(d.question))
-      .style("stroke-width", 0.4)
-      .style("opacity", 0.2);
+      .style("stroke-width", linkStrokeWidth)
+      .style("opacity", 0.5);
 
     const nodeGroup = container.append("g")
       .selectAll("g")
@@ -235,12 +240,12 @@ const NetworkGraph = ({
 
       link
         .style("opacity", l => {
-          if (!highlight) return 0.2;
-          return (l.source.id === nodeId || l.target.id === nodeId) ? 0.8 : 0.1;
+          if (!highlight) return l;
+          return (l.source.id === nodeId || l.target.id === nodeId) ? 0.8 : 0.5;
         })
         .style("stroke-width", l => {
-          if (!highlight) return 0.4;
-          return (l.source.id === nodeId || l.target.id === nodeId) ? 0.8 : 0.4;
+          if (!highlight) return linkStrokeWidth;
+          return (l.source.id === nodeId || l.target.id === nodeId) ? linkStrokeWidthSelected : linkStrokeWidth;
         })
         .attr("marker-end", l => {
           if (!highlight) return null;
@@ -301,14 +306,12 @@ const NetworkGraph = ({
         .attr("y", d => d.y);
     });
 
-    // Apply stored transform after container is created
     if (transformRef.current && !selectedRespondent) {
       svg.transition()
         .duration(300)
         .call(zoom.transform, transformRef.current);
     }
 
-    // Handle selected respondent zoom after container is created
     if (selectedRespondent) {
       const selectedNode = nodes.find(n => n.id === selectedRespondent);
       if (selectedNode) {

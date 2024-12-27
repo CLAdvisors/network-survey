@@ -610,6 +610,8 @@ app.post('/api/survey', express.json(), (req, res) => {
   insertSurvey(surveyName, '')
   .catch(error => console.error(error))
   .then(() => {res.status(200).json({ message: 'Survey created successfully!' });});
+
+  insertUsers([{userName: 'None', email: 'N/A', surveyName: surveyName, canRespond: false, language: 'English'}])
 });
 
 app.post('/api/testEmail', express.json(), (req, res) => {
@@ -1108,7 +1110,7 @@ GROUP BY
       const surveys = result.rows.map((row, index) => ({
         id: index + 1,
         name: row.name,
-        respondents: row.number_of_respondents + "",
+        respondents: row.number_of_respondents - 1 + "",
         questions: row.number_of_questions + "",
         date: row.creation_date,
       }));

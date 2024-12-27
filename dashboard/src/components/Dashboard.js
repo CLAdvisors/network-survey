@@ -52,7 +52,12 @@ const Dashboard = () => {
         const respondentResponse = await api.get(
           `/targets?surveyName=${selectSurvey.name}`
         );
-        setRespondentData(respondentResponse.data);
+
+        // Remove dummy user with name 'None'
+        const filteredRespondents = respondentResponse.data.filter(
+          (respondent) => respondent.name !== "None"
+        );
+        setRespondentData(filteredRespondents);
 
         // Fetch question data
         const questionResponse = await api.get(

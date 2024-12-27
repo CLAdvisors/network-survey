@@ -82,18 +82,18 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       field: 'canRespond',
       headerName: 'Can Respond',
       width: 120,
-      editable: true,
+      editable: false, // Changed from true to false
       type: 'boolean',
       renderCell: (params) => (
         <Switch
           checked={params.value}
           onChange={(e) => {
             e.stopPropagation();
-            params.api.setEditCellValue({
-              id: params.id,
-              field: 'canRespond',
-              value: e.target.checked
-            }, e);
+            const newValue = e.target.checked;
+            // Update the row directly
+            const updatedRow = { ...params.row, canRespond: newValue };
+            params.api.updateRows([{ id: params.id, canRespond: newValue }]);
+            handleProcessRowUpdate(updatedRow);
           }}
         />
       )

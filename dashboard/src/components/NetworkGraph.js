@@ -497,10 +497,19 @@ const NetworkGraph = ({
     if (selectedRespondent) {
       const selectedNode = nodes.find((n) => n.id === selectedRespondent);
       if (selectedNode) {
+        // Get the actual SVG dimensions based on the container
+        const svgElement = svg.node();
+        const svgRect = svgElement.getBoundingClientRect();
+        const realWidth = svgRect.width;
+        const realHeight = svgRect.height;
+
+        // Calculate the scale based on the viewport size
         const scale = 2;
+        
+        // Calculate the translation needed to center the node in the actual viewport
         const translate = [
-          width / 2 - scale * selectedNode.x,
-          height / 2 - scale * selectedNode.y,
+          realWidth / 2 - scale * selectedNode.x,
+          realHeight / 2 - scale * selectedNode.y,
         ];
 
         const newTransform = d3.zoomIdentity

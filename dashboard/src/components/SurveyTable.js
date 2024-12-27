@@ -3,7 +3,7 @@ import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import MenuCell from './SurveyTableMenuCell';
 
 const columns = [
-  { field: 'id', headerName: 'ID', width: 90 },
+  { field: 'id', headerName: 'ID', width: 90, hidden: true },
   { field: 'name', headerName: 'Survey Name', width: 150 },
   { field: 'respondents', headerName: 'Respondents', width: 200 },
   { field: 'questions', headerName: 'Questions', width: 200 },
@@ -42,7 +42,14 @@ const SurveyTable = ({ rows, selectRow, onSurveyDeleted, selectedSurvey }) => {
         rows={tableRows}
         columns={columns}
         initialState={{
-          pagination: { paginationModel: { pageSize: 10 } }
+          pagination: { paginationModel: { pageSize: 10 } },
+          columns: {
+            columnVisibilityModel: {
+              // Hide columns id and lastname.
+              // Other columns will remain visible
+              id: false,
+            },
+          }
         }}
         pageSizeOptions={[5, 10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick

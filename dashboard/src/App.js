@@ -15,9 +15,12 @@ import { useTheme } from '@mui/material/styles';
 import { useAuth } from './context/AuthContext';
 import { Box, CircularProgress } from '@mui/material';
 import { NetworkProvider } from './context/NetworkContext';
+import SurveyEditor from './components/SurveyEditor'; // Import the SurveyEditor component
+import EditIcon from '@mui/icons-material/Edit'; // Import an icon for the editor
 
 const NAVIGATION = [
   { segment: '', title: 'Dashboard', icon: <DashboardIcon style={{ color: 'primary.main' }} /> },
+  { segment: 'editor', title: 'Survey Editor', icon: <EditIcon style={{ color: 'primary.main' }} /> },
   { segment: 'results', title: 'Results', icon: <TimelineIcon style={{ color: 'primary.main' }} /> },
   { segment: 'settings', title: 'Settings', icon: <SettingsIcon style={{ color: 'primary.main' }} /> },
 ];
@@ -95,6 +98,7 @@ const AppContent = () => {
             <Route path="/" element={<Dashboard />} />
             <Route path="/results" element={<Results />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/editor" element={<SurveyEditor />} /> {/* Add route for SurveyEditor */}
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </DashboardLayout>

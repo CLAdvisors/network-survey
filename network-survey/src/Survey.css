@@ -191,3 +191,30 @@
   margin-top: 8px;
   text-align: right;
 }
+
+/* Radiogroup and Checkbox styling */
+.sv-radio--checked .sv-radio__decor, .sv-checkbox--checked .sv-checkbox__decor {
+  background: #42B4AF !important;
+  border-color: #42B4AF !important;
+}
+.sv-radio__decor, .sv-checkbox__decor {
+  border: 2px solid #E8E8E8;
+  background: white;
+  transition: border-color 0.2s, background 0.2s;
+}
+.sv-radio:hover .sv-radio__decor, .sv-checkbox:hover .sv-checkbox__decor {
+  border-color: #42B4AF;
+}
+.sv-radio__svg, .sv-checkbox__svg {
+  fill: #42B4AF;
+}
+
+/* Matrix and Rating styling */
+.sv-matrix__cell--selected, .sv-rating__item--selected, .sv-rating__item--hover {
+  background: #42B4AF !important;
+  color: white !important;
+  border-radius: 4px;
+}
+.sv-matrix__cell, .sv-rating__item {
+  transition: background 0.2s, color 0.2s;
+}

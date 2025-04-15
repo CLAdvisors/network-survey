@@ -14,3 +14,5 @@ dashboard/.env.production
 api/.env.prod
 network-survey/.env.production
 *.pem
+.vscode
+.vscode/*

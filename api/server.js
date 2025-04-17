@@ -892,15 +892,24 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   const data  = req.body;
   const surveyQuestions = data.questions;
   const surveyName = data.surveyName;
-  // move to another endpoint
-  const surveyData = csvToJson(surveyQuestions);
 
-  // NEW DB CODE
-  insertQuestions(surveyName, surveyData.title, surveyData.questions);
+  // Debug logging
+  console.log('updateQuestions typeof:', typeof surveyQuestions);
+  console.log('updateQuestions value:', JSON.stringify(surveyQuestions));
 
-  //TODO add proper repsonse handling
+  let surveyData;
+  if (typeof surveyQuestions === 'string') {
+    // CSV format
+    surveyData = csvToJson(surveyQuestions);
+    insertQuestions(surveyName, surveyData.title, surveyData.questions);
+  } else if (typeof surveyQuestions === 'object' && surveyQuestions !== null) {
+    // JSON format (SurveyJS)
+    insertQuestions(surveyName, '', surveyQuestions);
+  } else {
+    return res.status(400).json({ message: 'Invalid questions format.' });
+  }
+
   res.status(200).json({ message: 'Questions created successfully.' });
-  
 });
 
 // PUT API endpoint for answer submission

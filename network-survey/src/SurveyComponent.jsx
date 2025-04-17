@@ -1,8 +1,27 @@
 import React from "react";
-import { Model } from "survey-core";
+import ReactDOM from "react-dom/client";
+import { Model, Serializer, Question } from "survey-core";
 import { Survey } from "survey-react-ui";
 import "survey-core/defaultV2.min.css";
 import "./survey.css";
+import DraggableRankingQuestion from "./DraggableRankingQuestion";
+
+// Define a custom Question class for draggableranking
+class QuestionDraggableRankingModel extends Question {
+  getType() {
+    return "draggableranking";
+  }
+}
+
+// Register custom question type for SurveyJS
+Serializer.addClass(
+  "draggableranking",
+  [
+    { name: "options:itemvalues", default: [] }
+  ],
+  function () { return new QuestionDraggableRankingModel(""); },
+  "question"
+);
 
 function SurveyComponent({setTitle}) {
     const [json, setJson] = React.useState(null);
@@ -46,6 +65,22 @@ function SurveyComponent({setTitle}) {
       newSurvey.onChoicesLazyLoad.add((_, options) => {
         const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}&userId=${userId}`;
         sendRequest(url, (data) => { options.setItems(data.names, data.total); });
+      });
+
+      // Custom rendering for draggableranking
+      newSurvey.onAfterRenderQuestion.add((survey, options) => {
+        if (options.question.getType() === "draggableranking") {
+          const container = document.createElement("div");
+          options.htmlElement.innerHTML = "";
+          options.htmlElement.appendChild(container);
+          ReactDOM.createRoot(container).render(
+            <DraggableRankingQuestion
+              question={options.question}
+              value={options.question.value || []}
+              onChange={val => options.question.value = val}
+            />
+          );
+        }
       });
 
       setSurvey(newSurvey);

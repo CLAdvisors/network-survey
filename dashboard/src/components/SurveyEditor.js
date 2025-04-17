@@ -4,6 +4,32 @@ import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 import { Box, Autocomplete, TextField, Button, CircularProgress } from '@mui/material';
 import api from '../api/axios';
+import { Serializer, Question } from 'survey-core';
+import { ReactQuestionFactory } from 'survey-react-ui';
+import DraggableRankingQuestion from './DraggableRankingQuestion';
+
+// Define and register custom question class for draggableranking
+class QuestionDraggableRankingModel extends Question {
+  getType() {
+    return 'draggableranking';
+  }
+}
+Serializer.addClass(
+  'draggableranking',
+  [{ name: 'choices:itemvalues', default: [] }],
+  () => new QuestionDraggableRankingModel(''),
+  'question'
+);
+// Assign an iconName so the custom type has an icon in the toolbox
+Serializer.addProperty('draggableranking', { name: 'iconName', default: 'icon-tagbox' });
+// Register React component for editor preview
+ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
+  <DraggableRankingQuestion
+    question={props.question}
+    value={props.question.value || []}
+    onChange={val => props.question.value = val}
+  />
+));
 
 const SurveyEditor = () => {
   const [surveys, setSurveys] = useState([]);
@@ -34,14 +60,27 @@ const SurveyEditor = () => {
     showLogicTab: false,
     showJSONEditorTab: false,
     isAutoSave: false,
-    showPagesPanel: false, // Hide the pages panel
-    pageEditMode: 'single', // Only allow a single page (prevents adding pages)
-    questionTypes: [
-      // Optionally, restrict question types if needed
-    ],
+    showPagesPanel: false,
+    pageEditMode: 'single',
+    // Use default questionTypes, we’ll add our custom item manually
   };
   if (!creatorRef.current) {
     creatorRef.current = new SurveyCreator(creatorOptions);
+    // Add custom draggable-ranking question with a JSON template
+    creatorRef.current.toolbox.addItem({
+      name: 'draggableranking',
+      iconName: 'icon-tagbox',
+      title: 'Draggable Ranking',
+      json: {
+        type: 'draggableranking',
+        name: 'draggableranking1',
+        title: 'Draggable Ranking',
+        choices: [
+          { value: 'item1', text: 'Item 1' },
+          { value: 'item2', text: 'Item 2' }
+        ]
+      }
+    });
   }
   const creator = creatorRef.current;
 

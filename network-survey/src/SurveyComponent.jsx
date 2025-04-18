@@ -1,27 +1,31 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { Model, Serializer, Question } from "survey-core";
+import { Model, Serializer, QuestionSelectBase } from "survey-core";
 import { Survey } from "survey-react-ui";
 import "survey-core/defaultV2.min.css";
 import "./survey.css";
 import DraggableRankingQuestion from "./DraggableRankingQuestion";
 
 // Define a custom Question class for draggableranking
-class QuestionDraggableRankingModel extends Question {
+class QuestionDraggableRankingModel extends QuestionSelectBase {
+  constructor(name) {
+    super(name);
+  }
   getType() {
     return "draggableranking";
   }
 }
 
-// Register custom question type for SurveyJS
+// Register draggableranking as a checkbox-based question to inherit choices
 Serializer.addClass(
   "draggableranking",
-  [
-    { name: "options:itemvalues", default: [] }
-  ],
-  function () { return new QuestionDraggableRankingModel(""); },
-  "question"
+  [],
+  () => new QuestionDraggableRankingModel(""),
+  "checkbox"
 );
+
+// Assign optional iconName
+Serializer.addProperty('draggableranking', { name: 'iconName', default: 'icon-tagbox' });
 
 function SurveyComponent({setTitle}) {
     const [json, setJson] = React.useState(null);

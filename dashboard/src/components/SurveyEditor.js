@@ -4,21 +4,22 @@ import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 import { Box, Autocomplete, TextField, Button, CircularProgress } from '@mui/material';
 import api from '../api/axios';
-import { Serializer, Question } from 'survey-core';
+import { Serializer, QuestionSelectBase } from 'survey-core';
 import { ReactQuestionFactory } from 'survey-react-ui';
 import DraggableRankingQuestion from './DraggableRankingQuestion';
 
 // Define and register custom question class for draggableranking
-class QuestionDraggableRankingModel extends Question {
+class QuestionDraggableRankingModel extends QuestionSelectBase {
   getType() {
     return 'draggableranking';
   }
 }
+// Register draggableranking as a checkbox-based question with native choices property
 Serializer.addClass(
   'draggableranking',
-  [{ name: 'choices:itemvalues', default: [] }],
+  [],
   () => new QuestionDraggableRankingModel(''),
-  'question'
+  'checkbox'
 );
 // Assign an iconName so the custom type has an icon in the toolbox
 Serializer.addProperty('draggableranking', { name: 'iconName', default: 'icon-tagbox' });

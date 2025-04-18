@@ -26,16 +26,16 @@ function Item({ item, provided, snapshot }) {
 
 export default function DraggableRankingQuestion({ question, value, onChange }) {
   const [ranked, setRanked] = React.useState(value || []);
-  const [available, setAvailable] = React.useState(question.options || []);
+  const [available, setAvailable] = React.useState(question.choices || []);
 
   React.useEffect(() => {
     const initialRanked = value || [];
-    const initialAvailable = (question.options || []).filter(
+    const initialAvailable = (question.choices || []).filter(
       (opt) => !initialRanked.some((r) => r.value === opt.value)
     );
     setRanked(initialRanked);
     setAvailable(initialAvailable);
-  }, [question.options, value]);
+  }, [question.choices, value]);
 
   const handleDragEnd = (result) => {
     const { source, destination } = result;

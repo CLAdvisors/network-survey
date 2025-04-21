@@ -2,8 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { Model, Serializer, Question } from "survey-core";
 import { Survey } from "survey-react-ui";
+import { Alert, useTheme } from '@mui/material';
 import "survey-core/defaultV2.min.css";
-import "./survey.css";
+import "./Survey.css";
 import DraggableRankingQuestion from "./DraggableRankingQuestion";
 
 // Define a custom Question class for draggableranking
@@ -24,11 +25,23 @@ Serializer.addClass(
 );
 
 function SurveyComponent({setTitle}) {
+    const theme = useTheme();
     const [json, setJson] = React.useState(null);
     const [survey, setSurvey] = React.useState(null);
+    const [hasResponse, setHasResponse] = React.useState(false);
     const searchParams = new URLSearchParams(window.location.search);
     const userId = searchParams.get("userId"); 
     const surveyName = searchParams.get("surveyName"); 
+
+    React.useEffect(() => {
+      if (!userId) return;
+      if (userId === 'demo') {
+        setHasResponse(true);
+        return;
+      }
+      const statusUrl = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user/status?userId=${userId}`;
+      sendRequest(statusUrl, data => setHasResponse(data.hasResponse));
+    }, [userId]);
 
     React.useEffect(() => {
       if (!userId || !surveyName) return;
@@ -131,6 +144,20 @@ function SurveyComponent({setTitle}) {
 
     return (
       <div className="modern-survey-container">
+        {hasResponse && (
+          <Alert
+            severity="info"
+            variant="outlined"
+            sx={{
+              mb: 2,
+              borderColor: '#31C9A6',
+              color: theme.palette.text.primary,
+              '& .MuiAlert-icon': { color: '#31C9A6' }
+            }}
+          >
+            You have already completed this survey. Resubmit to change your answers.
+          </Alert>
+        )}
         <Survey model={survey} />
       </div>
     );

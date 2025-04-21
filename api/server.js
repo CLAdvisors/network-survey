@@ -1184,6 +1184,25 @@ GROUP BY
 
 });
 
+// GET API endpoint for checking if a user has a prior response
+app.get('/api/user/status', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ message: 'User ID is required.' });
+  }
+  const client = await pool.connect();
+  try {
+    const query = `SELECT response IS NOT NULL AS has_response FROM Respondent WHERE uuid = $1`;
+    const result = await client.query(query, [userId]);
+    const hasResponse = result.rows.length > 0 ? result.rows[0].has_response : false;
+    res.status(200).json({ hasResponse });
+  } catch (error) {
+    console.error('Error checking user status:', error);
+    res.status(500).json({ message: 'Failed to check user status.' });
+  } finally {
+    client.release();
+  }
+});
 
 // Delete survey endpoint
 app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {

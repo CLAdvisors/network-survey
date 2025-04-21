@@ -4,23 +4,25 @@ import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 import { Box, Autocomplete, TextField, Button, CircularProgress } from '@mui/material';
 import api from '../api/axios';
-import { Serializer, QuestionSelectBase } from 'survey-core';
+import { Serializer, Question } from 'survey-core';
 import { ReactQuestionFactory } from 'survey-react-ui';
 import DraggableRankingQuestion from './DraggableRankingQuestion';
 
 // Define and register custom question class for draggableranking
-class QuestionDraggableRankingModel extends QuestionSelectBase {
+class QuestionDraggableRankingModel extends Question {
   getType() {
     return 'draggableranking';
   }
 }
-// Register draggableranking as a checkbox-based question with native choices property
+// Register class without inline properties, then define choices property correctly
 Serializer.addClass(
   'draggableranking',
   [],
   () => new QuestionDraggableRankingModel(''),
-  'checkbox'
+  'question'
 );
+// Register choices property with correct type and category for SurveyJS property panel
+Serializer.addProperty('draggableranking', { name: 'choices:itemvalue[]', default: [], category: 'choices' });
 // Assign an iconName so the custom type has an icon in the toolbox
 Serializer.addProperty('draggableranking', { name: 'iconName', default: 'icon-tagbox' });
 // Register React component for editor preview

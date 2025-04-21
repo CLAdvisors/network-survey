@@ -37,6 +37,25 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
     setAvailable(initialAvailable);
   }, [question.choices, value]);
 
+  // Listen for changes to each choice’s text property and re-render
+  React.useEffect(() => {
+    const handlers = [];
+    (question.choices || []).forEach(choice => {
+      const h = (sender, options) => {
+        if (options.name === 'text') {
+          // re-trigger render with updated labels
+          setRanked(prev => [...prev]);
+          setAvailable(prev => [...prev]);
+        }
+      };
+      choice.onPropertyChanged.add(h);
+      handlers.push({ choice, h });
+    });
+    return () => {
+      handlers.forEach(({ choice, h }) => choice.onPropertyChanged.remove(h));
+    };
+  }, [question.choices]);
+
   const handleDragEnd = (result) => {
     const { source, destination } = result;
     if (!destination) return;

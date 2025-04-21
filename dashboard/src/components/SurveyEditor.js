@@ -34,6 +34,11 @@ ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
   />
 ));
 
+// Hide survey title, description, and image from the property panel
+Serializer.removeProperty('survey', 'title');
+Serializer.removeProperty('survey', 'description');
+Serializer.removeProperty('survey', 'logo');
+
 const SurveyEditor = () => {
   const [surveys, setSurveys] = useState([]);
   const [selectedSurvey, setSelectedSurvey] = useState(null);
@@ -65,6 +70,9 @@ const SurveyEditor = () => {
     isAutoSave: false,
     showPagesPanel: false,
     pageEditMode: 'single',
+    showTitle: false, // hide survey title in editor
+    showDescription: false,  // hide survey description in editor
+    showLogo: false,         // hide survey image/logo in editor
     // Use default questionTypes, we’ll add our custom item manually
   };
   if (!creatorRef.current) {

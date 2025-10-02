@@ -142,7 +142,7 @@ resource "aws_route_table_association" "db_subnet_2" {
 resource "aws_db_instance" "postgres" {
   allocated_storage      = 20
   engine                 = "postgres"
-  engine_version         = "15.10"            # Use a compatible version
+  engine_version         = "15.12"            # Use a compatible version
   instance_class         = "db.t3.micro"     # Use a compatible instance class
   db_name                = "ONA"
   username               = var.db_user

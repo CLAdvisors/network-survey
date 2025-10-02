@@ -36,9 +36,9 @@ cd api
 npm install
 
 # Start the service with PM2
-pm2 start server.js --name my-service --env prod
-pm2 startup
-pm2 save
+sudo -u ubuntu -H bash -lc 'cd /opt/service/api && export NODE_ENV=prod && pm2 start server.js --name my-service --env prod'
+sudo -u ubuntu -H bash -lc 'pm2 save'
+sudo -u ubuntu -H bash -lc 'pm2 status'
 
 # Enable firewall and allow specific ports (optional)
 sudo ufw allow 22       # SSH

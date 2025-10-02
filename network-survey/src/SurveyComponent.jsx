@@ -7,6 +7,8 @@ import "survey-core/defaultV2.min.css";
 import "./Survey.css";
 import DraggableRankingQuestion from "./DraggableRankingQuestion";
 
+const draggableQuestionRoots = new WeakMap();
+
 // Define a custom Question class for draggableranking
 class QuestionDraggableRankingModel extends Question {
   getType() {
@@ -82,18 +84,38 @@ function SurveyComponent({setTitle}) {
 
       // Custom rendering for draggableranking
       newSurvey.onAfterRenderQuestion.add((survey, options) => {
-        if (options.question.getType() === "draggableranking") {
-          const container = document.createElement("div");
-          options.htmlElement.innerHTML = "";
-          options.htmlElement.appendChild(container);
-          ReactDOM.createRoot(container).render(
-            <DraggableRankingQuestion
-              question={options.question}
-              value={options.question.value || []}
-              onChange={val => options.question.value = val}
-            />
-          );
+        if (options.question.getType() !== "draggableranking") {
+          return;
         }
+
+        const contentElement =
+          options.htmlElement.querySelector(".sd-question__content") ||
+          options.htmlElement;
+
+        const previousRoot = draggableQuestionRoots.get(options.question);
+        if (previousRoot) {
+          previousRoot.unmount();
+          draggableQuestionRoots.delete(options.question);
+        }
+
+        const container = document.createElement("div");
+        container.className = "draggable-ranking-host";
+        contentElement.innerHTML = "";
+        contentElement.appendChild(container);
+
+        if (!options.question.title && options.question.name) {
+          options.question.title = options.question.name;
+        }
+
+        const root = ReactDOM.createRoot(container);
+        draggableQuestionRoots.set(options.question, root);
+        root.render(
+          <DraggableRankingQuestion
+            question={options.question}
+            value={options.question.value || []}
+            onChange={(val) => (options.question.value = val)}
+          />
+        );
       });
 
       setSurvey(newSurvey);

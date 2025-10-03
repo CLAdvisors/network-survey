@@ -23,6 +23,13 @@ Serializer.addClass(
 );
 // Register choices property with correct type and category for SurveyJS property panel
 Serializer.addProperty('draggableranking', { name: 'choices:itemvalue[]', default: [], category: 'choices' });
+Serializer.addProperty('draggableranking', {
+  name: 'maxSelectedChoices:number',
+  default: 0,
+  minValue: 0,
+  category: 'choices',
+  displayName: 'Max ranked items'
+});
 // Assign an iconName so the custom type has an icon in the toolbox
 Serializer.addProperty('draggableranking', { name: 'iconName', default: 'icon-tagbox' });
 // Register React component for editor preview

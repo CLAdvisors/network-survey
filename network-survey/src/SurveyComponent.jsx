@@ -20,7 +20,8 @@ class QuestionDraggableRankingModel extends Question {
 Serializer.addClass(
   "draggableranking",
   [
-    { name: "choices:itemvalues", default: [] }
+    { name: "choices:itemvalues", default: [] },
+    { name: "maxSelectedChoices:number", default: 0, minValue: 0, displayName: "Max ranked items" }
   ],
   () => new QuestionDraggableRankingModel(""),
   "question"

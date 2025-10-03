@@ -80,7 +80,13 @@ function SurveyComponent({setTitle}) {
 
       newSurvey.onChoicesLazyLoad.add((_, options) => {
         const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}&userId=${userId}`;
-        sendRequest(url, (data) => { options.setItems(data.names, data.total); });
+        sendRequest(url, (data) => {
+          const names = Array.isArray(data?.names) ? data.names : [];
+          const totalRaw = Number(data?.total);
+          const total = Number.isFinite(totalRaw) && totalRaw >= 0 ? totalRaw : names.length;
+          const items = names.map((entry) => ({ value: entry, text: entry }));
+          options.setItems(items, total);
+        });
       });
 
       // Custom rendering for draggableranking

@@ -936,7 +936,7 @@ app.get('/api/names', async (req, res) => {
   try {
     // Modified query to exclude the current user based on UUID
     const query = `
-      SELECT r.name, r.contact_info
+      SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
       JOIN Survey s ON r.survey_name = s.name
       WHERE s.name = $1
@@ -954,9 +954,11 @@ app.get('/api/names', async (req, res) => {
       `${user.name} (${user.contact_info})`
     );
 
+    const total = result.rows.length > 0 ? Number(result.rows[0].total_count) : 0;
+
     res.status(200).json({
       names: filteredNames,
-      total: filteredNames.length
+      total: Number.isFinite(total) && total >= 0 ? total : filteredNames.length
     });
 
   } catch (error) {

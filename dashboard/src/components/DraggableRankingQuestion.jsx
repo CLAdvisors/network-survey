@@ -74,7 +74,8 @@ function Item({ item, provided, snapshot }) {
       style={{
         userSelect: "none",
         padding: 8,
-        margin: "0 8px 8px 0",
+        margin: "0 0 8px 0",
+        width: "100%",
         background: snapshot.isDragging ? "#e0f7fa" : "#fafafa",
         border: "1px solid #b2ebf2",
         borderRadius: 4,
@@ -199,7 +200,7 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
           <strong>Ranked (drag items here to rank):</strong>
           <Droppable
             droppableId="ranked"
-            direction="horizontal"
+                direction="vertical"
             isDropDisabled={isLimitReached}
           >
             {(provided, snapshot) => (
@@ -207,7 +208,7 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                 ref={provided.innerRef}
                 {...provided.droppableProps}
                 style={{
-                  minHeight: 60,
+                      minHeight: 60,
                   border: snapshot.isDraggingOver
                     ? "2px solid #42B4AF"
                     : isLimitReached
@@ -220,8 +221,9 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                     : isLimitReached
                     ? "#fff5f5"
                     : undefined,
-                  display: "flex",
-                  flexWrap: "wrap"
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8
                 }}
               >
                 {ranked.length === 0 && (

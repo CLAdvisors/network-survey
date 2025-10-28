@@ -571,15 +571,25 @@ function csvToJson(csvString, title) {
         skipEmptyLines: true,
     });
 
-    // Add question name validation/correction logic
+    // Ensure each row has a unique question name; preserve provided, generate if missing
+    const used = new Set();
     result.data.forEach((item, index) => {
-      item['Question name'] = `question_${index + 1}`;
+      let raw = (item['Question name'] || '').toString().trim();
+      if (!raw) {
+        raw = `q_${nanoid(8)}`;
+      }
+      let candidate = raw;
+      while (used.has(candidate)) {
+        candidate = `${raw}_${nanoid(4)}`;
+      }
+      item['Question name'] = candidate;
+      used.add(candidate);
     });
 
     // Iterate through each parsed data and create the corresponding question object
     result.data.forEach(item => {
       console.log(item);
-        let questionObject = {
+    let questionObject = {
             "type": item['Question type'],
             "name": item['Question name'],
             "title": item['Question title'],
@@ -888,6 +898,35 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
 });
 
 // PUT API endpoint for uploading a json file of questions
+// Helper: ensure every question has a unique, stable name
+function normalizeQuestionNames(json) {
+  try {
+    if (!json || typeof json !== 'object') return { elements: [] };
+    const elements = Array.isArray(json.elements) ? json.elements : [];
+    const used = new Set();
+    const safe = elements.map((el, idx) => {
+      const copy = { ...el };
+      let raw = typeof copy.name === 'string' ? copy.name.trim() : '';
+      if (!raw) {
+        // generate stable-ish id; leave true stability to persisted DB
+        raw = `q_${nanoid(8)}`;
+      }
+      // Ensure uniqueness
+      let candidate = raw;
+      while (used.has(candidate)) {
+        candidate = `${raw}_${nanoid(4)}`;
+      }
+      copy.name = candidate;
+      used.add(candidate);
+      return copy;
+    });
+    return { elements: safe };
+  } catch (e) {
+    console.error('normalizeQuestionNames failed:', e);
+    return { elements: Array.isArray(json?.elements) ? json.elements : [] };
+  }
+}
+
 app.post('/api/updateQuestions', express.json(), (req, res) => {
   const data  = req.body;
   const surveyQuestions = data.questions;
@@ -901,10 +940,12 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   if (typeof surveyQuestions === 'string') {
     // CSV format
     surveyData = csvToJson(surveyQuestions);
+    // csvToJson already assigns names like question_{i}
     insertQuestions(surveyName, surveyData.title, surveyData.questions);
   } else if (typeof surveyQuestions === 'object' && surveyQuestions !== null) {
     // JSON format (SurveyJS)
-    insertQuestions(surveyName, '', surveyQuestions);
+    const normalized = normalizeQuestionNames(surveyQuestions);
+    insertQuestions(surveyName, '', normalized);
   } else {
     return res.status(400).json({ message: 'Invalid questions format.' });
   }
@@ -995,13 +1036,21 @@ app.get('/api/listQuestions', async (req, res) => {
   // Query the database for json question data
   client.query(query, values)
     .then(result => {
-      const questions = result.rows[0]?.questions?.elements?.map((q, index) => ({
-        id: q.name.replace('question_', ''),
-        text: q.title,
-        type: q.type,
-        required: q.isRequired,
-        max: q.maxSelectedChoices ? q.maxSelectedChoices : null,
-      })) || [];
+      const elements = result.rows[0]?.questions?.elements || [];
+      const questions = elements.map((q, index) => {
+        const rawName = typeof q?.name === 'string' ? q.name.trim() : '';
+        const safeName = rawName || `q_${index + 1}`; // fallback so UI doesn’t crash; persisted on next save
+        const title = typeof q?.title === 'string' ? q.title : (safeName || `Question ${index + 1}`);
+        return {
+          id: String(index + 1), // keep legacy id non-breaking
+          name: safeName, // canonical key
+          text: title,
+          type: q?.type,
+          required: q?.isRequired === true,
+          max: q?.maxSelectedChoices ? q.maxSelectedChoices : null,
+          order: index + 1,
+        };
+      });
       res.status(200).json({ questions });
     })
     .catch(error => {

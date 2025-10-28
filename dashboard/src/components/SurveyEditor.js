@@ -483,6 +483,24 @@ const SurveyEditor = () => {
     }
   }, [creator]);
 
+  const ensureUniqueQuestionNames = useCallback((elements) => {
+    if (!Array.isArray(elements)) return [];
+    const used = new Set();
+    const genId = () => `q_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    return elements.map((el) => {
+      const copy = { ...el };
+      let raw = typeof copy.name === 'string' ? copy.name.trim() : '';
+      if (!raw) raw = genId();
+      let name = raw;
+      while (used.has(name)) {
+        name = `${raw}_${Math.random().toString(36).slice(2, 4)}`;
+      }
+      copy.name = name;
+      used.add(name);
+      return copy;
+    });
+  }, []);
+
   useEffect(() => {
     if (!creator || !creator.onSurveyInstanceCreated) {
       return;
@@ -563,9 +581,10 @@ const SurveyEditor = () => {
     setSaving(true);
     try {
       const questions = buildNormalizedSurveySchema();
+      const withNames = { elements: ensureUniqueQuestionNames(questions.elements) };
       await api.post('/updateQuestions', {
         surveyName: selectedSurvey,
-        questions
+        questions: withNames
       });
     } catch (err) {
       // Optionally show error

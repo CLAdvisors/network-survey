@@ -43,7 +43,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
     try {
       const response = await api.delete('/question', {
         data: {
-          questionName: `question_${row.id}`,
+          questionName: row.name, // use canonical stable name
           surveyName: surveyName
         }
       });
@@ -155,7 +155,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
     sortedRows.forEach((row, index) => {
       const csvRow = [
         index === 0 ? 'Survey Title' : '', // Title only on first row
-        `question_${index + 1}`,
+        row.name ? row.name : `question_${index + 1}`,
         `"${row.text}"`, // Wrap text in quotes to handle commas
         row.type,
         row.max || ''

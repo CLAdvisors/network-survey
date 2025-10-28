@@ -52,13 +52,14 @@ const Results = () => {
           api.get(`/results?surveyName=${selectedSurvey}`),
           api.get(`/listQuestions?surveyName=${selectedSurvey}`),
         ]);
-        setSurveyData(resultsResponse.data);
-        setQuestions(questionsResponse.data.questions);
+  setSurveyData(resultsResponse.data);
+  setQuestions(questionsResponse.data.questions);
 
         // Initialize all questions as enabled
         const initialQuestionStates = {};
-        questionsResponse.data.questions.forEach((question, index) => {
-          const questionKey = `question_${index + 1}`;
+        // Use canonical stable keys from API (question.name)
+        questionsResponse.data.questions.forEach((question) => {
+          const questionKey = question.name || `question_${question.id}`;
           initialQuestionStates[questionKey] = true;
         });
         setEnabledQuestions(initialQuestionStates);
@@ -66,7 +67,7 @@ const Results = () => {
         // Initialize legend data
         setLegendData(
           questionsResponse.data.questions.map((question, index) => ({
-            questionNumber: `question_${index + 1}`,
+            questionNumber: question.name || `question_${question.id}`,
             questionText: question.text,
             enabled: true,
           }))
@@ -85,9 +86,9 @@ const Results = () => {
     if (questions.length > 0) {
       setLegendData(
         questions.map((question, index) => ({
-          questionNumber: `question_${index + 1}`,
+          questionNumber: question.name || `question_${question.id}`,
           questionText: question.text,
-          enabled: enabledQuestions[`question_${index + 1}`] || false,
+          enabled: enabledQuestions[question.name || `question_${question.id}`] || false,
         }))
       );
     }
@@ -171,7 +172,7 @@ const Results = () => {
       .map((question, index) => ({
         id: index,
         question: question.text,
-        answers: responses[`question_${index + 1}`] || [],
+        answers: responses[question.name || `question_${question.id}`] || [],
       }))
       .filter((row) => row.answers.length > 0);
   };
@@ -185,43 +186,60 @@ const Results = () => {
     setSelectedRespondent(null);
   };
 
-  // Handle download
+  // Handle download (bulk respondent-by-question CSV)
   const handleDownload = () => {
     if (!surveyData || !surveyData.responses) return;
 
-    const edges = [];
-    Object.entries(surveyData.responses).forEach(([respondent, answers]) => {
-      Object.entries(answers).forEach(([questionId, nominees]) => {
-        if (!enabledQuestions[questionId] || questionId === "timeStamp") return;
+    // Helper: CSV escape and wrap in quotes
+    const csvEscape = (val) => {
+      if (val === null || val === undefined) return "";
+      const str = String(val);
+      // Escape double quotes by doubling them
+      const escaped = str.replace(/"/g, '""');
+      // Always quote to be safe (handles commas/newlines)
+      return `"${escaped}"`;
+    };
 
-        const nomineeArray = Array.isArray(nominees) ? nominees : [nominees];
-        if (!nomineeArray || nomineeArray.length === 0) return;
+    // Build header using enabled questions (default all enabled on load)
+    const enabledQuestionEntries = questions
+      .map((q, idx) => ({
+        key: q.name || `question_${q.id}`,
+        label: `Q${q.order || idx + 1}: ${q.text}`,
+      }))
+      .filter(({ key }) => enabledQuestions[key] !== false); // include when true or undefined (default true)
 
-        nomineeArray.forEach((nominee) => {
-          if (!nominee) return;
+    const headers = ["Respondent", ...enabledQuestionEntries.map((q) => q.label), "Submitted At"];
 
-          const [nomineeName, nomineeEmail] = nominee.split(" (");
-          const cleanEmail = (nomineeEmail || "").replace(")", "");
-
-          edges.push({
-            source: respondent,
-            target: `${nomineeName}${cleanEmail ? ` (${cleanEmail})` : ""}`,
-            weight: questionId.replace("question_", ""),
-          });
-        });
+    // Build rows
+    const rows = Object.entries(surveyData.responses).map(([respondent, answers]) => {
+      const answerValues = enabledQuestionEntries.map(({ key }) => {
+        const value = answers?.[key];
+        if (Array.isArray(value)) {
+          // Join arrays by semicolon for readability
+          return csvEscape(value.filter(Boolean).join("; "));
+        }
+        if (value && typeof value === "object") {
+          // Fallback to JSON for complex objects
+          try {
+            return csvEscape(JSON.stringify(value));
+          } catch {
+            return csvEscape(String(value));
+          }
+        }
+        return csvEscape(value ?? "");
       });
+
+      const timestamp = answers?.timeStamp ? csvEscape(answers.timeStamp) : "";
+      return [csvEscape(respondent), ...answerValues, timestamp].join(",");
     });
 
-    const csvContent = [
-      ["Source", "Target", "Weight"].join(","),
-      ...edges.map((edge) => `${edge.source},${edge.target},${edge.weight}`),
-    ].join("\n");
+    const csvContent = [headers.map(csvEscape).join(","), ...rows].join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${selectedSurvey}_edge_list.csv`;
+    a.download = `${selectedSurvey}_responses.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -253,7 +271,7 @@ const Results = () => {
             onClick={handleDownload}
             sx={{ minWidth: "200px" }}
           >
-            Download Results
+            Download Responses (CSV)
           </Button>
         )}
       </Box>
@@ -322,7 +340,7 @@ const Results = () => {
                   onNodeClick={handleRespondentSelect}
                   showAllUsers={showAllUsers}
                   useColoredEdges={useColoredEdges}
-                  questions={questions.map((question) => "question_" + question.id)}
+                  questions={questions.map((question) => question.name || `question_${question.id}`)}
                 />
               </Box>
             </CollapsibleSection>

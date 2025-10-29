@@ -530,10 +530,16 @@ async function insertQuestions(name, title, json) {
   const client = await pool.connect();
 
   try {
-    const query = 'UPDATE Survey SET title = $1, questions = $2 WHERE name = $3';
-    const values = [title, json, name];
-
-    await client.query(query, values);
+    if (title === undefined || title === null || title === '') {
+      // Preserve existing survey title; only update questions JSON
+      const query = 'UPDATE Survey SET questions = $1 WHERE name = $2';
+      const values = [json, name];
+      await client.query(query, values);
+    } else {
+      const query = 'UPDATE Survey SET title = $1, questions = $2 WHERE name = $3';
+      const values = [title, json, name];
+      await client.query(query, values);
+    }
 
     console.log('Survey modified successfully!');
   } catch (error) {
@@ -571,19 +577,9 @@ function csvToJson(csvString, title) {
         skipEmptyLines: true,
     });
 
-    // Ensure each row has a unique question name; preserve provided, generate if missing
-    const used = new Set();
+    // Force positional names regardless of provided value for consistency
     result.data.forEach((item, index) => {
-      let raw = (item['Question name'] || '').toString().trim();
-      if (!raw) {
-        raw = `q_${nanoid(8)}`;
-      }
-      let candidate = raw;
-      while (used.has(candidate)) {
-        candidate = `${raw}_${nanoid(4)}`;
-      }
-      item['Question name'] = candidate;
-      used.add(candidate);
+      item['Question name'] = `question_${index + 1}`;
     });
 
     // Iterate through each parsed data and create the corresponding question object
@@ -898,28 +894,15 @@ app.post('/api/updateTargets', express.json(), (req, res) => {
 });
 
 // PUT API endpoint for uploading a json file of questions
-// Helper: ensure every question has a unique, stable name
+// Helper: normalize question names to positional pattern: question_{index+1}
 function normalizeQuestionNames(json) {
   try {
     if (!json || typeof json !== 'object') return { elements: [] };
     const elements = Array.isArray(json.elements) ? json.elements : [];
-    const used = new Set();
-    const safe = elements.map((el, idx) => {
-      const copy = { ...el };
-      let raw = typeof copy.name === 'string' ? copy.name.trim() : '';
-      if (!raw) {
-        // generate stable-ish id; leave true stability to persisted DB
-        raw = `q_${nanoid(8)}`;
-      }
-      // Ensure uniqueness
-      let candidate = raw;
-      while (used.has(candidate)) {
-        candidate = `${raw}_${nanoid(4)}`;
-      }
-      copy.name = candidate;
-      used.add(candidate);
-      return copy;
-    });
+    const safe = elements.map((el, idx) => ({
+      ...el,
+      name: `question_${idx + 1}`
+    }));
     return { elements: safe };
   } catch (e) {
     console.error('normalizeQuestionNames failed:', e);
@@ -940,7 +923,7 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
   if (typeof surveyQuestions === 'string') {
     // CSV format
     surveyData = csvToJson(surveyQuestions);
-    // csvToJson already assigns names like question_{i}
+    // csvToJson assigns positional names question_{i}
     insertQuestions(surveyName, surveyData.title, surveyData.questions);
   } else if (typeof surveyQuestions === 'object' && surveyQuestions !== null) {
     // JSON format (SurveyJS)

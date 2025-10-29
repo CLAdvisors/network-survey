@@ -72,10 +72,14 @@ function SurveyComponent({setTitle}) {
       
       // Survey event handlers
       newSurvey.onComplete.add((sender, options) => {
+        // Hide the "already completed" banner after a (re)submission to avoid confusion on the completion screen
+        setHasResponse(false);
+
         if (userId === 'demo') return;
-        let data = JSON.stringify(sender.data, null, 3);
-        let url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user`;
-        postRequest(url, {userId: userId, surveyName: surveyName, answers: data});
+        const data = JSON.stringify(sender.data, null, 3);
+        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user`;
+        // Fire-and-forget; if needed we could await and handle errors, but UI should reflect resubmission immediately
+        postRequest(url, { userId, surveyName, answers: data }).catch((e) => console.error('Submit failed:', e));
       });
 
       newSurvey.onChoicesLazyLoad.add((_, options) => {

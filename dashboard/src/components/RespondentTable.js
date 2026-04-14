@@ -114,13 +114,16 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
               icon: <EmailIcon fontSize="small" />,
               handler: async (row) => {
                 try {
-                  await api.post('/testEmail', {
+                  const response = await api.post('/testEmail', {
                     email: row.email,
                     surveyName: params.row.surveyName,
                     language: row.language
                   });
+                  alert(response.data?.message || 'Email sent successfully via test route!');
                 } catch (error) {
+                  const errorMsg = error.response?.data?.message || error.message || 'An unknown error occurred';
                   console.error('Error sending reminder:', error);
+                  alert('Failed to send reminder: ' + errorMsg);
                 }
               }
             },

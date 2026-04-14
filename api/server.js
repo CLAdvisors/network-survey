@@ -146,14 +146,25 @@ async function processEmailQueue() {
 // User test email function (allow admin user to send test email to themselves)
 async function sendTestMail(email, surveyName, lang) {
   const client = await pool.connect();
-  const query = 'SELECT text FROM email WHERE survey_name = $1 AND lang = $2';
-  const values = [surveyName, lang];
-  console.log(values);
-  await client.query(query, values).then(response => {
+  try {
+    const query = 'SELECT text FROM email WHERE survey_name = $1 AND lang = $2';
+    const values = [surveyName, lang];
+    console.log(values);
+    const response = await client.query(query, values);
+    
+    if (!response.rows || response.rows.length === 0) {
+      throw new Error(`Email template not found for survey '${surveyName}' in language '${lang}'`);
+    }
+
     const text = response.rows[0].text;
+    if (text === undefined || text === null) {
+      throw new Error(`Email text is undefined for survey '${surveyName}'`);
+    }
 
     sendMail(email, 'demo', surveyName, text);
-  });
+  } finally {
+    client.release();
+  }
 }
 
 async function startSurvey(surveyName){
@@ -216,12 +227,17 @@ app.use(express.json());
 app.use(cors({
   origin: function(origin, callback) {
     const allowedOrigins = [
-      process.env.FRONTEND_URL,
-      process.env.SURVEY_URL
-    ];
-    if (!origin || allowedOrigins.includes(origin)) {
+      process.env.FRONTEND_URL?.replace(/\/$/, ''),
+      process.env.SURVEY_URL?.replace(/\/$/, '')
+    ].filter(Boolean); // Remote undefined values if any
+    
+    // Normalize origin by removing trailing slash if present
+    const normalizedOrigin = origin ? origin.replace(/\/$/, '') : origin;
+    
+    if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
+      console.warn(`CORS rejected origin: ${origin} (Allowed: ${allowedOrigins.join(', ')})`);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -641,8 +657,13 @@ app.post('/api/testEmail', express.json(), (req, res) => {
   console.log()
   // Call the function to add a new survey
   sendTestMail(email, surveyName, language)
-  .catch(error => console.error(error))
-  .then(() => {res.status(200).json({ message: 'Survey started successfully!' });});
+  .then(() => {
+    res.status(200).json({ message: 'Test email sent successfully!' });
+  })
+  .catch(error => {
+    console.error(error);
+    res.status(500).json({ message: error.message || 'Error occurred while sending test email.' });
+  });
 });
 
 app.post('/api/startSurvey', express.json(), (req, res) => {

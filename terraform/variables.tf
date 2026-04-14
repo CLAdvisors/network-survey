@@ -26,3 +26,8 @@ variable "frontend_url" {
   description = "value of the frontend url"
   default = "https://demo.ona.dashboard.bennetts.work"
 }
+
+variable "survey_url" {
+  description = "value of the survey url"
+  default = "https://demo.ona.survey.bennetts.work"
+}

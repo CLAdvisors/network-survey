@@ -88,20 +88,23 @@ const AppContent = () => {
   
     return (
       <AppProvider {...appProviderProps}>
-        <DashboardLayout
-          sx={{
-            padding: '16px',
-            gap: '16px',
-          }}
-        >
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/results" element={<Results />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/editor" element={<SurveyEditor />} /> {/* Add route for SurveyEditor */}
-            <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </DashboardLayout>
+        <NetworkProvider>
+          <DashboardLayout
+            sx={{
+              padding: '16px',
+              gap: '16px',
+            }}
+          >
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/results" element={<Results />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/signup" element={<SignUp />} />
+              <Route path="/editor" element={<SurveyEditor />} /> {/* Add route for SurveyEditor */}
+              <Route path="*" element={<Navigate to="/" />} />
+            </Routes>
+          </DashboardLayout>
+        </NetworkProvider>
       </AppProvider>
     );
   };

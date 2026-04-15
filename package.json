@@ -1,13 +1,16 @@
 {
     "scripts": {
-        "start-api": "cd api && set PORT=3000 && nodemon",
-        "start-dashboard": "cd dashboard && set PORT=3001 && nodemon",
-        "start-network-survey": "cd network-survey && set PORT=3002 && nodemon",
-        "start-all": "concurrently \"npm run start-api\" \"npm run start-dashboard\" \"npm run start-network-survey\""
+        "dev": "node scripts/local-dev.js",
+        "dev:stop": "node scripts/stop-local-dev.js",
+        "db:setup": "node scripts/db-setup.js",
+        "db:migrate": "node scripts/db-setup.js --migrate-only",
+        "dev:setup": "node scripts/dev-setup.js",
+        "dev:api": "npm --prefix api run dev",
+        "dev:dashboard": "npm --prefix dashboard run dev",
+        "dev:survey": "npm --prefix network-survey run dev"
     },
     "devDependencies": {
-        "concurrently": "^8.2.0",
-        "nodemon": "^2.0.22"
+        "tree-kill": "^1.2.2"
     },
     "dependencies": {
         "@emotion/react": "^11.13.5",

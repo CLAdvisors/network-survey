@@ -13,6 +13,8 @@ const bcrypt = require('bcrypt');
 
 dotenvFlow.config();
 
+const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
+
 // Create a new instance of the Pool
 const pool = new Pool({
   user: process.env.DB_USER,
@@ -21,9 +23,8 @@ const pool = new Pool({
   port: process.env.DB_PORT,
   database: 'ONA',
 });
-console.log(process.env.RESEND_API_KEY)
 
-const resend = new Resend(process.env.RESEND_KEY);
+const resend = resendApiKey ? new Resend(resendApiKey) : null;
 
 const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
@@ -67,6 +68,10 @@ const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. 
 
 async function sendMail(email, id, surveyName, text) {
   try {
+    if (!resend) {
+      throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
+    }
+
     text = "<p>" + text.replace(/"/g, '') + "</p>";
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
     let customLink = `${process.env.SURVEY_URL}/?surveyName=${surveyName}&userId=${id}`;
@@ -220,7 +225,7 @@ async function executeQuery(query) {
 }
 
 const app = express();
-const port = 3000; // Choose your desired port number
+const port = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
@@ -1404,6 +1409,16 @@ app.delete('/api/question', requireAuth, async (req, res) => {
 
 app.get('/', async (req, res) => {
   res.status(200).json({ message: 'Health Check: All Good!.' });
+});
+
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.status(200).json({ status: 'ok', database: 'ok' });
+  } catch (error) {
+    console.error('Health check failed:', error.message);
+    res.status(503).json({ status: 'error', database: 'unavailable' });
+  }
 });
 
 

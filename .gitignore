@@ -13,6 +13,9 @@ db/liquibase-prod.*
 dashboard/.env.production
 api/.env.prod
 network-survey/.env.production
+.local-dev.state.json
+db/.liquibase.local.generated.properties
+db/lib/*.jar
 *.pem
 .vscode
 .vscode/*

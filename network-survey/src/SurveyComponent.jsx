@@ -5,6 +5,7 @@ import { Survey } from "survey-react-ui";
 import { Alert, useTheme } from '@mui/material';
 import "survey-core/defaultV2.min.css";
 import "./Survey.css";
+import { buildApiUrl } from "./api";
 import DraggableRankingQuestion from "./DraggableRankingQuestion";
 
 const draggableQuestionRoots = new WeakMap();
@@ -42,14 +43,14 @@ function SurveyComponent({setTitle}) {
         setHasResponse(true);
         return;
       }
-      const statusUrl = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user/status?userId=${userId}`;
+      const statusUrl = buildApiUrl('/user/status', { userId });
       sendRequest(statusUrl, data => setHasResponse(data.hasResponse));
     }, [userId]);
 
     React.useEffect(() => {
       if (!userId || !surveyName) return;
       
-      const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/questions?surveyName=${surveyName}`;
+      const url = buildApiUrl('/questions', { surveyName });
       sendRequest(url, (data) => { 
         setJson(data.questions); 
         setTitle(data.title); 
@@ -77,13 +78,19 @@ function SurveyComponent({setTitle}) {
 
         if (userId === 'demo') return;
         const data = JSON.stringify(sender.data, null, 3);
-        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/user`;
+        const url = buildApiUrl('/user');
         // Fire-and-forget; if needed we could await and handle errors, but UI should reflect resubmission immediately
         postRequest(url, { userId, surveyName, answers: data }).catch((e) => console.error('Submit failed:', e));
       });
 
       newSurvey.onChoicesLazyLoad.add((_, options) => {
-        const url = `${process.env.REACT_APP_API_PROTOCOL}://${process.env.REACT_APP_API_HOST}:${process.env.REACT_APP_API_PORT}/api/names?skip=${options.skip}&take=${options.take}&filter=${options.filter}&surveyName=${surveyName}&userId=${userId}`;
+        const url = buildApiUrl('/names', {
+          skip: options.skip,
+          take: options.take,
+          filter: options.filter,
+          surveyName,
+          userId,
+        });
         sendRequest(url, (data) => {
           const names = Array.isArray(data?.names) ? data.names : [];
           const totalRaw = Number(data?.total);

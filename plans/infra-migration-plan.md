@@ -337,14 +337,41 @@ Recommended behavior:
 
 ### Phase 2: Staging First
 
-- Stand up staging with new EC2 + SSM deploy flow.
-- Use staging domains.
-- Validate:
-  - ALB health check
-  - API deploy through SSM
-  - Liquibase migration from instance
-  - dashboard publish
-  - survey publish
+Status: infrastructure is standing up successfully.
+
+Created staging resources:
+
+- API ALB DNS: `staging-main-alb-1483972898.us-east-1.elb.amazonaws.com`
+- API instance: `i-0edf83aaa1eebee13`
+- Artifact bucket: `ona-staging-artifacts-ztnzv6`
+- Config bucket: `ona-staging-config-ztnzv6`
+- Dashboard bucket: `ona-staging-dashboard-966c3626`
+- Survey bucket: `ona-staging-survey-966c3626`
+- Dashboard CloudFront: `d3sh259vg3713j.cloudfront.net` / `E25BCX9GQEUQU7`
+- Survey CloudFront: `d3cyla8o3xxdl5.cloudfront.net` / `EMB4Y0ICRHFCS`
+- RDS endpoint: `terraform-20260710140507963100000001.cb4kmcse0a7d.us-east-1.rds.amazonaws.com:5432`
+- DB username: `ona_admin`
+
+Validated:
+
+- Terraform staging plan is clean.
+- SSM instance is online.
+- API artifact deploy through SSM succeeded.
+- Liquibase migrations ran from the instance.
+- PM2 started `ona-api` successfully.
+- ALB target group is healthy.
+- API health works with staging host/SNI: `/health` returns database ok.
+- Dashboard and survey builds were synced to S3.
+- CloudFront distributions return `200` for both frontend roots.
+
+Remaining staging DNS records to add at Name.com:
+
+- `staging.ona.api.bennetts.work` CNAME -> `staging-main-alb-1483972898.us-east-1.elb.amazonaws.com`
+- `staging.ona.dashboard.bennetts.work` CNAME -> `d3sh259vg3713j.cloudfront.net`
+- `staging.ona.survey.bennetts.work` CNAME -> `d3cyla8o3xxdl5.cloudfront.net`
+
+Still validate after DNS is live:
+
   - login/session behavior
   - email config behavior
   - survey submission

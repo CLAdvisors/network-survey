@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  api-smoke:
+    name: API integration smoke test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ONA
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Run Liquibase migrations
+        # changeLogFile keeps the "changelogs/" prefix so changeset identities
+        # match how migrations run everywhere else (from db/)
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/db:/db" \
+            liquibase/liquibase:4.29 \
+            --url=jdbc:postgresql://127.0.0.1:5432/ONA \
+            --username=postgres \
+            --password=postgres \
+            --changeLogFile=changelogs/master-changelog.xml \
+            --searchPath=/db \
+            update
+
+      - name: Install API dependencies
+        run: npm ci
+        working-directory: api
+
+      - name: Smoke test API against migrated database
+        run: bash scripts/ci/api-smoke.sh
+
+  frontend:
+    name: Build & test (${{ matrix.app }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [dashboard, network-survey]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ matrix.app }}
+
+      - name: Test
+        run: npm test -- --watchAll=false --passWithNoTests
+        working-directory: ${{ matrix.app }}
+
+      - name: Build
+        # CI=false: CRA treats lint warnings as errors when CI=true; the
+        # existing code has warnings. Tighten this once they are cleaned up.
+        run: CI=false npm run build
+        working-directory: ${{ matrix.app }}

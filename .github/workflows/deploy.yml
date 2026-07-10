@@ -1,0 +1,201 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main] # auto-deploys to staging
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  id-token: write # OIDC federation to AWS — no long-lived keys
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'push' && 'staging' || inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # "production" can be given required reviewers under Settings → Environments
+    environment: ${{ github.event_name == 'push' && 'staging' || inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Resolve environment resources
+        id: env
+        run: |
+          set -euo pipefail
+          GH_ENV="${{ github.event_name == 'push' && 'staging' || inputs.environment }}"
+          case "$GH_ENV" in
+            production)
+              TF_ENV=prod
+              API_HOST=demo.ona.api.bennetts.work
+              SURVEY_HOST=demo.ona.survey.bennetts.work
+              ;;
+            staging)
+              TF_ENV=staging
+              API_HOST=staging.ona.api.bennetts.work
+              SURVEY_HOST=staging.ona.survey.bennetts.work
+              ;;
+            *) echo "Unknown environment: $GH_ENV" >&2; exit 1 ;;
+          esac
+
+          # CloudFront resources only appear in the us-east-1 tagging API,
+          # so resolution is pinned there (everything deploys to us-east-1)
+          by_tag() { # app-tag resource-type-filter
+            aws resourcegroupstaggingapi get-resources \
+              --region us-east-1 \
+              --resource-type-filters "$2" \
+              --tag-filters "Key=Environment,Values=$TF_ENV" "Key=App,Values=$1" \
+              --query 'ResourceTagMappingList[0].ResourceARN' --output text
+          }
+
+          DASHBOARD_BUCKET=$(by_tag ona-dashboard s3:bucket | sed 's|.*:::||')
+          SURVEY_BUCKET=$(by_tag ona-survey s3:bucket | sed 's|.*:::||')
+          ARTIFACTS_BUCKET=$(by_tag ona-artifacts s3:bucket | sed 's|.*:::||')
+          DASHBOARD_DIST=$(by_tag ona-dashboard cloudfront:distribution | sed 's|.*/||')
+          SURVEY_DIST=$(by_tag ona-survey cloudfront:distribution | sed 's|.*/||')
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Environment,Values=$TF_ENV" "Name=tag:App,Values=ona-api" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+          for v in DASHBOARD_BUCKET SURVEY_BUCKET ARTIFACTS_BUCKET DASHBOARD_DIST SURVEY_DIST INSTANCE_ID; do
+            if [ -z "${!v}" ] || [ "${!v}" = "None" ]; then
+              echo "Failed to resolve $v for environment $TF_ENV" >&2
+              exit 1
+            fi
+            echo "$v=${!v}" >> "$GITHUB_OUTPUT"
+            echo "$v=${!v}"
+          done
+          echo "API_HOST=$API_HOST" >> "$GITHUB_OUTPUT"
+          echo "SURVEY_HOST=$SURVEY_HOST" >> "$GITHUB_OUTPUT"
+
+      # ---------- API: package → S3 → install via SSM (no instance rebuild) ----------
+
+      - name: Package API release artifact
+        run: |
+          set -euo pipefail
+          STAGE_DIR=$(mktemp -d)
+          mkdir -p "$STAGE_DIR/deploy" "$STAGE_DIR/db"
+          rsync -a --exclude node_modules api "$STAGE_DIR/"
+          cp -a db/changelogs "$STAGE_DIR/db/"
+          cp scripts/deploy/remote-deploy.sh "$STAGE_DIR/deploy/"
+          echo "$GITHUB_SHA" > "$STAGE_DIR/REVISION"
+          tar -czf api-release.tar.gz -C "$STAGE_DIR" .
+
+      - name: Upload artifact to S3
+        run: |
+          aws s3 cp api-release.tar.gz \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/$GITHUB_SHA.tar.gz"
+
+      - name: Deploy API via SSM
+        run: |
+          set -euo pipefail
+          BUCKET="${{ steps.env.outputs.ARTIFACTS_BUCKET }}"
+          INSTANCE="${{ steps.env.outputs.INSTANCE_ID }}"
+
+          # Notes: AWS-RunShellScript executes with /bin/sh (dash on Ubuntu),
+          # which has no pipefail — keep these commands POSIX. The region
+          # export is required because the instance runs awscli v1.
+          jq -n --arg bucket "$BUCKET" --arg sha "$GITHUB_SHA" --arg region "$AWS_REGION" '{
+            commands: [
+              "set -eu",
+              "export AWS_DEFAULT_REGION=\($region)",
+              "rm -rf /tmp/ona-deploy && mkdir -p /tmp/ona-deploy",
+              "aws s3 cp s3://\($bucket)/api/\($sha).tar.gz /tmp/ona-deploy/release.tar.gz",
+              "tar -xzf /tmp/ona-deploy/release.tar.gz -C /tmp/ona-deploy",
+              "bash /tmp/ona-deploy/deploy/remote-deploy.sh /tmp/ona-deploy",
+              "rm -rf /tmp/ona-deploy"
+            ]
+          }' > /tmp/ssm-params.json
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE" \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy API $GITHUB_SHA" \
+            --parameters file:///tmp/ssm-params.json \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command: $COMMAND_ID"
+
+          # Poll until the command finishes, then surface its output
+          while true; do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" --instance-id "$INSTANCE" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Success|Failed|Cancelled|TimedOut) break ;;
+              *) sleep 5 ;;
+            esac
+          done
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" --instance-id "$INSTANCE" \
+            --query StandardOutputContent --output text
+          if [ "$STATUS" != "Success" ]; then
+            echo "Deploy failed with status $STATUS; stderr:" >&2
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" --instance-id "$INSTANCE" \
+              --query StandardErrorContent --output text >&2
+            exit 1
+          fi
+
+      - name: Mark release as latest
+        # Only after a successful install, so instance bootstrap always uses
+        # the last known-good release
+        run: |
+          aws s3 cp \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/$GITHUB_SHA.tar.gz" \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest.tar.gz"
+
+      # ---------- Frontends: build → S3 sync → CloudFront invalidation ----------
+
+      - name: Build dashboard
+        working-directory: dashboard
+        env:
+          REACT_APP_API_PROTOCOL: https
+          REACT_APP_API_HOST: ${{ steps.env.outputs.API_HOST }}
+          REACT_APP_API_PORT: 443
+          REACT_APP_SURVEY_PROTOCOL: https
+          REACT_APP_SURVEY_ENDPOINT: ${{ steps.env.outputs.SURVEY_HOST }}
+        run: |
+          npm ci
+          CI=false npm run build
+
+      - name: Build survey app
+        working-directory: network-survey
+        env:
+          REACT_APP_API_PROTOCOL: https
+          REACT_APP_API_HOST: ${{ steps.env.outputs.API_HOST }}
+          REACT_APP_API_PORT: 443
+        run: |
+          npm ci
+          CI=false npm run build
+
+      - name: Publish dashboard
+        run: |
+          aws s3 sync dashboard/build "s3://${{ steps.env.outputs.DASHBOARD_BUCKET }}" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.env.outputs.DASHBOARD_DIST }}" --paths "/*"
+
+      - name: Publish survey app
+        run: |
+          aws s3 sync network-survey/build "s3://${{ steps.env.outputs.SURVEY_BUCKET }}" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.env.outputs.SURVEY_DIST }}" --paths "/*"

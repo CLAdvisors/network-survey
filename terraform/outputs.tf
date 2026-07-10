@@ -1,3 +1,11 @@
+output "environment" {
+  value = local.environment
+}
+
+output "backend_instance_id" {
+  value = aws_instance.backend.id
+}
+
 output "backend_instance_public_ip" {
   value = aws_instance.backend.public_dns
 }
@@ -11,49 +19,80 @@ output "db_username" {
 }
 
 output "config_bucket_name" {
-  value = aws_s3_bucket.config_bucket.bucket
+  value       = aws_s3_bucket.config_bucket.bucket
   description = "Name of the S3 bucket where configuration files are stored"
 }
 
-# Output the CloudFront URL
-output "cloudfront_url" {
-  value = aws_cloudfront_distribution.react_dashboard_distribution.domain_name
-  description = "URL to access the React app via CloudFront."
+output "artifacts_bucket_name" {
+  value       = aws_s3_bucket.artifacts.bucket
+  description = "S3 bucket where CI publishes API release artifacts"
 }
 
-# Output the DNS validation records for the ACM certificate
+output "dashboard_bucket_name" {
+  value       = aws_s3_bucket.react_dashboard.bucket
+  description = "S3 bucket the CI deploy workflow syncs dashboard builds into"
+}
 
-# Output the DNS validation records
+output "survey_bucket_name" {
+  value       = aws_s3_bucket.react_survey.bucket
+  description = "S3 bucket the CI deploy workflow syncs survey builds into"
+}
+
+output "dashboard_distribution_id" {
+  value = aws_cloudfront_distribution.react_dashboard_distribution.id
+}
+
+output "survey_distribution_id" {
+  value = aws_cloudfront_distribution.react_survey_distribution.id
+}
+
+output "github_actions_deploy_role_arn" {
+  value       = var.manage_github_oidc ? aws_iam_role.github_actions_deploy[0].arn : null
+  description = "Set this as the AWS_DEPLOY_ROLE_ARN GitHub repository variable"
+}
+
+# Output the DNS validation records for the ACM certificates
 output "ssl_cert_validation_records" {
   value = [
     for dvo in aws_acm_certificate.ssl_cert.domain_validation_options : {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      value  = dvo.resource_record_value
+      name  = dvo.resource_record_name
+      type  = dvo.resource_record_type
+      value = dvo.resource_record_value
     }
   ]
 }
+
 output "ssl_cert_dashboard_validation_records" {
   value = [
     for dvo in aws_acm_certificate.ssl_cert_dashboard.domain_validation_options : {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      value  = dvo.resource_record_value
+      name  = dvo.resource_record_name
+      type  = dvo.resource_record_type
+      value = dvo.resource_record_value
     }
   ]
 }
+
 output "ssl_cert_survey_validation_records" {
   value = [
     for dvo in aws_acm_certificate.ssl_cert_survey.domain_validation_options : {
-      name   = dvo.resource_record_name
-      type   = dvo.resource_record_type
-      value  = dvo.resource_record_value
+      name  = dvo.resource_record_name
+      type  = dvo.resource_record_type
+      value = dvo.resource_record_value
     }
   ]
 }
 
-
 output "alb_dns_name" {
-  value = aws_lb.main_alb.dns_name
-  description = "The DNS name of the ALB. Use this to configure your domain's CNAME record."
+  value       = aws_lb.main_alb.dns_name
+  description = "The DNS name of the ALB. Point the API domain's CNAME record here."
+}
+
+output "dashboard_cloudfront_domain" {
+  value       = aws_cloudfront_distribution.react_dashboard_distribution.domain_name
+  description = "Point the dashboard domain's CNAME record here."
+}
+
+output "survey_cloudfront_domain" {
+  value       = aws_cloudfront_distribution.react_survey_distribution.domain_name
+  description = "Point the survey domain's CNAME record here."
 }

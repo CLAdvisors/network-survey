@@ -71,10 +71,12 @@ records exist:
 
 ## CI/CD wiring (one-time GitHub setup)
 
-1. Apply prod (it manages the account-global GitHub OIDC provider + deploy role;
-   `manage_github_oidc = true`).
+1. GitHub OIDC/deploy role is currently bootstrapped manually in AWS:
+   `arn:aws:iam::438465164125:role/github-actions-deploy`.
+   If Terraform should manage it later, import the existing OIDC provider and
+   role/policy before setting `manage_github_oidc = true`.
 2. In the GitHub repo, set **repository variables**:
-   - `AWS_DEPLOY_ROLE_ARN` = `github_actions_deploy_role_arn` output
+   - `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::438465164125:role/github-actions-deploy`
    - `AWS_REGION` = `us-east-1` (optional; workflow defaults to it)
 3. Create **environments** `staging` and `production` under repo Settings →
    Environments; add required reviewers to `production` to gate prod deploys.

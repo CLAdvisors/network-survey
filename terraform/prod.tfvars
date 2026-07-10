@@ -9,7 +9,9 @@ api_domain       = "demo.ona.api.bennetts.work"
 dashboard_domain = "demo.ona.dashboard.bennetts.work"
 survey_domain    = "demo.ona.survey.bennetts.work"
 
-# Prod owns the account-global GitHub OIDC provider + deploy role
-manage_github_oidc = true
+# GitHub OIDC/deploy role was bootstrapped manually in AWS as:
+# arn:aws:iam::438465164125:role/github-actions-deploy
+# Keep false unless importing those account-global resources into Terraform state first.
+manage_github_oidc = false
 
 db_deletion_protection = true

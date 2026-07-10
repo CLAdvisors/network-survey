@@ -199,6 +199,22 @@ For the first staging implementation, S3-rendered `.env.prod` can be tolerated i
 
 But this should not be the final prod posture.
 
+## AWS Account Bootstrap
+
+Performed manually from the root-authenticated AWS CLI session:
+
+- Confirmed existing IAM admin user: `admin-cli`.
+- Created/ensured IAM group: `Administrators`.
+- Attached `AdministratorAccess` to `Administrators`.
+- Added `admin-cli` to `Administrators`.
+- Created GitHub OIDC provider:
+  `arn:aws:iam::438465164125:oidc-provider/token.actions.githubusercontent.com`.
+- Created GitHub deploy role:
+  `arn:aws:iam::438465164125:role/github-actions-deploy`.
+- Attached inline deployment policy matching the current EC2 + SSM deploy workflow.
+
+Important: because these account-global GitHub OIDC resources were bootstrapped manually, `terraform/prod.tfvars` currently keeps `manage_github_oidc = false`. If we want Terraform to own them later, import the provider, role, and inline policy into Terraform state before enabling that flag.
+
 ## CI/CD Plan
 
 ### CI Workflow

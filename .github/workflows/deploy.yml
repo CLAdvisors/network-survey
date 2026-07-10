@@ -40,22 +40,29 @@ jobs:
 
       - name: Resolve environment resources
         id: env
+        env:
+          CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}
+          CONFIGURED_API_HOST: ${{ vars.API_HOST }}
+          CONFIGURED_SURVEY_HOST: ${{ vars.SURVEY_HOST }}
         run: |
           set -euo pipefail
           GH_ENV="${{ github.event_name == 'push' && 'staging' || inputs.environment }}"
           case "$GH_ENV" in
             production)
-              TF_ENV=prod
-              API_HOST=demo.ona.api.bennetts.work
-              SURVEY_HOST=demo.ona.survey.bennetts.work
+              DEFAULT_TF_ENV=prod
+              DEFAULT_API_HOST=demo.ona.api.bennetts.work
+              DEFAULT_SURVEY_HOST=demo.ona.survey.bennetts.work
               ;;
             staging)
-              TF_ENV=staging
-              API_HOST=staging.ona.api.bennetts.work
-              SURVEY_HOST=staging.ona.survey.bennetts.work
+              DEFAULT_TF_ENV=staging
+              DEFAULT_API_HOST=staging.ona.api.bennetts.work
+              DEFAULT_SURVEY_HOST=staging.ona.survey.bennetts.work
               ;;
             *) echo "Unknown environment: $GH_ENV" >&2; exit 1 ;;
           esac
+          TF_ENV="${CONFIGURED_TF_ENV:-$DEFAULT_TF_ENV}"
+          API_HOST="${CONFIGURED_API_HOST:-$DEFAULT_API_HOST}"
+          SURVEY_HOST="${CONFIGURED_SURVEY_HOST:-$DEFAULT_SURVEY_HOST}"
 
           # CloudFront resources only appear in the us-east-1 tagging API,
           # so resolution is pinned there (everything deploys to us-east-1)

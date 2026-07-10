@@ -253,6 +253,26 @@ Recommended additions:
 - maybe `npm audit --audit-level=high` later, once dependency baseline is known
 - separate frontend lint cleanup later; currently CRA warnings require `CI=false`
 
+### GitHub Repository Configuration
+
+Configured repository variables:
+
+- `AWS_DEPLOY_ROLE_ARN=arn:aws:iam::438465164125:role/github-actions-deploy`
+- `AWS_REGION=us-east-1`
+
+Configured repository secrets for current staging Terraform planning/deploy bootstrap:
+
+- `TF_VAR_DB_PASSWORD`
+- `TF_VAR_SESSION_SECRET`
+- `TF_VAR_RESEND_API_KEY` (currently staging placeholder unless replaced with a real Resend key)
+
+Attempted to create GitHub Environments `staging` and `production`, but the authenticated GitHub user only has `WRITE` permission, not repository admin permission. Environment creation/protection returned `403`. A repo admin still needs to:
+
+- create `staging`
+- create `production`
+- add required reviewers to `production`
+- preferably move environment-specific Terraform secrets from repo-level secrets into environment-level secrets before production planning/apply workflows are enabled
+
 ### Deploy Workflow
 
 Existing imported workflow:

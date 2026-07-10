@@ -102,6 +102,7 @@ GitHub Actions
 ### Database
 
 - RDS Postgres 15 (`15.18` in us-east-1 as of staging rollout).
+- Staging uses DB master username `ona_admin` because `admin` is reserved by the Postgres engine for new RDS creation.
 - Not publicly accessible.
 - Security group allows Postgres only from backend EC2 security group.
 - TLS required.

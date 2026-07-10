@@ -13,4 +13,6 @@ survey_domain    = "staging.ona.survey.bennetts.work"
 # The OIDC provider/role are account-global and managed by prod
 manage_github_oidc = false
 
+db_user = "ona_admin"
+
 db_deletion_protection = false

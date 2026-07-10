@@ -201,7 +201,7 @@ But this should not be the final prod posture.
 
 ## AWS Account Bootstrap
 
-Performed manually from the root-authenticated AWS CLI session:
+Performed manually from the root-authenticated AWS CLI session, then switched local CLI default to `admin-cli`:
 
 - Confirmed existing IAM admin user: `admin-cli`.
 - Created/ensured IAM group: `Administrators`.
@@ -214,6 +214,18 @@ Performed manually from the root-authenticated AWS CLI session:
 - Attached inline deployment policy matching the current EC2 + SSM deploy workflow.
 
 Important: because these account-global GitHub OIDC resources were bootstrapped manually, `terraform/prod.tfvars` currently keeps `manage_github_oidc = false`. If we want Terraform to own them later, import the provider, role, and inline policy into Terraform state before enabling that flag.
+
+### Terraform Remote State Bootstrap
+
+Bootstrapped manually in AWS:
+
+- S3 state bucket: `network-survey-terraform-state-438465164125`
+- DynamoDB lock table: `network-survey-terraform-locks` (created as a compatibility fallback; current backend uses S3 native lockfiles)
+
+The state bucket has versioning, SSE-S3 encryption, public access blocks, and S3 native lockfiles enabled. Terraform is configured in `terraform/backend.tf` with workspace-aware S3 state paths:
+
+- default workspace: `terraform.tfstate`
+- non-default workspaces: `env/<workspace>/terraform.tfstate`
 
 ## CI/CD Plan
 

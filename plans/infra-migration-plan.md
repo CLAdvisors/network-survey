@@ -370,9 +370,16 @@ Remaining staging DNS records to add at Name.com:
 - `staging.ona.dashboard.bennetts.work` CNAME -> `d3sh259vg3713j.cloudfront.net`
 - `staging.ona.survey.bennetts.work` CNAME -> `d3cyla8o3xxdl5.cloudfront.net`
 
-Still validate after DNS is live:
+DNS is live and responding:
 
-  - login/session behavior
+- `https://staging.ona.api.bennetts.work/health` returns database ok.
+- `https://staging.ona.dashboard.bennetts.work/` returns `200`.
+- `https://staging.ona.survey.bennetts.work/` returns `200`.
+- API register/login/check-auth smoke passed over the staging domain.
+
+Still validate manually:
+
+  - dashboard browser login/session behavior
   - email config behavior
   - survey submission
 

@@ -101,7 +101,7 @@ GitHub Actions
 
 ### Database
 
-- RDS Postgres 15.
+- RDS Postgres 15 (`15.18` in us-east-1 as of staging rollout).
 - Not publicly accessible.
 - Security group allows Postgres only from backend EC2 security group.
 - TLS required.

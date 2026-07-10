@@ -230,6 +230,24 @@ The state bucket has versioning, SSE-S3 encryption, public access blocks, and S3
 
 ## CI/CD Plan
 
+### CI/CD Execution Status
+
+Opened PR for the migration branch:
+
+- https://github.com/CLAdvisors/network-survey/pull/1
+
+GitHub Actions attempted to run CI and Terraform Plan on the PR, but both were blocked by account billing status:
+
+```text
+The job was not started because your account is locked due to a billing issue.
+```
+
+Workflow YAML parses locally and the deployment path has been validated manually against staging. Once GitHub billing is resolved, re-run:
+
+- CI workflow on PR #1
+- Terraform Plan workflow on PR #1
+- Deploy workflow manually with `environment=staging`
+
 ### CI Workflow
 
 Existing imported workflow:

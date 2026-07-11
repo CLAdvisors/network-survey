@@ -66,6 +66,21 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["*"]
   }
 
+  # Terraform remote state for plan workflows
+  statement {
+    sid = "TerraformState"
+    actions = [
+      "s3:ListBucket",
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+    ]
+    resources = [
+      "arn:aws:s3:::network-survey-terraform-state-*",
+      "arn:aws:s3:::network-survey-terraform-state-*/*",
+    ]
+  }
+
   # Resolve per-environment resources by tag instead of hardcoding IDs
   statement {
     sid = "ResolveResources"

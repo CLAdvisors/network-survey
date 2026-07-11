@@ -1,136 +1,421 @@
 # EC2 + SSM Infrastructure Migration Plan
 
-## Status
+## Current Status
 
-Created working branch:
+The EC2 + SSM migration groundwork has been implemented, merged to `main`, and validated for staging. Production/demo (`demo.ona.*`) has also been cut over to a new Terraform-managed replacement RDS database while keeping the existing public app domains.
 
-```text
-infra/ec2-ssm-migration
-```
+Key outcomes completed:
 
-Pulled the useful uncommitted work from:
+- Staging infrastructure created and validated.
+- GitHub CI/CD added and passing.
+- GitHub OIDC deploy and Terraform roles configured.
+- Terraform remote state configured.
+- Staging deploys automatically from `main`.
+- Manual Terraform Apply workflow added and validated against staging.
+- Production replacement DB created, migrated, and connected to the production API.
+- Existing `demo.ona.*` dashboard/survey/API remain the production app endpoints.
 
-```text
-.claude/worktrees/compassionate-cannon-331abf
-```
+## Architecture Direction
 
-That worktree is now materialized on this branch as a real set of files/changes so it can be reviewed, refactored, committed, and iterated normally.
+We are intentionally using **EC2 + SSM** instead of ECS for now.
 
-## Direction
+Target model:
 
-We are intentionally choosing the **EC2 + SSM** path instead of ECS for now.
+- API runs on EC2 under PM2.
+- EC2 is managed through SSM Session Manager / Run Command.
+- API releases are packaged by GitHub Actions and deployed through SSM.
+- Frontends are built by GitHub Actions and synced to S3 + CloudFront.
+- Database migrations run from the backend instance because RDS should not be publicly reachable.
+- Staging and production are separated.
+- Runtime secrets should eventually move out of Terraform/S3 config objects into SSM Parameter Store or Secrets Manager.
 
-The target is:
-
-- keep a simple EC2 backend server/runtime
-- remove app deployment from cloud-init
-- deploy API releases from GitHub Actions through SSM Run Command
-- publish frontend builds from GitHub Actions to S3/CloudFront
-- run database migrations during deploy from the backend instance, because RDS should not be publicly reachable
-- create proper staging/prod separation first, then add dev once the pattern is stable
-
-## Current Branch Contents Pulled From Prototype
+## Implemented Components
 
 ### GitHub Actions
+
+Implemented workflows:
 
 ```text
 .github/workflows/ci.yml
 .github/workflows/deploy.yml
+.github/workflows/terraform-plan.yml
+.github/workflows/terraform-apply.yml
 ```
 
-### Deploy Scripts
+Current behavior:
+
+- PRs run CI and Terraform Plan.
+- Pushes to `main` run CI and deploy staging.
+- Deploy workflow can be manually run for `staging` or `production`.
+- Terraform Apply workflow is manual and supports `staging` or `production`.
+- Production environment has required reviewers configured.
+
+Latest verified checks on `main`:
+
+- CI: passing
+- Deploy to staging: passing
+- Terraform Apply to staging: passing
+
+### GitHub / AWS OIDC
+
+Configured repository variables:
 
 ```text
-scripts/ci/api-smoke.sh
-scripts/deploy/remote-deploy.sh
+AWS_DEPLOY_ROLE_ARN=arn:aws:iam::438465164125:role/github-actions-deploy
+AWS_TERRAFORM_ROLE_ARN=arn:aws:iam::438465164125:role/github-actions-terraform
+AWS_REGION=us-east-1
 ```
 
-### Terraform Additions
+Created/confirmed AWS resources:
 
 ```text
-terraform/github-oidc.tf
-terraform/locals.tf
-terraform/prod.tfvars
-terraform/staging.tfvars
-terraform/README.md
+OIDC provider: arn:aws:iam::438465164125:oidc-provider/token.actions.githubusercontent.com
+Deploy role:   arn:aws:iam::438465164125:role/github-actions-deploy
+TF role:       arn:aws:iam::438465164125:role/github-actions-terraform
 ```
 
-### Main Terraform/API Changes
-
-- Adds environment-aware names/tags through Terraform locals.
-- Adds staging/prod tfvars.
-- Adds GitHub OIDC deploy role support.
-- Adds S3 artifact bucket for API release tarballs.
-- Adds SSM permissions to the backend EC2 role.
-- Changes cloud-init to install runtime prerequisites only.
-- Removes Terraform-managed frontend build uploads.
-- Makes frontend publish happen from GitHub Actions.
-- Makes RDS private to the backend security group.
-- Restricts backend EC2 port 3000 to ALB security group only.
-- Adds DB SSL support to the API.
-- Removes local generated Liquibase scripts.
-- Adds on-instance Liquibase migration during deploy.
-
-## Final Target Architecture
-
-### Runtime
+GitHub environments:
 
 ```text
-GitHub Actions
-  ├─ build API artifact
-  ├─ upload artifact to S3 artifacts bucket
-  ├─ send SSM command to tagged EC2 backend instance
-  │    └─ instance downloads artifact, installs deps, runs Liquibase, restarts PM2
-  ├─ build dashboard
-  ├─ sync dashboard/build to dashboard S3 bucket
-  ├─ invalidate dashboard CloudFront
-  ├─ build survey app
-  ├─ sync network-survey/build to survey S3 bucket
-  └─ invalidate survey CloudFront
+staging
+production
 ```
 
-### Backend EC2
+Production has required reviewers configured.
 
-- Provisioned by Terraform.
-- Managed through SSM Session Manager and SSM Run Command.
-- No public SSH by default.
-- Runs API under PM2 for now.
-- Pulls release artifacts from S3.
-- Runs Liquibase migrations locally inside the VPC.
-- Reads runtime configuration from a secure source.
+### Terraform Remote State
 
-### Database
+Bootstrapped manually in AWS:
 
-- RDS Postgres 15 (`15.18` in us-east-1 as of staging rollout).
-- Staging uses DB master username `ona_admin` because `admin` is reserved by the Postgres engine for new RDS creation.
-- Not publicly accessible.
-- Security group allows Postgres only from backend EC2 security group.
-- TLS required.
-- Production deletion protection enabled.
-- Backups/snapshots/lifecycle hardened before final production cutover.
+```text
+S3 state bucket: network-survey-terraform-state-438465164125
+DynamoDB table:  network-survey-terraform-locks
+```
 
-### Frontends
+The current backend uses S3 state with S3 native lockfiles. The DynamoDB table exists as a compatibility fallback.
 
-- Terraform creates buckets, bucket policies, OACs, and CloudFront distributions.
-- GitHub Actions builds and publishes static assets.
-- Terraform does not upload app build files.
+### Local AWS CLI
 
-## Environment Strategy
+Local AWS CLI now uses IAM user `admin-cli`, not root, for normal operations.
 
-### Immediate Practical Step
+## Staging Environment
 
-The imported prototype uses Terraform workspaces:
+Staging was created as an isolated Terraform workspace-backed environment.
 
-| Workspace | Environment |
-|---|---|
-| `default` | prod/current demo stack |
-| `staging` | staging |
+### Staging Resources
 
-This is useful as a migration bridge because it tries to preserve current prod resource names.
+```text
+API:        https://staging.ona.api.bennetts.work
+Dashboard:  https://staging.ona.dashboard.bennetts.work
+Survey:     https://staging.ona.survey.bennetts.work
+```
 
-### Preferred Final Shape
+Terraform-created resources:
 
-After the SSM deployment flow is stabilized, refactor Terraform into explicit environment directories:
+```text
+API ALB DNS:          staging-main-alb-1483972898.us-east-1.elb.amazonaws.com
+API instance:         i-0edf83aaa1eebee13
+Artifact bucket:      ona-staging-artifacts-ztnzv6
+Config bucket:        ona-staging-config-ztnzv6
+Dashboard bucket:     ona-staging-dashboard-966c3626
+Survey bucket:        ona-staging-survey-966c3626
+Dashboard CloudFront: d3sh259vg3713j.cloudfront.net / E25BCX9GQEUQU7
+Survey CloudFront:    d3cyla8o3xxdl5.cloudfront.net / EMB4Y0ICRHFCS
+RDS endpoint:         terraform-20260710140507963100000001.cb4kmcse0a7d.us-east-1.rds.amazonaws.com:5432
+DB username:          ona_admin
+```
+
+### Staging Validation Completed
+
+- ACM certs validated.
+- Name.com DNS configured.
+- Terraform plan is clean.
+- SSM instance is online.
+- API artifact deploy through SSM succeeded.
+- Liquibase migrations ran from the instance.
+- PM2 started `ona-api` successfully.
+- ALB target group is healthy.
+- API health returns database ok.
+- Dashboard and survey CloudFront routes return `200`.
+- API register/login/check-auth smoke passed over staging domain.
+- GitHub Deploy workflow successfully deploys staging from `main`.
+- GitHub Terraform Apply workflow successfully ran against staging.
+
+### Staging Secrets
+
+Staging environment secrets are configured:
+
+```text
+TF_VAR_DB_PASSWORD
+TF_VAR_SESSION_SECRET
+TF_VAR_RESEND_API_KEY
+```
+
+The staging Resend key has been updated from the provided staging key.
+
+## Production / Demo Environment
+
+Decision: `demo.ona.*` remains production for now.
+
+```text
+API:        https://demo.ona.api.bennetts.work
+Dashboard:  https://demo.ona.dashboard.bennetts.work
+Survey:     https://demo.ona.survey.bennetts.work
+```
+
+Production goal changed from a full parallel `prod-v2` app stack to a **DB-only replacement**:
+
+- Keep existing `demo.ona.*` application endpoints.
+- Create a clean Terraform-managed replacement RDS database.
+- Migrate production data into the new DB.
+- Point production API at the new DB.
+- Keep old production DB for rollback.
+
+### Prod-v2 Cleanup Completed
+
+The temporary full-stack prod-v2 direction was abandoned before creating app infrastructure.
+
+Cleaned up:
+
+- Destroyed pending prod-v2 ACM certificates.
+- Removed prod-v2 workflow options.
+- Removed `terraform/prod-v2.tfvars`.
+- Deleted unused `prod-v2` Terraform workspace.
+
+### Production Replacement DB
+
+Terraform root:
+
+```text
+terraform/prod-db/
+```
+
+Created replacement DB:
+
+```text
+identifier:     network-survey-prod-postgres-v2
+endpoint:       network-survey-prod-postgres-v2.cb4kmcse0a7d.us-east-1.rds.amazonaws.com:5432
+database:       ONA
+username:       DbAdmin
+security group: sg-00d61e181de4cfb48
+```
+
+Desired settings now in place:
+
+- `publicly_accessible = false`
+- storage encryption enabled
+- backup retention: 7 days
+- deletion protection enabled
+- parameter group: `default.postgres15`
+- engine version: `15.18`
+- access allowed from existing prod backend security group
+
+### Production Data Migration Completed
+
+Completed steps:
+
+1. Created replacement DB with Terraform.
+2. Launched temporary EC2 migration host in the existing prod VPC.
+3. Installed PostgreSQL 15 client on the migration host.
+4. Dumped current prod DB.
+5. Restored dump into `network-survey-prod-postgres-v2`.
+6. Smoke checked restored DB:
+
+```sql
+select count(*) from survey;
+```
+
+Result:
+
+```text
+9
+```
+
+7. Terminated the temporary migration EC2 instance.
+
+### Production API Cutover Completed
+
+Completed steps:
+
+- Updated existing prod API runtime config:
+
+```text
+s3://my-config-bucket-1xo22t/configs/.env.prod
+```
+
+- Backup of previous config:
+
+```text
+s3://my-config-bucket-1xo22t/configs/.env.prod.pre-db-v2-20260711104125
+```
+
+- Updated config now points at:
+
+```text
+network-survey-prod-postgres-v2.cb4kmcse0a7d.us-east-1.rds.amazonaws.com
+```
+
+- Added DB SSL settings:
+
+```text
+DB_SSL=true
+DB_SSL_CA=/opt/service/certs/rds-global-bundle.pem
+```
+
+- Uploaded current API artifact to production artifact/config bucket.
+- Launched replacement prod API EC2 instance:
+
+```text
+i-0d6b0331e187e61a3
+```
+
+- Registered the instance with existing `backend-targets` target group.
+- Deployed current API artifact to the prod API instance via SSM.
+- Marked restored Liquibase changesets synchronized due to historical changeset identity differences.
+- Redeployed API successfully after Liquibase sync.
+- ALB target is healthy.
+
+### Production Validation Completed
+
+Verified:
+
+```text
+https://demo.ona.api.bennetts.work/health -> {"status":"ok","database":"ok"}
+https://demo.ona.dashboard.bennetts.work/ -> 200
+https://demo.ona.survey.bennetts.work    -> 200
+```
+
+User validated the production webapp and reported it looks good.
+
+### Production Secrets
+
+Production environment secrets are configured:
+
+```text
+TF_VAR_DB_PASSWORD
+TF_VAR_SESSION_SECRET
+TF_VAR_RESEND_API_KEY
+```
+
+Production Resend key was set from the provided production key.
+
+## Rollback Notes
+
+Old production DB remains intact for rollback.
+
+Current old prod DB:
+
+```text
+terraform-2025041516063189290000000a.cb4kmcse0a7d.us-east-1.rds.amazonaws.com
+```
+
+Rollback would require:
+
+1. Restore old prod API config from:
+
+```text
+s3://my-config-bucket-1xo22t/configs/.env.prod.pre-db-v2-20260711104125
+```
+
+2. Redeploy/restart production API.
+3. Verify `demo.ona.*` health and app behavior.
+
+Recommended rollback window: keep old DB for 2–4 weeks.
+
+Estimated cost to keep old `db.t3.micro`/20GB RDS online:
+
+```text
+~$15–20/month
+~$8–10 for two weeks
+```
+
+Before deleting old DB later, create a final snapshot.
+
+## Remaining Future Work
+
+### Near Term
+
+1. **Browser validation**
+   - dashboard login
+   - existing surveys list
+   - selected survey questions/respondents
+   - results view
+   - survey link flow
+   - email send/test email
+
+2. **Old production DB rollback window**
+   - keep old DB running for 2–4 weeks
+   - tag it clearly as legacy/rollback if not already tagged
+   - create final snapshot before deletion
+   - delete after rollback window if no issues
+
+3. **Clean up obsolete compute/security**
+   - identify any unused legacy EC2 instances
+   - stop/terminate obsolete instances after validation
+   - tighten old security groups, especially open SSH/API access
+
+4. **Document production cutover runbook**
+   - exact rollback command sequence
+   - old/new DB endpoints
+   - config backup path
+   - validation checklist
+
+### CI/CD Follow-ups
+
+1. **Production Deploy workflow validation**
+   - production deploy path is configured but should be tested carefully with approval gate
+   - ensure it targets intended prod resources only
+
+2. **Rollback workflow**
+   - add a manual workflow to redeploy a selected API artifact SHA
+   - optionally add frontend rollback via CloudFront/S3 versioned assets
+
+3. **Terraform workflows**
+   - keep Terraform Plan required on PRs
+   - evaluate whether Terraform Apply should remain manual-only
+   - consider separate deploy role vs infra apply role with tighter permissions
+
+4. **Branch protection**
+   - require CI and Terraform Plan before merging to `main`
+   - require PR review for infrastructure changes
+
+### Security / Hardening
+
+1. **Secrets management**
+   - move runtime secrets out of Terraform state and S3 `.env.prod`
+   - use SSM Parameter Store SecureString or AWS Secrets Manager
+   - update deploy script to fetch secrets at deploy time
+
+2. **S3 hardening**
+   - add explicit public access blocks for dashboard/survey buckets where missing
+   - add bucket encryption/versioning/lifecycle rules across all buckets
+   - add artifact bucket lifecycle cleanup
+
+3. **CloudFront hardening**
+   - add SPA fallback responses to `/index.html`
+   - move from legacy `forwarded_values` to cache policies
+   - enable compression/cache tuning
+
+4. **ALB hardening**
+   - add HTTP port 80 listener redirecting to HTTPS
+   - ensure modern TLS policies everywhere
+   - review health check thresholds/timeouts
+
+5. **RDS hardening**
+   - enable enhanced monitoring if desired
+   - review backup windows/maintenance windows
+   - verify final snapshots and retention policies
+   - eventually delete old public prod DB after rollback window
+
+6. **Network hardening**
+   - move backend EC2 to private subnet later if desired
+   - use VPC endpoints/NAT strategy if private backend needs outbound access
+   - remove broad SSH access from legacy security groups
+   - use SSM Session Manager only
+
+### Terraform Refactor
+
+Current Terraform still uses a transitional structure. Longer term:
 
 ```text
 terraform/
@@ -142,424 +427,22 @@ terraform/
     github_oidc/
   envs/
     staging/
-      main.tf
-      backend.tf
-      terraform.tfvars
     prod/
-      main.tf
-      backend.tf
-      terraform.tfvars
     dev/
-      main.tf
-      backend.tf
-      terraform.tfvars
 ```
 
-Why this is preferred:
+Benefits:
 
-- safer state separation
-- clearer review boundaries
-- fewer accidental workspace mistakes
-- easier GitHub Actions targeting
-- easier per-env IAM and secrets policies
+- cleaner environment boundaries
+- safer state isolation
+- easier review
+- less workspace foot-gun risk
+- simpler GitHub Actions targeting
 
-## Secrets Plan
+### Optional Dev Environment
 
-The prototype improved secrets by removing hardcoded values from the template, but it still renders secrets into an S3 `.env.prod` object through Terraform. That means secrets can still appear in Terraform state.
+Still open:
 
-### Final Recommendation
-
-Move runtime secrets to **AWS SSM Parameter Store SecureString** or **AWS Secrets Manager**.
-
-Suggested parameters/secrets per environment:
-
-```text
-/network-survey/staging/db/password
-/network-survey/staging/session-secret
-/network-survey/staging/resend-api-key
-/network-survey/prod/db/password
-/network-survey/prod/session-secret
-/network-survey/prod/resend-api-key
-```
-
-Runtime config can be split:
-
-- non-secret config from Terraform/SSM plain strings
-- secret values from SSM SecureString/Secrets Manager
-
-The deploy script can materialize `/opt/service/current/api/.env.prod` on the instance at deploy time, or the Node app can be changed to read directly from environment variables injected by a systemd/PM2 ecosystem file.
-
-### Transitional Acceptable State
-
-For the first staging implementation, S3-rendered `.env.prod` can be tolerated if:
-
-- bucket is private
-- access is tightly scoped
-- secrets are not committed
-- Terraform state is remote, encrypted, and access-controlled
-
-But this should not be the final prod posture.
-
-## AWS Account Bootstrap
-
-Performed manually from the root-authenticated AWS CLI session, then switched local CLI default to `admin-cli`:
-
-- Confirmed existing IAM admin user: `admin-cli`.
-- Created/ensured IAM group: `Administrators`.
-- Attached `AdministratorAccess` to `Administrators`.
-- Added `admin-cli` to `Administrators`.
-- Created GitHub OIDC provider:
-  `arn:aws:iam::438465164125:oidc-provider/token.actions.githubusercontent.com`.
-- Created GitHub deploy role:
-  `arn:aws:iam::438465164125:role/github-actions-deploy`.
-- Attached inline deployment policy matching the current EC2 + SSM deploy workflow.
-
-Important: because these account-global GitHub OIDC resources were bootstrapped manually, `terraform/prod.tfvars` currently keeps `manage_github_oidc = false`. If we want Terraform to own them later, import the provider, role, and inline policy into Terraform state before enabling that flag.
-
-### Terraform Remote State Bootstrap
-
-Bootstrapped manually in AWS:
-
-- S3 state bucket: `network-survey-terraform-state-438465164125`
-- DynamoDB lock table: `network-survey-terraform-locks` (created as a compatibility fallback; current backend uses S3 native lockfiles)
-
-The state bucket has versioning, SSE-S3 encryption, public access blocks, and S3 native lockfiles enabled. Terraform is configured in `terraform/backend.tf` with workspace-aware S3 state paths:
-
-- default workspace: `terraform.tfstate`
-- non-default workspaces: `env/<workspace>/terraform.tfstate`
-
-## CI/CD Plan
-
-### CI/CD Execution Status
-
-Opened PR for the migration branch:
-
-- https://github.com/CLAdvisors/network-survey/pull/1
-
-GitHub Actions are now running on PR #1.
-
-Current PR checks passing:
-
-- API integration smoke test
-- Dashboard build/test
-- Survey build/test
-- Terraform Plan
-
-Fixes made while enabling CI/CD:
-
-- moved Terraform fmt before generated `ci.auto.tfvars`
-- granted the GitHub deploy role read access to Terraform remote state
-- granted read-only discovery permissions needed by Terraform plan
-- granted `rds:ListTagsForResource` for RDS subnet group refresh
-
-The Deploy workflow cannot be triggered with `workflow_dispatch` until it exists on the repository default branch. The same deploy flow was validated manually against staging from this branch. After merge, manually run Deploy with `environment=staging` to validate the GitHub-hosted deploy path end-to-end.
-
-### CI Workflow
-
-Existing imported workflow:
-
-```text
-.github/workflows/ci.yml
-```
-
-Current behavior:
-
-- starts Postgres service container
-- runs Liquibase migrations
-- installs API dependencies
-- runs API smoke test
-- builds dashboard
-- builds survey app
-
-Recommended additions:
-
-- Terraform fmt/validate
-- maybe `npm audit --audit-level=high` later, once dependency baseline is known
-- separate frontend lint cleanup later; currently CRA warnings require `CI=false`
-
-### GitHub Repository Configuration
-
-Configured repository variables:
-
-- `AWS_DEPLOY_ROLE_ARN=arn:aws:iam::438465164125:role/github-actions-deploy`
-- `AWS_TERRAFORM_ROLE_ARN=arn:aws:iam::438465164125:role/github-actions-terraform`
-- `AWS_REGION=us-east-1`
-
-Configured repository secrets for current staging Terraform planning/deploy bootstrap:
-
-- `TF_VAR_DB_PASSWORD`
-- `TF_VAR_SESSION_SECRET`
-- `TF_VAR_RESEND_API_KEY` (currently staging placeholder unless replaced with a real Resend key)
-
-Attempted to create GitHub Environments `staging` and `production`, but the authenticated GitHub user only has `WRITE` permission, not repository admin permission. Environment creation/protection returned `403`. A repo admin still needs to:
-
-- create `staging`
-- create `production`
-- add required reviewers to `production`
-- preferably move environment-specific Terraform secrets from repo-level secrets into environment-level secrets before production planning/apply workflows are enabled
-
-Follow-up completed:
-
-- `production` now exists and has required reviewers.
-- staging environment-level Terraform secrets are set.
-- created manually bootstrapped Terraform apply role: `arn:aws:iam::438465164125:role/github-actions-terraform`.
-- added `.github/workflows/terraform-apply.yml` for manually approved Terraform applies.
-
-Production/demo decision:
-
-- `demo.ona.*` remains production for now.
-- Production should adopt the existing RDS database, not create a brand new one.
-- Staging already has its own brand new Terraform-created RDS database.
-
-Completed production environment secrets:
-
-- `TF_VAR_DB_PASSWORD` copied from the current prod config bucket (`my-config-bucket-1xo22t`).
-- `TF_VAR_SESSION_SECRET` copied from the current prod config bucket (`my-config-bucket-1xo22t`).
-- `TF_VAR_RESEND_API_KEY` set from the provided production Resend key.
-
-Prod tfvars now matches existing prod RDS master username:
-
-- `db_user = "DbAdmin"`
-
-Still needed before production apply:
-
-- import existing production resources into default Terraform workspace/state, or perform careful state migration.
-- review planned prod deltas before apply. Known existing prod RDS currently differs from staging defaults in at least engine version (`15.17` existing vs `15.18` config), parameter group (`postgres-no-ssl` existing), public accessibility, and deletion protection.
-
-### Deploy Workflow
-
-Existing imported workflow:
-
-```text
-.github/workflows/deploy.yml
-```
-
-Current behavior:
-
-- push to `main` deploys staging
-- manual workflow dispatch deploys staging or production
-- uses GitHub OIDC to assume AWS role
-- resolves buckets/distributions/instance by tags
-- packages API release
-- uploads artifact to S3
-- deploys API via SSM Run Command
-- builds and publishes frontends
-
-Recommended refactors:
-
-- replace hardcoded hostnames in shell with GitHub Environment variables or Terraform outputs
-- split staging and production deploy configuration more explicitly
-- add a rollback workflow that redeploys a selected artifact SHA
-- add concurrency per environment
-- gate production through GitHub Environments reviewers
-
-### Terraform Workflow
-
-Still needed:
-
-```text
-.github/workflows/terraform-plan.yml
-.github/workflows/terraform-apply.yml
-```
-
-Recommended behavior:
-
-- PRs: run fmt/validate/plan
-- main: allow staging apply
-- production: manual approval using GitHub Environments
-- use OIDC, not static AWS keys
-- use remote state backend before CI applies are enabled
-
-## Hardening Tasks
-
-### Already Partially Addressed In Imported Prototype
-
-- API port no longer public; only ALB can reach it.
-- RDS no longer public.
-- RDS SG only allows backend SG.
-- SSH disabled by default.
-- SSM instance management added.
-- CloudFront viewer protocol changed to HTTPS redirect.
-- ALB target group health check added.
-- Modern-ish TLS policy added for ALB.
-
-### Still Needed
-
-- Add HTTP port 80 ALB listener that redirects to HTTPS.
-- Add S3 public access blocks for dashboard/survey buckets.
-- Add S3 bucket encryption and versioning for all buckets.
-- Add artifact bucket lifecycle cleanup.
-- Add CloudFront SPA fallback error responses to `/index.html`.
-- Add CloudFront compression/cache policies instead of legacy `forwarded_values`.
-- Add Route53-managed DNS records and ACM validation if DNS is in AWS.
-- Tighten GitHub deploy IAM policy.
-- Add rollback workflow.
-- Add remote Terraform state.
-- Move secrets out of Terraform state.
-- Add RDS backup retention, storage encryption, monitoring, and deletion protection per environment.
-- Decide whether backend EC2 should move to private subnet later.
-
-## Migration/Cutover Plan
-
-### Phase 1: Branch Stabilization
-
-- Review imported prototype changes.
-- Run format/validation locally where possible.
-- Fix obvious Terraform syntax/style issues.
-- Keep plan file updated as decisions are made.
-
-### Phase 2: Staging First
-
-Status: infrastructure is standing up successfully.
-
-Created staging resources:
-
-- API ALB DNS: `staging-main-alb-1483972898.us-east-1.elb.amazonaws.com`
-- API instance: `i-0edf83aaa1eebee13`
-- Artifact bucket: `ona-staging-artifacts-ztnzv6`
-- Config bucket: `ona-staging-config-ztnzv6`
-- Dashboard bucket: `ona-staging-dashboard-966c3626`
-- Survey bucket: `ona-staging-survey-966c3626`
-- Dashboard CloudFront: `d3sh259vg3713j.cloudfront.net` / `E25BCX9GQEUQU7`
-- Survey CloudFront: `d3cyla8o3xxdl5.cloudfront.net` / `EMB4Y0ICRHFCS`
-- RDS endpoint: `terraform-20260710140507963100000001.cb4kmcse0a7d.us-east-1.rds.amazonaws.com:5432`
-- DB username: `ona_admin`
-
-Validated:
-
-- Terraform staging plan is clean.
-- SSM instance is online.
-- API artifact deploy through SSM succeeded.
-- Liquibase migrations ran from the instance.
-- PM2 started `ona-api` successfully.
-- ALB target group is healthy.
-- API health works with staging host/SNI: `/health` returns database ok.
-- Dashboard and survey builds were synced to S3.
-- CloudFront distributions return `200` for both frontend roots.
-
-Remaining staging DNS records to add at Name.com:
-
-- `staging.ona.api.bennetts.work` CNAME -> `staging-main-alb-1483972898.us-east-1.elb.amazonaws.com`
-- `staging.ona.dashboard.bennetts.work` CNAME -> `d3sh259vg3713j.cloudfront.net`
-- `staging.ona.survey.bennetts.work` CNAME -> `d3cyla8o3xxdl5.cloudfront.net`
-
-DNS is live and responding:
-
-- `https://staging.ona.api.bennetts.work/health` returns database ok.
-- `https://staging.ona.dashboard.bennetts.work/` returns `200`.
-- `https://staging.ona.survey.bennetts.work/` returns `200`.
-- API register/login/check-auth smoke passed over the staging domain.
-
-Still validate manually:
-
-  - dashboard browser login/session behavior
-  - email config behavior
-  - survey submission
-
-### Phase 3: CI/CD Hardening
-
-- Add Terraform plan workflow.
-- Configure GitHub OIDC.
-- Configure GitHub Environments:
-  - `staging`
-  - `production`
-- Add production approval gate.
-- Add rollback workflow.
-
-### Phase 4: Production Migration
-
-Before first prod apply:
-
-- rotate leaked Resend API key from historical `env.tmpl`
-- decide whether `demo.ona.*` is real prod or demo/staging
-- ensure remote encrypted Terraform state exists
-- back up current RDS
-- decide whether to recreate EC2 or bootstrap it manually with SSM
-- remove old Terraform-managed frontend objects from state to avoid unwanted deletes, or schedule immediate deploy after apply
-- verify SSM session access
-- verify DNS/cert validation path
-
-Then:
-
-1. apply infra changes during maintenance window
-2. run deploy workflow to publish API/frontends
-3. verify health checks and login
-4. verify survey link flow
-5. verify email sending
-6. lock down any temporary access
-
-### Phase 5: Terraform Structure Refactor
-
-Once staging/prod are stable:
-
-- extract modules
-- move from workspaces to env directories if still desired
-- add dev environment
-- remove legacy naming exceptions where possible
-
-## Production DB Replacement Track
-
-Decision correction: keep the existing `demo.ona.*` application stack as production and replace only the database with a clean Terraform-managed RDS instance using desired settings. Do **not** create a parallel prod-v2 API/dashboard/survey stack.
-
-Cleaned up:
-
-- destroyed the pending prod-v2 ACM certificates
-- removed prod-v2 workflow options and temporary prod-v2 Terraform config
-
-Added:
-
-- `terraform/prod-db/` standalone Terraform root for the replacement production DB
-- local secret files renamed to `*.local.tfvars` and gitignored so workspace-specific local applies do not accidentally pick up the wrong environment secrets via Terraform's automatic `*.auto.tfvars` loading
-
-Created replacement prod DB:
-
-- identifier: `network-survey-prod-postgres-v2`
-- endpoint: `network-survey-prod-postgres-v2.cb4kmcse0a7d.us-east-1.rds.amazonaws.com:5432`
-- database: `ONA`
-- username: `DbAdmin`
-- security group: `sg-00d61e181de4cfb48`
-- public accessibility: `false`
-- storage encryption: enabled
-- backup retention: 7 days
-- deletion protection: enabled
-- parameter group: `default.postgres15`
-- engine version: `15.18`
-
-Actual production DB migration status:
-
-- Created replacement DB with Terraform.
-- Launched a temporary EC2 migration host in the existing prod VPC.
-- Installed PostgreSQL 15 client on the migration host.
-- Dumped current prod DB and restored into `network-survey-prod-postgres-v2`.
-- Smoke checked restored DB with `select count(*) from survey;` → `9`.
-- Terminated the temporary migration EC2 instance.
-- Destroyed pending prod-v2 ACM certs and deleted the unused `prod-v2` Terraform workspace.
-
-Production cutover status:
-
-- Updated existing prod API runtime config in `my-config-bucket-1xo22t/configs/.env.prod` to point at replacement DB and include DB SSL settings.
-- Backed up previous prod config to `configs/.env.prod.pre-db-v2-20260711104125`.
-- Launched replacement prod API EC2 instance in existing prod VPC: `i-0d6b0331e187e61a3`.
-- Registered the instance with existing `backend-targets` target group.
-- Deployed current API artifact to the prod API instance via SSM.
-- Marked restored Liquibase changesets as synchronized to account for historical changeset identity differences.
-- Redeployed API successfully after Liquibase sync.
-- ALB target is healthy.
-- `https://demo.ona.api.bennetts.work/health` returns database ok.
-- `https://demo.ona.dashboard.bennetts.work/` returns `200`.
-- `https://demo.ona.survey.bennetts.work/` returns `200`.
-
-Remaining production validation steps:
-
-1. Validate in the browser: dashboard login, survey list, selected survey details, results, and survey link flow.
-2. Validate email sending with the production Resend key.
-3. Keep old production DB intact through rollback window.
-4. After validation, decide whether to stop/terminate obsolete legacy compute and tighten legacy security groups.
-
-## Open Decisions
-
-- Should dev exist now or after staging/prod are stable?
-- Do we manage DNS in Route53 or externally?
-- Parameter Store or Secrets Manager for final secret storage?
-- Keep PM2 or move to systemd service for API process management?
-- Keep backend EC2 public with locked-down SG, or move to private subnet later?
+- whether to create a separate `dev` environment
+- whether dev should be always-on or lower-cost/on-demand
+- whether dev shares non-prod DB infra or gets fully isolated resources

@@ -6,6 +6,7 @@ One Terraform configuration, deployed per environment with **workspaces**:
 |---|---|---|---|
 | `default` | prod (the original "demo" stack) | `demo.ona.{api,dashboard,survey}.bennetts.work` | `prod.tfvars` |
 | `staging` | staging | `staging.ona.{api,dashboard,survey}.bennetts.work` | `staging.tfvars` |
+| `prod-v2` | temporary clean production migration candidate | `prod-v2.ona.{api,dashboard,survey}.bennetts.work` | `prod-v2.tfvars` |
 
 The default workspace keeps the resource names that already exist in prod state, so
 adopting workspaces required no state surgery. Non-default workspaces prefix
@@ -37,9 +38,11 @@ export TF_VAR_session_secret=...
 export TF_VAR_resend_api_key=...
 ```
 
-or an untracked `*.auto.tfvars` (gitignored). **Never commit them** — the old
-`env.tmpl` contained a live Resend key; that key should be rotated in the Resend
-dashboard since it lives in git history.
+or an untracked `*.local.tfvars` file passed explicitly with `-var-file`.
+**Never commit them** — the old `env.tmpl` contained a live Resend key; that key
+should be rotated in the Resend dashboard since it lives in git history. Avoid
+local `*.auto.tfvars` for environment-specific secrets because Terraform loads
+them for every workspace.
 
 ## Applying
 
@@ -52,6 +55,11 @@ terraform apply -var-file=prod.tfvars
 terraform workspace new staging      # first time only
 terraform workspace select staging
 terraform apply -var-file=staging.tfvars
+
+# prod-v2 migration candidate
+terraform workspace new prod-v2      # first time only
+terraform workspace select prod-v2
+terraform apply -var-file=prod-v2.tfvars
 ```
 
 Standing up a **new** environment needs two passes, because the

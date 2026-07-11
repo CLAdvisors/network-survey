@@ -7,7 +7,7 @@ on:
         description: Environment to apply
         required: true
         type: choice
-        options: [staging, production]
+        options: [staging, prod-v2, production]
         default: staging
 
 permissions:
@@ -49,6 +49,10 @@ jobs:
             production)
               WORKSPACE=default
               VAR_FILE=prod.tfvars
+              ;;
+            prod-v2)
+              WORKSPACE=prod-v2
+              VAR_FILE=prod-v2.tfvars
               ;;
             staging)
               WORKSPACE=staging

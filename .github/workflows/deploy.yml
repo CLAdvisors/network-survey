@@ -9,7 +9,7 @@ on:
         description: Environment to deploy
         required: true
         type: choice
-        options: [staging, production]
+        options: [staging, prod-v2, production]
 
 permissions:
   id-token: write # OIDC federation to AWS — no long-lived keys
@@ -52,6 +52,11 @@ jobs:
               DEFAULT_TF_ENV=prod
               DEFAULT_API_HOST=demo.ona.api.bennetts.work
               DEFAULT_SURVEY_HOST=demo.ona.survey.bennetts.work
+              ;;
+            prod-v2)
+              DEFAULT_TF_ENV=prod-v2
+              DEFAULT_API_HOST=prod-v2.ona.api.bennetts.work
+              DEFAULT_SURVEY_HOST=prod-v2.ona.survey.bennetts.work
               ;;
             staging)
               DEFAULT_TF_ENV=staging

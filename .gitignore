@@ -9,6 +9,7 @@ terraform/terraform.tfstate.backup
 terraform/terraform.tfstate.d
 terraform/terraform.tfvars
 terraform/*.auto.tfvars
+terraform/*.local.tfvars
 terraform/.terraform.lock.hcl
 db/liquibase.properties
 db/liquibase-prod.*

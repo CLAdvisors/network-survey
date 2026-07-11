@@ -497,10 +497,40 @@ Once staging/prod are stable:
 - add dev environment
 - remove legacy naming exceptions where possible
 
+## Prod-v2 Migration Track
+
+Decision: rather than importing the divergent legacy production RDS/resources directly, create a clean temporary `prod-v2` stack with desired settings, migrate data into it, validate, and cut DNS only after confidence is high.
+
+Added:
+
+- `terraform/prod-v2.tfvars`
+- workflow support for `prod-v2` in Terraform Plan, Terraform Apply, and Deploy
+- `scripts/deploy/migrate-db-from-env.sh` one-off helper for migrating current prod DB into the new private target DB from the target EC2 instance
+- `postgresql-client` to EC2 bootstrap so `pg_dump`/`pg_restore` are available
+
+Temporary prod-v2 domains:
+
+- `prod-v2.ona.api.bennetts.work`
+- `prod-v2.ona.dashboard.bennetts.work`
+- `prod-v2.ona.survey.bennetts.work`
+
+Local secret files were renamed to `*.local.tfvars` and gitignored so workspace-specific local applies do not accidentally pick up the wrong environment secrets via Terraform's automatic `*.auto.tfvars` loading.
+
+Prod-v2 rollout steps:
+
+1. Create/select Terraform workspace `prod-v2`.
+2. Target-create prod-v2 ACM certificates.
+3. Add prod-v2 ACM validation CNAMEs in Name.com.
+4. Run full prod-v2 Terraform apply.
+5. Add prod-v2 app CNAMEs in Name.com.
+6. Deploy prod-v2 API/frontends.
+7. Run DB migration helper from prod-v2 EC2 via SSM using current prod source DB credentials.
+8. Re-run/deploy API if needed and validate app behavior.
+9. Cut `demo.ona.*` DNS to the new stack only after validation.
+10. Keep old production DB/resources intact until rollback window passes.
+
 ## Open Decisions
 
-- Is `demo.ona.*` production, staging, or demo?
-- Desired domains for dev/staging/prod?
 - Should dev exist now or after staging/prod are stable?
 - Do we manage DNS in Route53 or externally?
 - Parameter Store or Secrets Manager for final secret storage?

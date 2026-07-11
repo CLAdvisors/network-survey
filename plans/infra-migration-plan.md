@@ -497,37 +497,42 @@ Once staging/prod are stable:
 - add dev environment
 - remove legacy naming exceptions where possible
 
-## Prod-v2 Migration Track
+## Production DB Replacement Track
 
-Decision: rather than importing the divergent legacy production RDS/resources directly, create a clean temporary `prod-v2` stack with desired settings, migrate data into it, validate, and cut DNS only after confidence is high.
+Decision correction: keep the existing `demo.ona.*` application stack as production and replace only the database with a clean Terraform-managed RDS instance using desired settings. Do **not** create a parallel prod-v2 API/dashboard/survey stack.
+
+Cleaned up:
+
+- destroyed the pending prod-v2 ACM certificates
+- removed prod-v2 workflow options and temporary prod-v2 Terraform config
 
 Added:
 
-- `terraform/prod-v2.tfvars`
-- workflow support for `prod-v2` in Terraform Plan, Terraform Apply, and Deploy
-- `scripts/deploy/migrate-db-from-env.sh` one-off helper for migrating current prod DB into the new private target DB from the target EC2 instance
-- `postgresql-client` to EC2 bootstrap so `pg_dump`/`pg_restore` are available
+- `terraform/prod-db/` standalone Terraform root for the replacement production DB
+- local secret files renamed to `*.local.tfvars` and gitignored so workspace-specific local applies do not accidentally pick up the wrong environment secrets via Terraform's automatic `*.auto.tfvars` loading
 
-Temporary prod-v2 domains:
+Created replacement prod DB:
 
-- `prod-v2.ona.api.bennetts.work`
-- `prod-v2.ona.dashboard.bennetts.work`
-- `prod-v2.ona.survey.bennetts.work`
+- identifier: `network-survey-prod-postgres-v2`
+- endpoint: `network-survey-prod-postgres-v2.cb4kmcse0a7d.us-east-1.rds.amazonaws.com:5432`
+- database: `ONA`
+- username: `DbAdmin`
+- security group: `sg-00d61e181de4cfb48`
+- public accessibility: `false`
+- storage encryption: enabled
+- backup retention: 7 days
+- deletion protection: enabled
+- parameter group: `default.postgres15`
+- engine version: `15.18`
 
-Local secret files were renamed to `*.local.tfvars` and gitignored so workspace-specific local applies do not accidentally pick up the wrong environment secrets via Terraform's automatic `*.auto.tfvars` loading.
+Actual production DB cutover steps:
 
-Prod-v2 rollout steps:
-
-1. Create/select Terraform workspace `prod-v2`.
-2. Target-create prod-v2 ACM certificates.
-3. Add prod-v2 ACM validation CNAMEs in Name.com.
-4. Run full prod-v2 Terraform apply.
-5. Add prod-v2 app CNAMEs in Name.com.
-6. Deploy prod-v2 API/frontends.
-7. Run DB migration helper from prod-v2 EC2 via SSM using current prod source DB credentials.
-8. Re-run/deploy API if needed and validate app behavior.
-9. Cut `demo.ona.*` DNS to the new stack only after validation.
-10. Keep old production DB/resources intact until rollback window passes.
+1. Migrate data from current prod RDS into `network-survey-prod-postgres-v2`.
+2. Validate row counts/schema and run Liquibase status/update if needed.
+3. Update existing prod API runtime config in `my-config-bucket-1xo22t/configs/.env.prod` to point at the replacement DB and include DB SSL settings.
+4. Restart/redeploy the existing prod API.
+5. Validate `demo.ona.*` end-to-end.
+6. Keep old production DB intact through rollback window.
 
 ## Open Decisions
 

@@ -6,7 +6,6 @@ One Terraform configuration, deployed per environment with **workspaces**:
 |---|---|---|---|
 | `default` | prod (the original "demo" stack) | `demo.ona.{api,dashboard,survey}.bennetts.work` | `prod.tfvars` |
 | `staging` | staging | `staging.ona.{api,dashboard,survey}.bennetts.work` | `staging.tfvars` |
-| `prod-v2` | temporary clean production migration candidate | `prod-v2.ona.{api,dashboard,survey}.bennetts.work` | `prod-v2.tfvars` |
 
 The default workspace keeps the resource names that already exist in prod state, so
 adopting workspaces required no state surgery. Non-default workspaces prefix
@@ -55,11 +54,6 @@ terraform apply -var-file=prod.tfvars
 terraform workspace new staging      # first time only
 terraform workspace select staging
 terraform apply -var-file=staging.tfvars
-
-# prod-v2 migration candidate
-terraform workspace new prod-v2      # first time only
-terraform workspace select prod-v2
-terraform apply -var-file=prod-v2.tfvars
 ```
 
 Standing up a **new** environment needs two passes, because the

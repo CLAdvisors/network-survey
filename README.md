@@ -38,8 +38,14 @@ The API runner treats `RESEND_API_KEY` or `RESEND_KEY` as optional for startup. 
 - Default bootstrap credentials are `admin` / `admin123`
 - Override bootstrap credentials with `LOCAL_ADMIN_USERNAME` and `LOCAL_ADMIN_PASSWORD` in `api/.env.local`
 - `db:setup` is local-only and refuses to run when `DB_HOST` is not local or `NODE_ENV` is non-local
-- For production/staging, use Terraform outputs plus generated scripts in `db/liquibase-prod.sh` or `db/liquibase-prod.ps1`
+- For staging/production, migrations run automatically on the EC2 instance during deploys (see `.github/workflows/deploy.yml` and `scripts/deploy/remote-deploy.sh`) — the databases are not reachable from outside the VPC
 - For intentional non-local one-off execution, pass `--allow-nonlocal` (or set `ALLOW_NON_LOCAL_DB_SETUP=true` in `api/.env.local`)
+
+## CI/CD
+
+- `CI` workflow (every PR and push to `main`): builds and tests both frontends, and runs an API integration smoke test against a migrated Postgres 15 service container (`scripts/ci/api-smoke.sh`).
+- `Deploy` workflow: pushes to `main` deploy to **staging** automatically; **production** deploys are triggered manually from the Actions tab. Frontends are synced to S3 + CloudFront invalidated; the API is packaged as a tarball in S3 and installed on the EC2 instance via SSM (`scripts/deploy/remote-deploy.sh`) with a pm2 reload — instances are never rebuilt for a deploy.
+- Infrastructure (environments, IAM/OIDC for CI, setup steps) is documented in [terraform/README.md](terraform/README.md).
 
 ### Standard local ports
 

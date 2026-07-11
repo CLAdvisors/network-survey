@@ -15,13 +15,21 @@ dotenvFlow.config();
 
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
-// Create a new instance of the Pool
+// Create a new instance of the Pool.
+// DB_SSL enables TLS (RDS enforces it); DB_SSL_CA points at the RDS CA bundle
+// so the server certificate is actually verified.
 const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
-  database: 'ONA',
+  database: process.env.DB_NAME || 'ONA',
+  ssl: process.env.DB_SSL === 'true'
+    ? {
+        ca: process.env.DB_SSL_CA ? fs.readFileSync(process.env.DB_SSL_CA, 'utf8') : undefined,
+        rejectUnauthorized: Boolean(process.env.DB_SSL_CA),
+      }
+    : undefined,
 });
 
 const resend = resendApiKey ? new Resend(resendApiKey) : null;
@@ -263,7 +271,9 @@ app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  name: 'sessionId',
+  // Per-environment cookie name: staging and prod share the .bennetts.work
+  // cookie domain, so a shared name would let them clobber each other
+  name: process.env.SESSION_COOKIE_NAME || 'sessionId',
   cookie: {
     secure: process.env.NODE_ENV === 'prod', // Only use secure in production
     httpOnly: true,
@@ -273,45 +283,6 @@ app.use(session({
     domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined
   }
 }));
-app.post('/api/create-test-user', async (req, res) => {
-  try {
-    const testUser = {
-      username: 'testuser',
-      password: 'password123'  // Will be hashed before storage
-    };
-
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(testUser.password, 10);
-
-    // Check if user exists
-    const exists = await pool.query(
-      'SELECT * FROM users WHERE username = $1',
-      [testUser.username]
-    );
-
-    if (exists.rows.length > 0) {
-      return res.json({ message: 'Test user already exists' });
-    }
-
-    // Create user
-    await pool.query(
-      'INSERT INTO users (username, password) VALUES ($1, $2)',
-      [testUser.username, hashedPassword]
-    );
-
-    res.json({ 
-      message: 'Test user created',
-      credentials: {
-        username: testUser.username,
-        password: testUser.password
-      }
-    });
-  } catch (error) {
-    console.error('Error creating test user:', error);
-    res.status(500).json({ error: 'Failed to create test user' });
-  }
-});
-
 // Register user endpoint
 app.post('/api/register', async (req, res) => {
   try {
@@ -413,7 +384,7 @@ app.post('/api/logout', (req, res) => {
       console.error('Logout error:', err);
       return res.status(500).json({ error: 'Error during logout' });
     }
-    res.clearCookie('sessionId');
+    res.clearCookie(process.env.SESSION_COOKIE_NAME || 'sessionId');
     res.json({ success: true });
   });
 });
@@ -624,7 +595,7 @@ function csvToJson(csvString, title) {
 
 
 // PUT API endpoint for creating a new survey
-app.post('/api/survey', express.json(), (req, res) => {
+app.post('/api/survey', express.json(), async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
 
@@ -633,12 +604,16 @@ app.post('/api/survey', express.json(), (req, res) => {
     return;
   }
 
-  // Call the function to add a new survey
-  insertSurvey(surveyName, '')
-  .catch(error => console.error(error))
-  .then(() => {res.status(200).json({ message: 'Survey created successfully!' });});
-
-  insertUsers([{userName: 'None', email: 'N/A', surveyName: surveyName, canRespond: false, language: 'English'}])
+  try {
+    // The placeholder respondent references Survey(name), so the survey row
+    // must be committed first
+    await insertSurvey(surveyName, '');
+    await insertUsers([{userName: 'None', email: 'N/A', surveyName: surveyName, canRespond: false, language: 'English'}]);
+    res.status(200).json({ message: 'Survey created successfully!' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to create survey.' });
+  }
 });
 
 app.post('/api/testEmail', express.json(), (req, res) => {

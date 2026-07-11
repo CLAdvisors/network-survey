@@ -1,48 +1,67 @@
 #!/bin/bash
+# Provisions the API instance runtime. The application itself is NOT baked in
+# here: releases are deployed from the artifacts bucket by CI via SSM
+# (scripts/deploy/remote-deploy.sh), so app updates never require re-running
+# cloud-init or replacing the instance.
+set -o pipefail
 
-# Update and install dependencies
-sudo apt update -y && sudo apt upgrade -y
-sudo apt install -y curl
+export DEBIAN_FRONTEND=noninteractive
+# awscli v1 (from apt) does not infer the region from instance metadata
+export AWS_DEFAULT_REGION=${aws_region}
 
-# Install Node.js (LTS version)
-curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-sudo apt install -y nodejs
+apt-get update -y
+apt-get install -y curl unzip awscli openjdk-17-jre-headless
 
-export HOME=/home/ubuntu
-export PM2_HOME=$HOME/.pm2
-export NODE_ENV=prod
-export node_env=prod
+# Node.js 20 LTS
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
 
-# Install PM2 globally
-sudo npm install -g pm2
+# PM2 process manager, started on boot via systemd
+npm install -g pm2
+env PATH=$PATH pm2 startup systemd -u ubuntu --hp /home/ubuntu
 
-# Create a directory for the service
-SERVICE_DIR="/opt/service"
-sudo mkdir -p $SERVICE_DIR
-sudo chown ubuntu:ubuntu $SERVICE_DIR
+# Liquibase (used by the deploy script to run DB migrations from this host,
+# since the database is not publicly accessible)
+LIQUIBASE_VERSION=4.29.2
+curl -fsSL "https://github.com/liquibase/liquibase/releases/download/v$LIQUIBASE_VERSION/liquibase-$LIQUIBASE_VERSION.tar.gz" -o /tmp/liquibase.tar.gz
+mkdir -p /opt/liquibase
+tar -xzf /tmp/liquibase.tar.gz -C /opt/liquibase
+ln -sf /opt/liquibase/liquibase /usr/local/bin/liquibase
+rm -f /tmp/liquibase.tar.gz
 
-# Clone your service repository (replace with your repo)
-git clone https://github.com/CLAdvisors/network-survey.git $SERVICE_DIR
+# Service layout
+SERVICE_DIR=/opt/service
+mkdir -p $SERVICE_DIR/releases $SERVICE_DIR/certs
+chown -R ubuntu:ubuntu $SERVICE_DIR
 
-sudo apt-get install -y awscli
-aws s3 cp s3://${bucket_name}/configs/.env.prod $SERVICE_DIR/api/.env.prod
-sudo rm -rf $SERVICE_DIR/api/.env.local
+# RDS CA bundle so the API and Liquibase can verify the DB's TLS certificate
+curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+  -o $SERVICE_DIR/certs/rds-global-bundle.pem
 
-# Navigate to service directory and install dependencies
-cd $SERVICE_DIR
-npm install
+# Deploy-time configuration consumed by remote-deploy.sh
+cat > $SERVICE_DIR/deploy.env <<EOF
+CONFIG_BUCKET=${config_bucket}
+ARTIFACTS_BUCKET=${artifacts_bucket}
+AWS_DEFAULT_REGION=${aws_region}
+ENVIRONMENT=${environment}
+EOF
+chown ubuntu:ubuntu $SERVICE_DIR/deploy.env
 
-cd api
-npm install
+# Host firewall (the security group is the real boundary; this is defense in depth)
+ufw allow 22
+ufw allow 3000
+ufw --force enable
 
-# Start the service with PM2
-sudo -u ubuntu -H bash -lc 'cd /opt/service/api && export NODE_ENV=prod && pm2 start server.js --name my-service --env prod'
-sudo -u ubuntu -H bash -lc 'pm2 save'
-sudo -u ubuntu -H bash -lc 'pm2 status'
-
-# Enable firewall and allow specific ports (optional)
-sudo ufw allow 22       # SSH
-sudo ufw allow 3000     # Your service port
-sudo ufw enable
+# Bootstrap the latest release if CI has published one; otherwise the first
+# run of the deploy workflow will bring the app up.
+BOOTSTRAP_DIR=/tmp/ona-bootstrap
+if aws s3 cp "s3://${artifacts_bucket}/api/latest.tar.gz" /tmp/ona-latest.tar.gz; then
+  mkdir -p $BOOTSTRAP_DIR
+  tar -xzf /tmp/ona-latest.tar.gz -C $BOOTSTRAP_DIR
+  bash $BOOTSTRAP_DIR/deploy/remote-deploy.sh $BOOTSTRAP_DIR
+  rm -rf $BOOTSTRAP_DIR /tmp/ona-latest.tar.gz
+else
+  echo "No release artifact found in s3://${artifacts_bucket}/api/latest.tar.gz — run the deploy workflow to install the app."
+fi
 
 echo "Setup complete."

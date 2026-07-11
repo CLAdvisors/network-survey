@@ -236,17 +236,23 @@ Opened PR for the migration branch:
 
 - https://github.com/CLAdvisors/network-survey/pull/1
 
-GitHub Actions attempted to run CI and Terraform Plan on the PR, but both were blocked by account billing status:
+GitHub Actions are now running on PR #1.
 
-```text
-The job was not started because your account is locked due to a billing issue.
-```
+Current PR checks passing:
 
-Workflow YAML parses locally and the deployment path has been validated manually against staging. Once GitHub billing is resolved, re-run:
+- API integration smoke test
+- Dashboard build/test
+- Survey build/test
+- Terraform Plan
 
-- CI workflow on PR #1
-- Terraform Plan workflow on PR #1
-- Deploy workflow manually with `environment=staging`
+Fixes made while enabling CI/CD:
+
+- moved Terraform fmt before generated `ci.auto.tfvars`
+- granted the GitHub deploy role read access to Terraform remote state
+- granted read-only discovery permissions needed by Terraform plan
+- granted `rds:ListTagsForResource` for RDS subnet group refresh
+
+The Deploy workflow cannot be triggered with `workflow_dispatch` until it exists on the repository default branch. The same deploy flow was validated manually against staging from this branch. After merge, manually run Deploy with `environment=staging` to validate the GitHub-hosted deploy path end-to-end.
 
 ### CI Workflow
 

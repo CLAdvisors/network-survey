@@ -525,11 +525,21 @@ Created replacement prod DB:
 - parameter group: `default.postgres15`
 - engine version: `15.18`
 
-Actual production DB cutover steps:
+Actual production DB migration status:
 
-1. Migrate data from current prod RDS into `network-survey-prod-postgres-v2`.
-2. Validate row counts/schema and run Liquibase status/update if needed.
-3. Update existing prod API runtime config in `my-config-bucket-1xo22t/configs/.env.prod` to point at the replacement DB and include DB SSL settings.
+- Created replacement DB with Terraform.
+- Launched a temporary EC2 migration host in the existing prod VPC.
+- Installed PostgreSQL 15 client on the migration host.
+- Dumped current prod DB and restored into `network-survey-prod-postgres-v2`.
+- Smoke checked restored DB with `select count(*) from survey;` → `9`.
+- Terminated the temporary migration EC2 instance.
+- Destroyed pending prod-v2 ACM certs and deleted the unused `prod-v2` Terraform workspace.
+
+Remaining production cutover steps:
+
+1. Validate restored data more thoroughly: key table row counts, sample survey/questions/respondents/results.
+2. Update existing prod API runtime config in `my-config-bucket-1xo22t/configs/.env.prod` to point at the replacement DB and include DB SSL settings.
+3. Ensure the production API runtime is updated to the current code that supports DB SSL.
 4. Restart/redeploy the existing prod API.
 5. Validate `demo.ona.*` end-to-end.
 6. Keep old production DB intact through rollback window.

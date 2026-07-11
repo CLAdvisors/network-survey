@@ -535,14 +535,26 @@ Actual production DB migration status:
 - Terminated the temporary migration EC2 instance.
 - Destroyed pending prod-v2 ACM certs and deleted the unused `prod-v2` Terraform workspace.
 
-Remaining production cutover steps:
+Production cutover status:
 
-1. Validate restored data more thoroughly: key table row counts, sample survey/questions/respondents/results.
-2. Update existing prod API runtime config in `my-config-bucket-1xo22t/configs/.env.prod` to point at the replacement DB and include DB SSL settings.
-3. Ensure the production API runtime is updated to the current code that supports DB SSL.
-4. Restart/redeploy the existing prod API.
-5. Validate `demo.ona.*` end-to-end.
-6. Keep old production DB intact through rollback window.
+- Updated existing prod API runtime config in `my-config-bucket-1xo22t/configs/.env.prod` to point at replacement DB and include DB SSL settings.
+- Backed up previous prod config to `configs/.env.prod.pre-db-v2-20260711104125`.
+- Launched replacement prod API EC2 instance in existing prod VPC: `i-0d6b0331e187e61a3`.
+- Registered the instance with existing `backend-targets` target group.
+- Deployed current API artifact to the prod API instance via SSM.
+- Marked restored Liquibase changesets as synchronized to account for historical changeset identity differences.
+- Redeployed API successfully after Liquibase sync.
+- ALB target is healthy.
+- `https://demo.ona.api.bennetts.work/health` returns database ok.
+- `https://demo.ona.dashboard.bennetts.work/` returns `200`.
+- `https://demo.ona.survey.bennetts.work/` returns `200`.
+
+Remaining production validation steps:
+
+1. Validate in the browser: dashboard login, survey list, selected survey details, results, and survey link flow.
+2. Validate email sending with the production Resend key.
+3. Keep old production DB intact through rollback window.
+4. After validation, decide whether to stop/terminate obsolete legacy compute and tighten legacy security groups.
 
 ## Open Decisions
 

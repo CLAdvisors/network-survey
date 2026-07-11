@@ -64,17 +64,17 @@ jobs:
           echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "VAR_FILE=$VAR_FILE" >> "$GITHUB_OUTPUT"
 
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
       - name: Write sensitive tfvars
         run: |
           set -euo pipefail
           cat > ci.auto.tfvars <<EOF
-          db_password = "${{ secrets.TF_VAR_DB_PASSWORD }}"
+          db_password    = "${{ secrets.TF_VAR_DB_PASSWORD }}"
           session_secret = "${{ secrets.TF_VAR_SESSION_SECRET }}"
           resend_api_key = "${{ secrets.TF_VAR_RESEND_API_KEY }}"
           EOF
-
-      - name: Terraform fmt
-        run: terraform fmt -check -recursive
 
       - name: Terraform init
         run: terraform init

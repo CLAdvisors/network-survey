@@ -305,10 +305,26 @@ Follow-up completed:
 - created manually bootstrapped Terraform apply role: `arn:aws:iam::438465164125:role/github-actions-terraform`.
 - added `.github/workflows/terraform-apply.yml` for manually approved Terraform applies.
 
+Production/demo decision:
+
+- `demo.ona.*` remains production for now.
+- Production should adopt the existing RDS database, not create a brand new one.
+- Staging already has its own brand new Terraform-created RDS database.
+
+Completed production environment secrets:
+
+- `TF_VAR_DB_PASSWORD` copied from the current prod config bucket (`my-config-bucket-1xo22t`).
+- `TF_VAR_SESSION_SECRET` copied from the current prod config bucket (`my-config-bucket-1xo22t`).
+- `TF_VAR_RESEND_API_KEY` set from the provided production Resend key.
+
+Prod tfvars now matches existing prod RDS master username:
+
+- `db_user = "DbAdmin"`
+
 Still needed before production apply:
 
-- set production environment-level `TF_VAR_DB_PASSWORD`, `TF_VAR_SESSION_SECRET`, and `TF_VAR_RESEND_API_KEY`.
-- verify/import existing production Terraform state/resources before running production apply.
+- import existing production resources into default Terraform workspace/state, or perform careful state migration.
+- review planned prod deltas before apply. Known existing prod RDS currently differs from staging defaults in at least engine version (`15.17` existing vs `15.18` config), parameter group (`postgres-no-ssl` existing), public accessibility, and deletion protection.
 
 ### Deploy Workflow
 

@@ -282,6 +282,7 @@ Recommended additions:
 Configured repository variables:
 
 - `AWS_DEPLOY_ROLE_ARN=arn:aws:iam::438465164125:role/github-actions-deploy`
+- `AWS_TERRAFORM_ROLE_ARN=arn:aws:iam::438465164125:role/github-actions-terraform`
 - `AWS_REGION=us-east-1`
 
 Configured repository secrets for current staging Terraform planning/deploy bootstrap:
@@ -296,6 +297,18 @@ Attempted to create GitHub Environments `staging` and `production`, but the auth
 - create `production`
 - add required reviewers to `production`
 - preferably move environment-specific Terraform secrets from repo-level secrets into environment-level secrets before production planning/apply workflows are enabled
+
+Follow-up completed:
+
+- `production` now exists and has required reviewers.
+- staging environment-level Terraform secrets are set.
+- created manually bootstrapped Terraform apply role: `arn:aws:iam::438465164125:role/github-actions-terraform`.
+- added `.github/workflows/terraform-apply.yml` for manually approved Terraform applies.
+
+Still needed before production apply:
+
+- set production environment-level `TF_VAR_DB_PASSWORD`, `TF_VAR_SESSION_SECRET`, and `TF_VAR_RESEND_API_KEY`.
+- verify/import existing production Terraform state/resources before running production apply.
 
 ### Deploy Workflow
 

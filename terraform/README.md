@@ -77,7 +77,8 @@ records exist:
    role/policy before setting `manage_github_oidc = true`.
 2. In the GitHub repo, set **repository variables**:
    - `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::438465164125:role/github-actions-deploy`
-   - `AWS_REGION` = `us-east-1` (optional; workflow defaults to it)
+   - `AWS_TERRAFORM_ROLE_ARN` = `arn:aws:iam::438465164125:role/github-actions-terraform`
+   - `AWS_REGION` = `us-east-1` (optional; workflows default to it)
 3. Create **environments** `staging` and `production` under repo Settings →
    Environments; add required reviewers to `production` to gate prod deploys.
 
@@ -85,6 +86,12 @@ Deploy workflow behavior: every push to `main` deploys to staging; production
 deploys are manual (`workflow_dispatch`). The workflow resolves buckets,
 distributions, and the instance by tags (`Environment` + `App`), so no
 per-environment IDs need to be configured in GitHub.
+
+Terraform apply behavior: `.github/workflows/terraform-apply.yml` is manual and
+uses the `AWS_TERRAFORM_ROLE_ARN` role. The `production` environment should have
+required reviewers configured before production applies are allowed. Store
+`TF_VAR_DB_PASSWORD`, `TF_VAR_SESSION_SECRET`, and `TF_VAR_RESEND_API_KEY` as
+environment-level secrets for each environment.
 
 ## Migrating the existing prod stack to this config
 

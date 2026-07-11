@@ -1,0 +1,87 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to apply
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform-apply-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    # production is protected with required reviewers in GitHub Environments.
+    environment: ${{ inputs.environment }}
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.12.2
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Resolve Terraform environment
+        id: env
+        run: |
+          set -euo pipefail
+          case "${{ inputs.environment }}" in
+            production)
+              WORKSPACE=default
+              VAR_FILE=prod.tfvars
+              ;;
+            staging)
+              WORKSPACE=staging
+              VAR_FILE=staging.tfvars
+              ;;
+            *) echo "Unknown environment: ${{ inputs.environment }}" >&2; exit 1 ;;
+          esac
+          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "VAR_FILE=$VAR_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: Write sensitive tfvars
+        run: |
+          set -euo pipefail
+          cat > ci.auto.tfvars <<EOF
+          db_password    = "${{ secrets.TF_VAR_DB_PASSWORD }}"
+          session_secret = "${{ secrets.TF_VAR_SESSION_SECRET }}"
+          resend_api_key = "${{ secrets.TF_VAR_RESEND_API_KEY }}"
+          EOF
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Select workspace
+        run: terraform workspace select "${{ steps.env.outputs.WORKSPACE }}"
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        run: terraform plan -var-file="${{ steps.env.outputs.VAR_FILE }}" -input=false -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve tfplan

@@ -70,8 +70,21 @@ data "aws_iam_policy_document" "github_actions_deploy" {
   # a more tightly reviewed/admin role; this deploy role can only read infra plus
   # perform the explicit deployment actions below.
   statement {
-    sid       = "TerraformPlanReadOnly"
-    actions   = ["*:Describe*", "*:Get*", "*:List*"]
+    sid = "TerraformPlanReadOnly"
+    actions = [
+      "acm:Describe*",
+      "acm:List*",
+      "cloudfront:Get*",
+      "cloudfront:List*",
+      "ec2:Describe*",
+      "elasticloadbalancing:Describe*",
+      "iam:Get*",
+      "iam:List*",
+      "rds:Describe*",
+      "s3:Get*",
+      "s3:List*",
+      "tag:Get*",
+    ]
     resources = ["*"]
   }
 

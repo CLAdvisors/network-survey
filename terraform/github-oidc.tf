@@ -81,6 +81,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "iam:Get*",
       "iam:List*",
       "rds:Describe*",
+      "rds:ListTagsForResource",
       "s3:Get*",
       "s3:List*",
       "tag:Get*",

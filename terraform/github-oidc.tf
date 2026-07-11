@@ -66,6 +66,15 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["*"]
   }
 
+  # Read-only discovery for Terraform plan workflows. Apply workflows should use
+  # a more tightly reviewed/admin role; this deploy role can only read infra plus
+  # perform the explicit deployment actions below.
+  statement {
+    sid       = "TerraformPlanReadOnly"
+    actions   = ["*:Describe*", "*:Get*", "*:List*"]
+    resources = ["*"]
+  }
+
   # Terraform remote state for plan workflows
   statement {
     sid = "TerraformState"

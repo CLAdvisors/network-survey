@@ -71,9 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           cat > ci.auto.tfvars <<EOF
-          db_password    = "${{ secrets.TF_VAR_DB_PASSWORD }}"
-          session_secret = "${{ secrets.TF_VAR_SESSION_SECRET }}"
-          resend_api_key = "${{ secrets.TF_VAR_RESEND_API_KEY }}"
+          db_password = "${{ secrets.TF_VAR_DB_PASSWORD }}"
           EOF
 
       - name: Terraform init

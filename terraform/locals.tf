@@ -21,6 +21,11 @@ locals {
   # environment needs its own session cookie name
   session_cookie_name = local.is_prod ? "sessionId" : "sessionId-${local.environment}"
 
+  ssm_parameter_prefix          = "/network-survey/${local.environment}"
+  db_password_parameter_name    = "${local.ssm_parameter_prefix}/db/password"
+  session_secret_parameter_name = "${local.ssm_parameter_prefix}/api/session-secret"
+  resend_api_key_parameter_name = "${local.ssm_parameter_prefix}/api/resend-api-key"
+
   common_tags = {
     Project     = "network-survey"
     Environment = local.environment

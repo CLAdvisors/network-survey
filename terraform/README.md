@@ -30,20 +30,31 @@ resource names with the workspace name (e.g. `staging-backend-security-group`).
 
 ## Secrets
 
-`db_password`, `session_secret`, and `resend_api_key` are required variables with
-no defaults. Supply them via environment variables:
+`db_password` is still required by Terraform because Terraform currently manages
+RDS. Supply it via an environment variable or an untracked `*.local.tfvars` file
+passed explicitly with `-var-file`:
 
 ```sh
 export TF_VAR_db_password=...
-export TF_VAR_session_secret=...
-export TF_VAR_resend_api_key=...
 ```
 
-or an untracked `*.local.tfvars` file passed explicitly with `-var-file`.
-**Never commit them** — the old `env.tmpl` contained a live Resend key; that key
-should be rotated in the Resend dashboard since it lives in git history. Avoid
-local `*.auto.tfvars` for environment-specific secrets because Terraform loads
-them for every workspace.
+API runtime secrets now come from SSM Parameter Store SecureString values, not
+Terraform-rendered S3 config. Create these parameters before deploying an
+environment:
+
+```sh
+aws ssm put-parameter --type SecureString --overwrite \
+  --name /network-survey/staging/db/password --value '...'
+aws ssm put-parameter --type SecureString --overwrite \
+  --name /network-survey/staging/api/session-secret --value '...'
+aws ssm put-parameter --type SecureString --overwrite \
+  --name /network-survey/staging/api/resend-api-key --value '...'
+```
+
+Use `/network-survey/prod/...` for prod. **Never commit secret values** — the old
+`env.tmpl` contained a live Resend key; that key should be rotated in the Resend
+dashboard since it lives in git history. Avoid local `*.auto.tfvars` for
+environment-specific secrets because Terraform loads them for every workspace.
 
 ## Applying
 
@@ -101,18 +112,16 @@ schema, runtime-config, or frontend rollback.
 Terraform apply behavior: `.github/workflows/terraform-apply.yml` is manual and
 uses the `AWS_TERRAFORM_ROLE_ARN` role. The `production` environment should have
 required reviewers configured before production applies are allowed. Store
-`TF_VAR_DB_PASSWORD`, `TF_VAR_SESSION_SECRET`, and `TF_VAR_RESEND_API_KEY` as
-environment-level secrets for each environment.
+`TF_VAR_DB_PASSWORD` as an environment-level secret for each environment.
+Runtime app secrets are stored in SSM Parameter Store instead.
 
 ## Migrating the existing prod stack to this config
 
 The security fixes change live resources. Checklist for the first prod apply:
 
 - **Rotate the leaked Resend API key first** (it was hardcoded in `env.tmpl`).
-- Terraform now expects the three secret variables (`TF_VAR_*` above). Use the
-  *existing* DB password for `db_password` — RDS passwords are only changed if
-  the value differs. Choosing a new `session_secret` just invalidates dashboard
-  logins.
+- Terraform now expects `TF_VAR_DB_PASSWORD`. Use the *existing* DB password for
+  `db_password` — RDS passwords are only changed if the value differs.
 - During the current inactive-production infra refactor, `prod.tfvars` sets
   `api_config_db_host_override` so a root prod apply keeps the API runtime
   config pointed at the replacement DB managed in `terraform/prod-db`. Remove

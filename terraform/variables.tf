@@ -19,13 +19,17 @@ variable "db_password" {
 }
 
 variable "session_secret" {
-  description = "Secret used to sign API session cookies"
+  description = "Deprecated: API session secret now comes from SSM Parameter Store at runtime. Kept temporarily so old local tfvars do not break plans."
+  type        = string
   sensitive   = true
+  default     = null
 }
 
 variable "resend_api_key" {
-  description = "Resend API key used by the API to send survey emails"
+  description = "Deprecated: Resend API key now comes from SSM Parameter Store at runtime. Kept temporarily so old local tfvars do not break plans."
+  type        = string
   sensitive   = true
+  default     = null
 }
 
 variable "api_domain" {

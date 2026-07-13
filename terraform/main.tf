@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 # Create a VPC for networking
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
@@ -247,21 +249,22 @@ resource "random_string" "suffix" {
 }
 
 # API runtime config, consumed by the instance at deploy time.
-# Secrets come from Terraform variables (TF_VAR_*), never from the repo.
+# Secret values live in SSM Parameter Store; this object contains only secret
+# parameter names plus non-secret runtime config.
 resource "aws_s3_object" "api_config" {
   bucket = aws_s3_bucket.config_bucket.id
   key    = "configs/.env.prod"
   content = templatefile("./templates/env.tmpl", {
-    db_host             = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
-    db_port             = aws_db_instance.postgres.port
-    db_name             = aws_db_instance.postgres.db_name
-    db_user             = var.db_user
-    db_password         = var.db_password
-    frontend_url        = local.frontend_url
-    survey_url          = local.survey_url
-    session_secret      = var.session_secret
-    session_cookie_name = local.session_cookie_name
-    resend_api_key      = var.resend_api_key
+    db_host                       = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
+    db_port                       = aws_db_instance.postgres.port
+    db_name                       = aws_db_instance.postgres.db_name
+    db_user                       = var.db_user
+    db_password_parameter_name    = local.db_password_parameter_name
+    frontend_url                  = local.frontend_url
+    survey_url                    = local.survey_url
+    session_secret_parameter_name = local.session_secret_parameter_name
+    session_cookie_name           = local.session_cookie_name
+    resend_api_key_parameter_name = local.resend_api_key_parameter_name
   })
 }
 
@@ -326,10 +329,11 @@ resource "aws_iam_role" "ec2_role" {
   assume_role_policy = data.aws_iam_policy_document.ec2_assume_role_policy.json
 }
 
-# Policy to allow the EC2 instance to read config and release artifacts
+# Policy to allow the EC2 instance to read config, release artifacts, and
+# runtime secrets from SSM Parameter Store.
 resource "aws_iam_policy" "s3_access_policy" {
   name        = "${local.name_prefix}s3-config-access-policy"
-  description = "Allow EC2 to read the S3 config bucket and release artifacts"
+  description = "Allow EC2 to read S3 deploy inputs and SSM runtime secrets"
   policy      = data.aws_iam_policy_document.s3_access_policy.json
 }
 
@@ -347,6 +351,31 @@ data "aws_iam_policy_document" "s3_access_policy" {
     effect    = "Allow"
     actions   = ["s3:ListBucket"]
     resources = [aws_s3_bucket.artifacts.arn]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+    ]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.db_password_parameter_name}",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.session_secret_parameter_name}",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.resend_api_key_parameter_name}",
+    ]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.aws_region}.amazonaws.com"]
+    }
   }
 }
 

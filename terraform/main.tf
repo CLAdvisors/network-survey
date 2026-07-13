@@ -252,7 +252,7 @@ resource "aws_s3_object" "api_config" {
   bucket = aws_s3_bucket.config_bucket.id
   key    = "configs/.env.prod"
   content = templatefile("./templates/env.tmpl", {
-    db_host             = aws_db_instance.postgres.address
+    db_host             = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
     db_port             = aws_db_instance.postgres.port
     db_name             = aws_db_instance.postgres.db_name
     db_user             = var.db_user
@@ -552,15 +552,17 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
   }
 
   custom_error_response {
-    error_code         = 403
-    response_code      = 200
-    response_page_path = "/index.html"
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
   }
 
   custom_error_response {
-    error_code         = 404
-    response_code      = 200
-    response_page_path = "/index.html"
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
   }
 
   restrictions {
@@ -614,15 +616,17 @@ resource "aws_cloudfront_distribution" "react_survey_distribution" {
   }
 
   custom_error_response {
-    error_code         = 403
-    response_code      = 200
-    response_page_path = "/index.html"
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
   }
 
   custom_error_response {
-    error_code         = 404
-    response_code      = 200
-    response_page_path = "/index.html"
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
   }
 
   restrictions {

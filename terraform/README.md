@@ -92,10 +92,11 @@ distributions, and the instance by tags (`Environment` + `App`), so no
 per-environment IDs need to be configured in GitHub. After deploy, it performs
 external smoke checks against the API, dashboard, and survey domains.
 
-Rollback workflow behavior: `Rollback API` is manual and redeploys a previously
-published API artifact SHA through the same SSM path. Leave `mark_latest=true`
-when the rollback should become the instance bootstrap artifact for future
-replacement instances.
+Previous-artifact redeploy behavior: `Redeploy API Artifact` is manual and
+redeploys a previously published API artifact SHA through the same SSM path.
+Leave `mark_latest=true` when the redeployed artifact should become the instance
+bootstrap artifact for future replacement instances. This is not a database,
+schema, runtime-config, or frontend rollback.
 
 Terraform apply behavior: `.github/workflows/terraform-apply.yml` is manual and
 uses the `AWS_TERRAFORM_ROLE_ARN` role. The `production` environment should have
@@ -112,6 +113,11 @@ The security fixes change live resources. Checklist for the first prod apply:
   *existing* DB password for `db_password` — RDS passwords are only changed if
   the value differs. Choosing a new `session_secret` just invalidates dashboard
   logins.
+- During the current inactive-production infra refactor, `prod.tfvars` sets
+  `api_config_db_host_override` so a root prod apply keeps the API runtime
+  config pointed at the replacement DB managed in `terraform/prod-db`. Remove
+  that override only after prod DB ownership is folded into the primary prod
+  Terraform root.
 - The removed `aws_s3_object.react_dashboard_files` / `react_survey_files`
   resources will otherwise **delete the live frontend files** on apply. Either
   drop them from state first (`terraform state rm 'aws_s3_object.react_dashboard_files' 'aws_s3_object.react_survey_files'`)

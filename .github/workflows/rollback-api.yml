@@ -1,10 +1,10 @@
-name: Rollback API
+name: Redeploy API Artifact
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment to roll back
+        description: Environment to redeploy into
         required: true
         type: choice
         options: [staging, production]
@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       mark_latest:
-        description: Mark this artifact as latest after successful rollback
+        description: Mark this artifact as latest after successful external smoke check
         required: true
         type: boolean
         default: true
@@ -23,11 +23,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: rollback-api-${{ inputs.environment }}
+  # Shared with deploy.yml so API release operations cannot race.
+  group: api-release-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
-  rollback-api:
+  redeploy-api-artifact:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
 
@@ -61,19 +62,43 @@ jobs:
           TF_ENV="${CONFIGURED_TF_ENV:-$DEFAULT_TF_ENV}"
           API_HOST="${CONFIGURED_API_HOST:-$DEFAULT_API_HOST}"
 
-          by_tag() {
-            aws resourcegroupstaggingapi get-resources \
+          by_tag_exact() {
+            local app="$1"
+            local resource_type="$2"
+            local arns
+            arns=$(aws resourcegroupstaggingapi get-resources \
               --region us-east-1 \
-              --resource-type-filters "$2" \
-              --tag-filters "Key=Environment,Values=$TF_ENV" "Key=App,Values=$1" \
-              --query 'ResourceTagMappingList[0].ResourceARN' --output text
+              --resource-type-filters "$resource_type" \
+              --tag-filters "Key=Environment,Values=$TF_ENV" "Key=App,Values=$app" \
+              --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' | sed '/^$/d')
+            local count
+            count=$(printf '%s\n' "$arns" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$count" != "1" ]; then
+              echo "Expected exactly one $resource_type with Environment=$TF_ENV App=$app, found $count:" >&2
+              printf '%s\n' "$arns" >&2
+              exit 1
+            fi
+            printf '%s\n' "$arns"
           }
 
-          ARTIFACTS_BUCKET=$(by_tag ona-artifacts s3:bucket | sed 's|.*:::||')
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=$TF_ENV" "Name=tag:App,Values=ona-api" \
-                      "Name=instance-state-name,Values=running" \
-            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          instance_exact() {
+            local ids
+            ids=$(aws ec2 describe-instances \
+              --filters "Name=tag:Environment,Values=$TF_ENV" "Name=tag:App,Values=ona-api" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'Reservations[].Instances[].InstanceId' --output text | tr '\t' '\n' | sed '/^$/d')
+            local count
+            count=$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$count" != "1" ]; then
+              echo "Expected exactly one running API instance with Environment=$TF_ENV App=ona-api, found $count:" >&2
+              printf '%s\n' "$ids" >&2
+              exit 1
+            fi
+            printf '%s\n' "$ids"
+          }
+
+          ARTIFACTS_BUCKET=$(by_tag_exact ona-artifacts s3:bucket | sed 's|.*:::||')
+          INSTANCE_ID=$(instance_exact)
 
           for v in ARTIFACTS_BUCKET INSTANCE_ID; do
             if [ -z "${!v}" ] || [ "${!v}" = "None" ]; then
@@ -91,7 +116,7 @@ jobs:
             --bucket "${{ steps.env.outputs.ARTIFACTS_BUCKET }}" \
             --key "api/${{ inputs.artifact_sha }}.tar.gz"
 
-      - name: Deploy selected API artifact via SSM
+      - name: Redeploy selected API artifact via SSM
         run: |
           set -euo pipefail
           BUCKET="${{ steps.env.outputs.ARTIFACTS_BUCKET }}"
@@ -113,7 +138,7 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE" \
             --document-name AWS-RunShellScript \
-            --comment "Rollback API to $SHA" \
+            --comment "Redeploy API artifact $SHA" \
             --parameters file:///tmp/ssm-params.json \
             --query 'Command.CommandId' --output text)
           echo "SSM command: $COMMAND_ID"
@@ -131,12 +156,16 @@ jobs:
             --command-id "$COMMAND_ID" --instance-id "$INSTANCE" \
             --query StandardOutputContent --output text
           if [ "$STATUS" != "Success" ]; then
-            echo "Rollback failed with status $STATUS; stderr:" >&2
+            echo "Artifact redeploy failed with status $STATUS; stderr:" >&2
             aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" --instance-id "$INSTANCE" \
               --query StandardErrorContent --output text >&2
             exit 1
           fi
+
+      - name: External API smoke check
+        run: |
+          curl -fsS "https://${{ steps.env.outputs.API_HOST }}/health" | grep -q '"database":"ok"'
 
       - name: Mark artifact as latest
         if: ${{ inputs.mark_latest }}
@@ -144,7 +173,3 @@ jobs:
           aws s3 cp \
             "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/${{ inputs.artifact_sha }}.tar.gz" \
             "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest.tar.gz"
-
-      - name: External API smoke check
-        run: |
-          curl -fsS "https://${{ steps.env.outputs.API_HOST }}/health" | grep -q '"database":"ok"'

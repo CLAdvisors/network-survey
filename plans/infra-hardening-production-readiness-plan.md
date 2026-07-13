@@ -4,6 +4,8 @@
 
 Move `network-survey` from the current transitional EC2 + SSM setup to a production-ready, auditable, low-foot-gun infrastructure posture while keeping the existing app architecture unless/until a deliberate platform migration is chosen.
 
+Current operating assumption: the hosted production/demo app is inactive during this refactor and users have been told it is not active. We can tolerate app endpoint disruption while iterating, but must protect the production database data for testing/validation and rollback confidence. The production DB is backed up; still avoid destructive DB operations unless a final snapshot/backup and rollback path are confirmed.
+
 Target qualities:
 
 - clear source of truth for each environment

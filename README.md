@@ -44,8 +44,9 @@ The API runner treats `RESEND_API_KEY` or `RESEND_KEY` as optional for startup. 
 ## CI/CD
 
 - `CI` workflow (every PR and push to `main`): builds and tests both frontends, and runs an API integration smoke test against a migrated Postgres 15 service container (`scripts/ci/api-smoke.sh`).
-- `Deploy` workflow: pushes to `main` deploy to **staging** automatically; **production** deploys are triggered manually from the Actions tab. Frontends are synced to S3 + CloudFront invalidated; the API is packaged as a tarball in S3 and installed on the EC2 instance via SSM (`scripts/deploy/remote-deploy.sh`) with a pm2 reload — instances are never rebuilt for a deploy.
-- Infrastructure (environments, IAM/OIDC for CI, setup steps) is documented in [terraform/README.md](terraform/README.md).
+- `Deploy` workflow: pushes to `main` deploy to **staging** automatically; **production** deploys are triggered manually from the Actions tab. Frontends are synced to S3 + CloudFront invalidated; the API is packaged as a tarball in S3 and installed on the EC2 instance via SSM (`scripts/deploy/remote-deploy.sh`) with a pm2 reload — instances are never rebuilt for a deploy. The workflow now performs external smoke checks after deploy.
+- `Rollback API` workflow: manually redeploys a previously published API artifact SHA through SSM and can mark it as `latest` after a successful rollback.
+- Infrastructure (environments, IAM/OIDC for CI, setup steps) is documented in [terraform/README.md](terraform/README.md). Cleanup and hardening work is tracked in [plans/infra-hardening-production-readiness-plan.md](plans/infra-hardening-production-readiness-plan.md).
 
 ### Standard local ports
 

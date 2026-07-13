@@ -17,4 +17,5 @@ db_user = "DbAdmin"
 # Keep false unless importing those account-global resources into Terraform state first.
 manage_github_oidc = false
 
-db_deletion_protection = true
+db_deletion_protection  = true
+alb_deletion_protection = true

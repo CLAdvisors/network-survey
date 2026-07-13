@@ -43,6 +43,7 @@ jobs:
         env:
           CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}
           CONFIGURED_API_HOST: ${{ vars.API_HOST }}
+          CONFIGURED_DASHBOARD_HOST: ${{ vars.DASHBOARD_HOST }}
           CONFIGURED_SURVEY_HOST: ${{ vars.SURVEY_HOST }}
         run: |
           set -euo pipefail
@@ -51,17 +52,20 @@ jobs:
             production)
               DEFAULT_TF_ENV=prod
               DEFAULT_API_HOST=demo.ona.api.bennetts.work
+              DEFAULT_DASHBOARD_HOST=demo.ona.dashboard.bennetts.work
               DEFAULT_SURVEY_HOST=demo.ona.survey.bennetts.work
               ;;
             staging)
               DEFAULT_TF_ENV=staging
               DEFAULT_API_HOST=staging.ona.api.bennetts.work
+              DEFAULT_DASHBOARD_HOST=staging.ona.dashboard.bennetts.work
               DEFAULT_SURVEY_HOST=staging.ona.survey.bennetts.work
               ;;
             *) echo "Unknown environment: $GH_ENV" >&2; exit 1 ;;
           esac
           TF_ENV="${CONFIGURED_TF_ENV:-$DEFAULT_TF_ENV}"
           API_HOST="${CONFIGURED_API_HOST:-$DEFAULT_API_HOST}"
+          DASHBOARD_HOST="${CONFIGURED_DASHBOARD_HOST:-$DEFAULT_DASHBOARD_HOST}"
           SURVEY_HOST="${CONFIGURED_SURVEY_HOST:-$DEFAULT_SURVEY_HOST}"
 
           # CloudFront resources only appear in the us-east-1 tagging API,
@@ -93,6 +97,7 @@ jobs:
             echo "$v=${!v}"
           done
           echo "API_HOST=$API_HOST" >> "$GITHUB_OUTPUT"
+          echo "DASHBOARD_HOST=$DASHBOARD_HOST" >> "$GITHUB_OUTPUT"
           echo "SURVEY_HOST=$SURVEY_HOST" >> "$GITHUB_OUTPUT"
 
       # ---------- API: package → S3 → install via SSM (no instance rebuild) ----------
@@ -206,3 +211,10 @@ jobs:
           aws s3 sync network-survey/build "s3://${{ steps.env.outputs.SURVEY_BUCKET }}" --delete
           aws cloudfront create-invalidation \
             --distribution-id "${{ steps.env.outputs.SURVEY_DIST }}" --paths "/*"
+
+      - name: External smoke checks
+        run: |
+          set -euo pipefail
+          curl -fsS "https://${{ steps.env.outputs.API_HOST }}/health" | grep -q '"database":"ok"'
+          curl -fsS -o /dev/null "https://${{ steps.env.outputs.DASHBOARD_HOST }}/"
+          curl -fsS -o /dev/null "https://${{ steps.env.outputs.SURVEY_HOST }}/"

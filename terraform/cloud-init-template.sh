@@ -47,8 +47,8 @@ ENVIRONMENT=${environment}
 EOF
 chown ubuntu:ubuntu $SERVICE_DIR/deploy.env
 
-# Host firewall (the security group is the real boundary; this is defense in depth)
-ufw allow 22
+# Host firewall (the security group is the real boundary; this is defense in depth).
+# SSH is intentionally not opened; use SSM Session Manager for access.
 ufw allow 3000
 ufw --force enable
 

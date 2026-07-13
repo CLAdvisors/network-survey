@@ -16,7 +16,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-${{ github.event_name == 'push' && 'staging' || inputs.environment }}
+  # Serialize API release operations (deploys and previous-artifact redeploys)
+  # per environment so SSM/PM2/current symlink/latest.tar.gz cannot race.
+  group: api-release-${{ github.event_name == 'push' && 'staging' || inputs.environment }}
   cancel-in-progress: false
 
 jobs:
@@ -43,6 +45,7 @@ jobs:
         env:
           CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}
           CONFIGURED_API_HOST: ${{ vars.API_HOST }}
+          CONFIGURED_DASHBOARD_HOST: ${{ vars.DASHBOARD_HOST }}
           CONFIGURED_SURVEY_HOST: ${{ vars.SURVEY_HOST }}
         run: |
           set -euo pipefail
@@ -51,38 +54,65 @@ jobs:
             production)
               DEFAULT_TF_ENV=prod
               DEFAULT_API_HOST=demo.ona.api.bennetts.work
+              DEFAULT_DASHBOARD_HOST=demo.ona.dashboard.bennetts.work
               DEFAULT_SURVEY_HOST=demo.ona.survey.bennetts.work
               ;;
             staging)
               DEFAULT_TF_ENV=staging
               DEFAULT_API_HOST=staging.ona.api.bennetts.work
+              DEFAULT_DASHBOARD_HOST=staging.ona.dashboard.bennetts.work
               DEFAULT_SURVEY_HOST=staging.ona.survey.bennetts.work
               ;;
             *) echo "Unknown environment: $GH_ENV" >&2; exit 1 ;;
           esac
           TF_ENV="${CONFIGURED_TF_ENV:-$DEFAULT_TF_ENV}"
           API_HOST="${CONFIGURED_API_HOST:-$DEFAULT_API_HOST}"
+          DASHBOARD_HOST="${CONFIGURED_DASHBOARD_HOST:-$DEFAULT_DASHBOARD_HOST}"
           SURVEY_HOST="${CONFIGURED_SURVEY_HOST:-$DEFAULT_SURVEY_HOST}"
 
           # CloudFront resources only appear in the us-east-1 tagging API,
           # so resolution is pinned there (everything deploys to us-east-1)
-          by_tag() { # app-tag resource-type-filter
-            aws resourcegroupstaggingapi get-resources \
+          by_tag_exact() { # app-tag resource-type-filter
+            local app="$1"
+            local resource_type="$2"
+            local arns
+            arns=$(aws resourcegroupstaggingapi get-resources \
               --region us-east-1 \
-              --resource-type-filters "$2" \
-              --tag-filters "Key=Environment,Values=$TF_ENV" "Key=App,Values=$1" \
-              --query 'ResourceTagMappingList[0].ResourceARN' --output text
+              --resource-type-filters "$resource_type" \
+              --tag-filters "Key=Environment,Values=$TF_ENV" "Key=App,Values=$app" \
+              --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' | sed '/^$/d')
+            local count
+            count=$(printf '%s\n' "$arns" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$count" != "1" ]; then
+              echo "Expected exactly one $resource_type with Environment=$TF_ENV App=$app, found $count:" >&2
+              printf '%s\n' "$arns" >&2
+              exit 1
+            fi
+            printf '%s\n' "$arns"
           }
 
-          DASHBOARD_BUCKET=$(by_tag ona-dashboard s3:bucket | sed 's|.*:::||')
-          SURVEY_BUCKET=$(by_tag ona-survey s3:bucket | sed 's|.*:::||')
-          ARTIFACTS_BUCKET=$(by_tag ona-artifacts s3:bucket | sed 's|.*:::||')
-          DASHBOARD_DIST=$(by_tag ona-dashboard cloudfront:distribution | sed 's|.*/||')
-          SURVEY_DIST=$(by_tag ona-survey cloudfront:distribution | sed 's|.*/||')
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Environment,Values=$TF_ENV" "Name=tag:App,Values=ona-api" \
-                      "Name=instance-state-name,Values=running" \
-            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          instance_exact() {
+            local ids
+            ids=$(aws ec2 describe-instances \
+              --filters "Name=tag:Environment,Values=$TF_ENV" "Name=tag:App,Values=ona-api" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'Reservations[].Instances[].InstanceId' --output text | tr '\t' '\n' | sed '/^$/d')
+            local count
+            count=$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$count" != "1" ]; then
+              echo "Expected exactly one running API instance with Environment=$TF_ENV App=ona-api, found $count:" >&2
+              printf '%s\n' "$ids" >&2
+              exit 1
+            fi
+            printf '%s\n' "$ids"
+          }
+
+          DASHBOARD_BUCKET=$(by_tag_exact ona-dashboard s3:bucket | sed 's|.*:::||')
+          SURVEY_BUCKET=$(by_tag_exact ona-survey s3:bucket | sed 's|.*:::||')
+          ARTIFACTS_BUCKET=$(by_tag_exact ona-artifacts s3:bucket | sed 's|.*:::||')
+          DASHBOARD_DIST=$(by_tag_exact ona-dashboard cloudfront:distribution | sed 's|.*/||')
+          SURVEY_DIST=$(by_tag_exact ona-survey cloudfront:distribution | sed 's|.*/||')
+          INSTANCE_ID=$(instance_exact)
 
           for v in DASHBOARD_BUCKET SURVEY_BUCKET ARTIFACTS_BUCKET DASHBOARD_DIST SURVEY_DIST INSTANCE_ID; do
             if [ -z "${!v}" ] || [ "${!v}" = "None" ]; then
@@ -93,6 +123,7 @@ jobs:
             echo "$v=${!v}"
           done
           echo "API_HOST=$API_HOST" >> "$GITHUB_OUTPUT"
+          echo "DASHBOARD_HOST=$DASHBOARD_HOST" >> "$GITHUB_OUTPUT"
           echo "SURVEY_HOST=$SURVEY_HOST" >> "$GITHUB_OUTPUT"
 
       # ---------- API: package → S3 → install via SSM (no instance rebuild) ----------
@@ -163,14 +194,6 @@ jobs:
             exit 1
           fi
 
-      - name: Mark release as latest
-        # Only after a successful install, so instance bootstrap always uses
-        # the last known-good release
-        run: |
-          aws s3 cp \
-            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/$GITHUB_SHA.tar.gz" \
-            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest.tar.gz"
-
       # ---------- Frontends: build → S3 sync → CloudFront invalidation ----------
 
       - name: Build dashboard
@@ -206,3 +229,23 @@ jobs:
           aws s3 sync network-survey/build "s3://${{ steps.env.outputs.SURVEY_BUCKET }}" --delete
           aws cloudfront create-invalidation \
             --distribution-id "${{ steps.env.outputs.SURVEY_DIST }}" --paths "/*"
+
+      - name: External smoke checks
+        run: |
+          set -euo pipefail
+          curl -fsS "https://${{ steps.env.outputs.API_HOST }}/health" | grep -q '"database":"ok"'
+          curl -fsS -o /dev/null "https://${{ steps.env.outputs.DASHBOARD_HOST }}/"
+          curl -fsS -o /dev/null "https://${{ steps.env.outputs.SURVEY_HOST }}/"
+
+          DASHBOARD_ASSET=$(node -e "const m=require('./dashboard/build/asset-manifest.json'); const f=Object.values(m.files).find(x=>x.includes('/static/js/')&&x.endsWith('.js')); if(!f) process.exit(1); console.log(f)")
+          SURVEY_ASSET=$(node -e "const m=require('./network-survey/build/asset-manifest.json'); const f=Object.values(m.files).find(x=>x.includes('/static/js/')&&x.endsWith('.js')); if(!f) process.exit(1); console.log(f)")
+          curl -fsS -o /dev/null "https://${{ steps.env.outputs.DASHBOARD_HOST }}$DASHBOARD_ASSET"
+          curl -fsS -o /dev/null "https://${{ steps.env.outputs.SURVEY_HOST }}$SURVEY_ASSET"
+
+      - name: Mark release as latest
+        # Only after the on-instance deploy and external smoke checks pass, so
+        # replacement instances bootstrap the last externally verified release.
+        run: |
+          aws s3 cp \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/$GITHUB_SHA.tar.gz" \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest.tar.gz"

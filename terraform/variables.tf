@@ -70,3 +70,21 @@ variable "db_deletion_protection" {
   type        = bool
   default     = false
 }
+
+variable "alb_deletion_protection" {
+  description = "Enable ALB deletion protection (recommended for prod)"
+  type        = bool
+  default     = false
+}
+
+variable "artifact_retention_days" {
+  description = "Number of days to retain noncurrent API artifact versions in S3"
+  type        = number
+  default     = 30
+}
+
+variable "api_config_db_host_override" {
+  description = "Optional DB host written to the API runtime config instead of this stack's RDS address. Temporary safety valve while prod DB ownership is split during the infra refactor. Leave null for normal environments."
+  type        = string
+  default     = null
+}

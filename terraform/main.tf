@@ -221,6 +221,24 @@ resource "aws_s3_bucket_ownership_controls" "config_bucket_ownership" {
   }
 }
 
+resource "aws_s3_bucket_server_side_encryption_configuration" "config_bucket_encryption" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "config_bucket_versioning" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 # Add a random suffix to ensure the bucket name is unique
 resource "random_string" "suffix" {
   length  = 6
@@ -234,7 +252,7 @@ resource "aws_s3_object" "api_config" {
   bucket = aws_s3_bucket.config_bucket.id
   key    = "configs/.env.prod"
   content = templatefile("./templates/env.tmpl", {
-    db_host             = aws_db_instance.postgres.address
+    db_host             = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
     db_port             = aws_db_instance.postgres.port
     db_name             = aws_db_instance.postgres.db_name
     db_user             = var.db_user
@@ -272,6 +290,33 @@ resource "aws_s3_bucket_versioning" "artifacts_versioning" {
 
   versioning_configuration {
     status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_encryption" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts_lifecycle" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    id     = "expire-old-artifact-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "api/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.artifact_retention_days
+    }
   }
 }
 
@@ -375,6 +420,60 @@ resource "aws_s3_bucket" "react_survey" {
   })
 }
 
+resource "aws_s3_bucket_public_access_block" "react_dashboard_public_access" {
+  bucket = aws_s3_bucket.react_dashboard.id
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_public_access_block" "react_survey_public_access" {
+  bucket = aws_s3_bucket.react_survey.id
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "react_dashboard_encryption" {
+  bucket = aws_s3_bucket.react_dashboard.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "react_survey_encryption" {
+  bucket = aws_s3_bucket.react_survey.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "react_dashboard_versioning" {
+  bucket = aws_s3_bucket.react_dashboard.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "react_survey_versioning" {
+  bucket = aws_s3_bucket.react_survey.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_s3_bucket_cors_configuration" "react_dashboard_cors" {
   bucket = aws_s3_bucket.react_dashboard.id
 
@@ -436,6 +535,7 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
     cached_methods         = ["GET", "HEAD"]
     target_origin_id       = "S3-react-app"
     viewer_protocol_policy = "redirect-to-https"
+    compress               = true
 
     forwarded_values {
       query_string            = true
@@ -449,6 +549,20 @@ resource "aws_cloudfront_distribution" "react_dashboard_distribution" {
     min_ttl     = 0
     default_ttl = 3600
     max_ttl     = 86400
+  }
+
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  custom_error_response {
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
   }
 
   restrictions {
@@ -485,6 +599,7 @@ resource "aws_cloudfront_distribution" "react_survey_distribution" {
     cached_methods         = ["GET", "HEAD"]
     target_origin_id       = "S3-react-app"
     viewer_protocol_policy = "redirect-to-https"
+    compress               = true
 
     forwarded_values {
       query_string            = true
@@ -498,6 +613,20 @@ resource "aws_cloudfront_distribution" "react_survey_distribution" {
     min_ttl     = 0
     default_ttl = 3600
     max_ttl     = 86400
+  }
+
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  custom_error_response {
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
   }
 
   restrictions {
@@ -620,10 +749,19 @@ resource "aws_security_group" "alb_sg" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
+    description = "HTTPS from the internet"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Allow HTTPS traffic from anywhere
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP from the internet for redirect to HTTPS"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -660,8 +798,25 @@ resource "aws_lb" "main_alb" {
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = [aws_subnet.db_subnet_1.id, aws_subnet.db_subnet_2.id]
 
-  enable_deletion_protection = false
+  enable_deletion_protection = var.alb_deletion_protection
   tags                       = merge(local.common_tags, { Name = "${local.name_prefix}main-alb" })
+}
+
+# HTTP Listener: always redirect cleartext requests to HTTPS.
+resource "aws_lb_listener" "http_redirect" {
+  load_balancer_arn = aws_lb.main_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
 }
 
 # HTTPS Listener

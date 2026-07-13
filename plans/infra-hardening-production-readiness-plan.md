@@ -43,6 +43,28 @@ Reviewed:
   - production app stack appears partly legacy/manual and partly Terraform-adjacent
 - Runtime secrets currently flow through GitHub environment secrets into Terraform variables, then into Terraform state and S3 `.env.prod` objects.
 
+## Current Status After PR #2
+
+Completed baseline items:
+
+- Added repo memory documenting inactive-production/refactor mode and DB data preservation priority.
+- Added a production API config DB host override pointing at the replacement production DB while DB ownership is split.
+- Added baseline S3 hardening for managed buckets: public access blocks where needed, encryption, versioning, and artifact noncurrent-version lifecycle.
+- Added CloudFront compression and SPA fallback responses with zero error-cache TTL.
+- Added ALB HTTP -> HTTPS redirect and configurable ALB deletion protection, enabled for prod tfvars.
+- Removed SSH from new-instance cloud-init UFW defaults.
+- Added external deploy smoke checks for API/dashboard/survey and built JS assets.
+- Added the manual `Redeploy API Artifact` workflow for previous artifact SHA redeploys.
+- Serialized deploy and previous-artifact redeploy workflows with a shared per-environment concurrency group.
+- Made deploy/redeploy resource resolution fail unless exactly one tagged resource is found.
+
+Important caveats that remain:
+
+- The DB host override is temporary and should be removed only after production DB ownership is folded into the primary prod Terraform root or explicitly kept separate by design.
+- `Redeploy API Artifact` is not a database/schema/runtime-config/frontend rollback.
+- Cloud-init SSH changes only affect new instances; existing instances need an SSM remediation step if UFW still allows SSH.
+- Production is inactive for users, but production DB data remains valuable and must be protected.
+
 ## Issues and Edges Found
 
 ### 1. Terraform structure and state ownership
@@ -347,7 +369,71 @@ Deliverable: no unmanaged legacy production resources remain except explicitly d
 7. IAM least privilege tightening.
 8. Legacy production cleanup.
 
-This order reduces blast radius: first understand and secure secrets, then improve rollback/visibility, then make structural network/state changes.
+This order reduces blast radius: first understand and secure secrets, then improve rollback/visibility, then make structural network changes.
+
+## Work That Can Proceed Without More Product Decisions
+
+These are safe next implementation tracks under the current assumption that prod/demo is inactive but prod DB data must be preserved:
+
+1. **Secrets migration design and staging implementation**
+   - Add Terraform-managed SSM Parameter Store/Secrets Manager paths.
+   - Update EC2 instance role permissions for exact secret paths.
+   - Update deploy script to assemble runtime env from non-secret config plus AWS secrets.
+   - Validate first in staging.
+   - Do not rotate production values until the new path is validated.
+
+2. **Observability baseline**
+   - Add CloudWatch log group/agent setup for API logs.
+   - Add ALB access log bucket/prefix and lifecycle.
+   - Add basic CloudWatch alarms for ALB unhealthy targets/5xx and RDS storage/CPU/connections.
+   - Add deploy failure visibility documentation.
+
+3. **Runbooks and safety checks**
+   - Add runbooks for Terraform apply, API artifact redeploy, DB snapshot/restore, and SSM access.
+   - Add a production apply checklist that verifies the intended DB endpoint before apply.
+   - Add SSM remediation doc/script for existing-instance UFW SSH cleanup.
+
+4. **Terraform hygiene that does not require state surgery**
+   - Pin Terraform version to the CI version.
+   - Standardize provider lockfile policy.
+   - Remove local tfplan/tfvars artifacts from repo working directories.
+   - Add variable validations and comments around transitional prod settings.
+
+5. **Staging validations**
+   - Run/validate `Redeploy API Artifact` in staging.
+   - Test deploy resource resolution in staging.
+   - Add staging smoke coverage for login/check-auth and a minimal survey flow.
+
+## Decisions Needed Before Larger Changes
+
+1. **Secrets backend choice**
+   - Use SSM Parameter Store SecureString or Secrets Manager?
+   - Default recommendation: SSM Parameter Store for lower cost/static secrets; Secrets Manager if rotation is desired.
+
+2. **Production DB ownership**
+   - Fold `terraform/prod-db` into the main prod Terraform root, or keep it as a separate root permanently?
+   - Default recommendation: fold it into the primary prod environment after state/source-of-truth inventory.
+
+3. **Terraform refactor strategy**
+   - Do we migrate away from workspaces now to `terraform/envs/{staging,prod}`, or first finish secrets/observability in the current root?
+   - Default recommendation: finish secrets and observability first, then do state/root refactor.
+
+4. **Private networking strategy**
+   - Private EC2 with NAT Gateway, VPC endpoints only, or a hybrid?
+   - Default recommendation: VPC endpoints for SSM/S3/CloudWatch/secrets, NAT only if app outbound dependencies require it.
+
+5. **Old production DB retirement window**
+   - How long should the old DB be retained before final snapshot and deletion?
+   - Default recommendation: set an explicit date now, create final snapshot, then delete after validation.
+
+6. **IAM/OIDC ownership**
+   - Should Terraform import/manage the existing GitHub OIDC provider and deploy/Terraform roles?
+   - Default recommendation: yes, but after an inventory and with separate staging/prod deploy roles.
+
+7. **WAF/rate limiting**
+   - Add AWS WAF managed rules now or defer until the app is active again?
+   - Default recommendation: defer unless public abuse is observed; add before reactivating production users.
+
 
 ## Acceptance Criteria
 

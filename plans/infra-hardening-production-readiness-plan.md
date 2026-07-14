@@ -63,7 +63,9 @@ Additional status after PR #3:
 - SSM SecureString parameters were created/updated for staging and prod under `/network-survey/{staging,prod}/...`.
 - Staging Terraform apply completed successfully for the SSM runtime secret path and baseline hardening changes.
 - Staging deploy was rerun successfully after apply, and API/dashboard/survey smoke checks passed.
-- Production Terraform apply has not been run for these changes yet; keep reviewing prod plans carefully because prod DB/app ownership is still transitional.
+- Production Terraform apply was intentionally not run: the root `default` workspace currently has no state, and a prod plan would create a new 60-resource stack rather than update the existing transitional prod app. Production hardening changes must wait for prod source-of-truth/import work or be applied through a deliberate migration path.
+- Old non-current release directories were removed from the staging and current prod API instances via SSM to reduce legacy `.env.prod` secret copies. Current releases still contain resolved runtime secrets because the Node API consumes an env file.
+- `Redeploy API Artifact` was validated successfully in staging against the current main artifact.
 
 Important caveats that remain:
 
@@ -383,34 +385,36 @@ This order reduces blast radius: first understand and secure secrets, then impro
 
 These are safe next implementation tracks under the current assumption that prod/demo is inactive but prod DB data must be preserved:
 
-1. **Secrets migration design and staging implementation**
-   - Add Terraform-managed SSM Parameter Store/Secrets Manager paths.
-   - Update EC2 instance role permissions for exact secret paths.
-   - Update deploy script to assemble runtime env from non-secret config plus AWS secrets.
-   - Validate first in staging.
-   - Do not rotate production values until the new path is validated.
+1. **Resolve production Terraform source of truth before prod apply**
+   - SSM params exist for prod, but root `default` workspace has no state.
+   - Do not run root prod apply until existing prod resources are imported/folded in or a replacement-prod migration is explicitly chosen.
+   - Keep `api_config_db_host_override` until replacement DB ownership is folded into the primary prod root.
 
-2. **Observability baseline**
+2. **Current-release secret handling**
+   - Historical release dirs were cleaned, but the active release still contains resolved secrets in `.env.prod` for API compatibility.
+   - Future improvement: switch the service startup model to load secrets without persisting them in release directories, or write the env file outside versioned release dirs with strict permissions and rotation cleanup.
+
+3. **Observability baseline**
    - Add CloudWatch log group/agent setup for API logs.
    - Add ALB access log bucket/prefix and lifecycle.
    - Add basic CloudWatch alarms for ALB unhealthy targets/5xx and RDS storage/CPU/connections.
    - Add deploy failure visibility documentation.
 
-3. **Runbooks and safety checks**
+4. **Runbooks and safety checks**
    - Add runbooks for Terraform apply, API artifact redeploy, DB snapshot/restore, and SSM access.
    - Add a production apply checklist that verifies the intended DB endpoint before apply.
    - Add SSM remediation doc/script for existing-instance UFW SSH cleanup.
 
-4. **Terraform hygiene that does not require state surgery**
+5. **Terraform hygiene that does not require state surgery**
    - Pin Terraform version to the CI version.
    - Standardize provider lockfile policy.
    - Remove local tfplan/tfvars artifacts from repo working directories.
    - Add variable validations and comments around transitional prod settings.
 
-5. **Staging validations**
-   - Run/validate `Redeploy API Artifact` in staging.
-   - Test deploy resource resolution in staging.
+6. **Staging and production deploy validations**
+   - Staging `Redeploy API Artifact` has been validated.
    - Add staging smoke coverage for login/check-auth and a minimal survey flow.
+   - Production artifact redeploy remains untested and should wait until prod resource ownership/tagging is fully inventoried.
 
 ## Decisions Recorded
 

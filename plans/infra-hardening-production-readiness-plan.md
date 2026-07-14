@@ -39,8 +39,8 @@ Reviewed:
   - Deploy via GitHub Actions -> S3 artifact -> SSM Run Command -> PM2 reload
 - Production/demo currently has transitional state:
   - public `demo.ona.*` endpoints remain production
-  - replacement production RDS is managed by `terraform/envs/prod/` using the existing `prod-db/terraform.tfstate` backend key
-  - production app stack appears partly legacy/manual and partly Terraform-adjacent
+  - replacement production RDS and deploy-glue buckets/IAM policies are managed by `terraform/envs/prod/` using the existing `prod-db/terraform.tfstate` backend key
+  - CloudFront distributions, ALB, EC2, VPC/subnets/routes, and ACM certificates remain transitional/manual and should be imported or replaced in later phases
 - Runtime secrets currently flow through GitHub environment secrets into Terraform variables, then into Terraform state and S3 `.env.prod` objects.
 
 ## Current Status After PR #2
@@ -64,6 +64,8 @@ Additional status after PR #3:
 - Staging Terraform apply completed successfully for the SSM runtime secret path and baseline hardening changes.
 - Staging deploy was rerun successfully after apply, and API/dashboard/survey smoke checks passed.
 - Production root `terraform/envs/prod` now owns the replacement production DB configuration, moved from `terraform/prod-db` while preserving the existing backend key and state. A prod DB apply completed with 0 changes, and the replacement DB still reports 9 surveys.
+- Production deploy-glue resources that are safe to track independently are now in `terraform/envs/prod`: legacy config/artifacts bucket, dashboard/survey buckets, relevant S3 hardening resources, and IAM inline policies for prod deploy/runtime SSM secret access. A prod env plan is clean after apply.
+- Production deploy from GitHub Actions was run successfully against `main`; prod API/dashboard/survey smoke checks pass, and the replacement DB still reports 9 surveys.
 - The old root `terraform/` `default` workspace currently has no state, and a prod plan there would create a new 60-resource stack rather than update the existing transitional prod app. Do not run root prod apply until existing prod app resources are imported/folded in or a replacement-prod migration is explicitly chosen.
 - Old non-current release directories were removed from the staging and current prod API instances via SSM to reduce legacy `.env.prod` secret copies. Current releases still contain resolved runtime secrets because the Node API consumes an env file.
 - `Redeploy API Artifact` was validated successfully in staging against the current main artifact.
@@ -80,7 +82,7 @@ Important caveats that remain:
 ### 1. Terraform structure and state ownership
 
 - The root `terraform/` stack uses workspaces for prod/staging. Workspaces make it easy to apply the wrong `*.tfvars` to the wrong workspace.
-- Production is split between root `terraform/` and `terraform/envs/prod`; `terraform/envs/prod` manages the replacement DB only, while app stack ownership is still transitional/manual.
+- Production is split between root `terraform/` and `terraform/envs/prod`; `terraform/envs/prod` manages the replacement DB plus deploy-glue buckets/IAM, while remaining app/network ownership is still transitional/manual.
 - It is not obvious which stack is the authoritative production source of truth for API/ALB/CloudFront/buckets versus only the replacement DB.
 - `terraform/envs/prod/` may contain local-only operational artifacts in the working tree (`*.local.tfvars`, `*.tfplan`). They are ignored, but local secret material should still be kept out of shared logs and cleaned up when possible.
 - Root `terraform/.terraform.lock.hcl` is ignored, while `terraform/envs/prod/.terraform.lock.hcl` is tracked. Provider lockfile policy is inconsistent.
@@ -426,7 +428,7 @@ These are safe next implementation tracks under the current assumption that prod
 2. **Production DB ownership**
    - Decision: fold `terraform/prod-db` into the main prod Terraform source of truth.
    - Status: initial move completed by relocating the DB root to `terraform/envs/prod` while preserving the existing `prod-db/terraform.tfstate` backend key and DB data.
-   - Remaining: fold/import the prod app stack resources after observability and source-of-truth planning.
+   - Remaining: fold/import or replace CloudFront, ALB, EC2, VPC/subnet/route, and ACM resources after observability and source-of-truth planning.
 
 3. **Terraform refactor strategy**
    - Decision: migrate away from workspaces to `terraform/envs/{staging,prod}` after secrets and observability.

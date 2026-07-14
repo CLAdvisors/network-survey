@@ -1,13 +1,15 @@
 # Production Environment Root
 
 This Terraform root currently owns the Terraform-managed production replacement
-RDS database while the broader prod app stack remains transitional/manual. It was
-moved from `terraform/prod-db` into `terraform/envs/prod` as the first step away
-from workspace-based prod management.
+RDS database plus the existing production deploy-glue resources that are safe to
+track independently (legacy S3 buckets and IAM inline policies). It was moved
+from `terraform/prod-db` into `terraform/envs/prod` as the first step away from
+workspace-based prod management.
 
-It intentionally does **not** create a parallel dashboard/API/survey stack yet.
-The existing `demo.ona.*` app stack continues to run separately while prod is
-inactive during the infra refactor.
+It intentionally does **not** create a parallel dashboard/API/survey stack.
+The existing `demo.ona.*` app stack continues to run while prod is inactive
+during the infra refactor. CloudFront distributions, ALB, EC2, and VPC resources
+are still transitional/manual and should be imported or replaced in later phases.
 
 ## State
 
@@ -31,6 +33,11 @@ settled.
 - Existing prod VPC: `vpc-0a3c3c61ed4c7a097`
 - Existing prod backend/API security group: `sg-05b4dc3a549e37d53`
 - Replacement DB is private, encrypted, uses `default.postgres15`, has deletion protection, and requires TLS.
+- Existing production artifact/config bucket: `my-config-bucket-1xo22t`
+- Existing production dashboard bucket: `react-dashboard-7c1f1dec`
+- Existing production survey bucket: `react-survey-7c1f1dec`
+- Existing production dashboard CloudFront distribution: `E1PEP245TILYDL`
+- Existing production survey CloudFront distribution: `E3FANX1T8EYFZ5`
 
 ## Apply
 
@@ -57,6 +64,9 @@ master credential.
   app resources are imported/folded in or a replacement-prod migration is
   explicitly chosen; that workspace currently has no prod state and would create
   a new parallel stack.
+- This root tracks prod DB, legacy S3 buckets, and IAM deploy/runtime-secret
+  inline policies. It does not yet track CloudFront distribution config, ALB,
+  EC2, VPC/subnets/routes, or ACM certificates.
 - This root must preserve the existing `network-survey-prod-postgres-v2` data.
 - Before destructive DB operations, confirm backups/final snapshots and rollback
   path.

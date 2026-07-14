@@ -58,6 +58,13 @@ Completed baseline items:
 - Serialized deploy and previous-artifact redeploy workflows with a shared per-environment concurrency group.
 - Made deploy/redeploy resource resolution fail unless exactly one tagged resource is found.
 
+Additional status after PR #3:
+
+- SSM SecureString parameters were created/updated for staging and prod under `/network-survey/{staging,prod}/...`.
+- Staging Terraform apply completed successfully for the SSM runtime secret path and baseline hardening changes.
+- Staging deploy was rerun successfully after apply, and API/dashboard/survey smoke checks passed.
+- Production Terraform apply has not been run for these changes yet; keep reviewing prod plans carefully because prod DB/app ownership is still transitional.
+
 Important caveats that remain:
 
 - The DB host override is temporary and should be removed only after production DB ownership is folded into the primary prod Terraform root or explicitly kept separate by design.

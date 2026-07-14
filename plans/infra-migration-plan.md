@@ -187,8 +187,12 @@ Cleaned up:
 Terraform root:
 
 ```text
-terraform/prod-db/
+terraform/envs/prod/
 ```
+
+This root was moved from `terraform/prod-db/` while preserving the existing
+`prod-db/terraform.tfstate` backend key so the replacement DB state and data were
+not migrated or recreated.
 
 Created replacement DB:
 

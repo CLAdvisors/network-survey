@@ -21,6 +21,6 @@ db_deletion_protection  = true
 alb_deletion_protection = true
 
 # Temporary refactor safety valve: demo/prod currently uses the replacement DB
-# managed in terraform/prod-db. Keep root-stack API config pointed at that DB
+# managed in terraform/envs/prod. Keep root-stack API config pointed at that DB
 # until prod DB ownership is folded into the primary prod Terraform root.
 api_config_db_host_override = "network-survey-prod-postgres-v2.cb4kmcse0a7d.us-east-1.rds.amazonaws.com"

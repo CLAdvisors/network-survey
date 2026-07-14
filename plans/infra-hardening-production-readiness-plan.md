@@ -22,7 +22,7 @@ Target qualities:
 Reviewed:
 
 - `terraform/` root stack
-- `terraform/prod-db/` replacement production DB stack
+- `terraform/envs/prod/` production DB root (moved from `terraform/prod-db/`)
 - `.github/workflows/*`
 - `scripts/deploy/remote-deploy.sh`
 - `terraform/cloud-init-template.sh`
@@ -39,7 +39,7 @@ Reviewed:
   - Deploy via GitHub Actions -> S3 artifact -> SSM Run Command -> PM2 reload
 - Production/demo currently has transitional state:
   - public `demo.ona.*` endpoints remain production
-  - replacement production RDS is managed by separate `terraform/prod-db/`
+  - replacement production RDS is managed by `terraform/envs/prod/` using the existing `prod-db/terraform.tfstate` backend key
   - production app stack appears partly legacy/manual and partly Terraform-adjacent
 - Runtime secrets currently flow through GitHub environment secrets into Terraform variables, then into Terraform state and S3 `.env.prod` objects.
 
@@ -63,7 +63,8 @@ Additional status after PR #3:
 - SSM SecureString parameters were created/updated for staging and prod under `/network-survey/{staging,prod}/...`.
 - Staging Terraform apply completed successfully for the SSM runtime secret path and baseline hardening changes.
 - Staging deploy was rerun successfully after apply, and API/dashboard/survey smoke checks passed.
-- Production Terraform apply was intentionally not run: the root `default` workspace currently has no state, and a prod plan would create a new 60-resource stack rather than update the existing transitional prod app. Production hardening changes must wait for prod source-of-truth/import work or be applied through a deliberate migration path.
+- Production root `terraform/envs/prod` now owns the replacement production DB configuration, moved from `terraform/prod-db` while preserving the existing backend key and state. A prod DB apply completed with 0 changes, and the replacement DB still reports 9 surveys.
+- The old root `terraform/` `default` workspace currently has no state, and a prod plan there would create a new 60-resource stack rather than update the existing transitional prod app. Do not run root prod apply until existing prod app resources are imported/folded in or a replacement-prod migration is explicitly chosen.
 - Old non-current release directories were removed from the staging and current prod API instances via SSM to reduce legacy `.env.prod` secret copies. Current releases still contain resolved runtime secrets because the Node API consumes an env file.
 - `Redeploy API Artifact` was validated successfully in staging against the current main artifact.
 
@@ -79,10 +80,10 @@ Important caveats that remain:
 ### 1. Terraform structure and state ownership
 
 - The root `terraform/` stack uses workspaces for prod/staging. Workspaces make it easy to apply the wrong `*.tfvars` to the wrong workspace.
-- Production is split between root `terraform/` and `terraform/prod-db/`, with manual cutover state documented in `plans/infra-migration-plan.md`.
+- Production is split between root `terraform/` and `terraform/envs/prod`; `terraform/envs/prod` manages the replacement DB only, while app stack ownership is still transitional/manual.
 - It is not obvious which stack is the authoritative production source of truth for API/ALB/CloudFront/buckets versus only the replacement DB.
-- `terraform/prod-db/` contains local-only operational artifacts in the working tree (`*.local.tfvars`, `*.tfplan`). They are ignored, but the presence of secrets/plans in the repo directory is risky operationally.
-- Root `terraform/.terraform.lock.hcl` is ignored, while `terraform/prod-db/.terraform.lock.hcl` is tracked. Provider lockfile policy is inconsistent.
+- `terraform/envs/prod/` may contain local-only operational artifacts in the working tree (`*.local.tfvars`, `*.tfplan`). They are ignored, but local secret material should still be kept out of shared logs and cleaned up when possible.
+- Root `terraform/.terraform.lock.hcl` is ignored, while `terraform/envs/prod/.terraform.lock.hcl` is tracked. Provider lockfile policy is inconsistent.
 - Terraform required version says `>= 1.4.0`, while workflows use `1.12.2`. This leaves local versions looser than CI.
 - Some resources preserve legacy names in prod, increasing cognitive load and migration risk.
 
@@ -250,7 +251,7 @@ Deliverable: deploys work with secrets pulled from AWS secret storage, not Terra
    - `staging/terraform.tfstate`
    - `prod/terraform.tfstate`
 3. Migrate state carefully with `terraform state mv` / `terraform import` plans.
-4. Keep `terraform/prod-db` only until production DB is folded into `envs/prod` or explicitly retired.
+4. Expand `terraform/envs/prod` beyond the replacement DB only after prod app resource ownership/import is planned.
 5. Pin Terraform version to match CI.
 6. Add `terraform fmt`, `validate`, and plan for both environments in PR checks.
 
@@ -363,7 +364,7 @@ Deliverable: production deploys are reversible and externally verified.
 1. Complete old production DB rollback window.
 2. Create final snapshot of old DB.
 3. Delete old DB and obsolete security groups/instances after validation.
-4. Fold `terraform/prod-db` into primary prod environment or archive it as historical migration code.
+4. Expand `terraform/envs/prod` to own the intended prod app resources or archive legacy migration-only code after import/migration.
 5. Remove stale docs and update the canonical infra README.
 
 Deliverable: no unmanaged legacy production resources remain except explicitly documented external dependencies.
@@ -424,7 +425,8 @@ These are safe next implementation tracks under the current assumption that prod
 
 2. **Production DB ownership**
    - Decision: fold `terraform/prod-db` into the main prod Terraform source of truth.
-   - Timing: after secrets and observability are improved.
+   - Status: initial move completed by relocating the DB root to `terraform/envs/prod` while preserving the existing `prod-db/terraform.tfstate` backend key and DB data.
+   - Remaining: fold/import the prod app stack resources after observability and source-of-truth planning.
 
 3. **Terraform refactor strategy**
    - Decision: migrate away from workspaces to `terraform/envs/{staging,prod}` after secrets and observability.

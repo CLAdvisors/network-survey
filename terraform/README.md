@@ -124,7 +124,7 @@ The security fixes change live resources. Checklist for the first prod apply:
   `db_password` — RDS passwords are only changed if the value differs.
 - During the current inactive-production infra refactor, `prod.tfvars` sets
   `api_config_db_host_override` so a root prod apply keeps the API runtime
-  config pointed at the replacement DB managed in `terraform/prod-db`. Remove
+  config pointed at the replacement DB managed in `terraform/envs/prod`. Remove
   that override only after prod DB ownership is folded into the primary prod
   Terraform root.
 - The removed `aws_s3_object.react_dashboard_files` / `react_survey_files`

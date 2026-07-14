@@ -333,7 +333,7 @@ resource "aws_iam_role" "ec2_role" {
 # runtime secrets from SSM Parameter Store.
 resource "aws_iam_policy" "s3_access_policy" {
   name        = "${local.name_prefix}s3-config-access-policy"
-  description = "Allow EC2 to read S3 deploy inputs and SSM runtime secrets"
+  description = "Allow EC2 to read the S3 config bucket and release artifacts"
   policy      = data.aws_iam_policy_document.s3_access_policy.json
 }
 

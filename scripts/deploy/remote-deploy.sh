@@ -38,14 +38,56 @@ echo "==> Fetching runtime config"
 aws s3 cp "s3://$CONFIG_BUCKET/configs/.env.prod" "$RELEASE_DIR/api/.env.prod"
 chmod 600 "$RELEASE_DIR/api/.env.prod"
 
+get_env_value() {
+  grep "^$1=" "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-
+}
+
+append_secret_from_ssm() {
+  local env_key="$1"
+  local parameter_env_key="$2"
+  local parameter_name
+  local value
+
+  parameter_name=$(get_env_value "$parameter_env_key")
+  if [ -z "$parameter_name" ]; then
+    echo "Missing $parameter_env_key in runtime config" >&2
+    exit 1
+  fi
+
+  value=$(aws ssm get-parameter \
+    --name "$parameter_name" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text)
+
+  ENV_KEY="$env_key" SECRET_VALUE="$value" node - <<'NODE' >> "$RELEASE_DIR/api/.env.prod"
+const key = process.env.ENV_KEY;
+const value = process.env.SECRET_VALUE || '';
+process.stdout.write(`${key}=${JSON.stringify(value)}\n`);
+NODE
+}
+
+echo "==> Resolving runtime secrets from SSM Parameter Store"
+append_secret_from_ssm DB_PASSWORD DB_PASSWORD_PARAMETER
+append_secret_from_ssm SESSION_SECRET SESSION_SECRET_PARAMETER
+append_secret_from_ssm RESEND_API_KEY RESEND_API_KEY_PARAMETER
+
 echo "==> Running database migrations"
 # Liquibase runs from this host because the database only accepts
 # connections from the backend security group.
-DB_HOST=$(grep '^DB_HOST=' "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-)
-DB_PORT=$(grep '^DB_PORT=' "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-)
-DB_NAME=$(grep '^DB_NAME=' "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-)
-DB_USER=$(grep '^DB_USER=' "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-)
-DB_PASSWORD=$(grep '^DB_PASSWORD=' "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-)
+read_runtime_env() {
+  (cd "$RELEASE_DIR/api" && ENV_FILE="$RELEASE_DIR/api/.env.prod" ENV_KEY="$1" node - <<'NODE'
+require('dotenv').config({ path: process.env.ENV_FILE });
+process.stdout.write(process.env[process.env.ENV_KEY] || '');
+NODE
+)
+}
+
+DB_HOST=$(read_runtime_env DB_HOST)
+DB_PORT=$(read_runtime_env DB_PORT)
+DB_NAME=$(read_runtime_env DB_NAME)
+DB_USER=$(read_runtime_env DB_USER)
+DB_PASSWORD=$(read_runtime_env DB_PASSWORD)
 # changeLogFile must stay "changelogs/..." — that path is the changeset
 # identity recorded in DATABASECHANGELOG by all prior runs (local dev and the
 # old liquibase-prod.sh both ran from db/). Changing it would make Liquibase

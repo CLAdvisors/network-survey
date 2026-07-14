@@ -79,9 +79,10 @@ Important caveats that remain:
 
 ### 2. Secrets management
 
-- `db_password`, `session_secret`, and `resend_api_key` are Terraform variables. They are written into Terraform state.
-- Runtime config is rendered into S3 as `configs/.env.prod`, including secrets.
-- Deploy-time scripts copy `.env.prod` to instance release directories.
+- Runtime API secrets are being moved to SSM Parameter Store SecureString.
+- Terraform still needs `db_password` while it manages RDS, so the RDS master password can still appear in Terraform state until DB ownership/password management is refactored further.
+- Runtime config is rendered into S3 as `configs/.env.prod`; after the SSM migration, this file should contain only non-secret config and SSM parameter names.
+- Deploy-time scripts copy `.env.prod` to instance release directories, so old release directories may still contain historical secret values until cleaned.
 - Local ignored tfvars files exist and contain secret material. They should be treated as sensitive local artifacts and not shared.
 - Historical docs mention a previously committed Resend key; any related key should remain rotated and audited.
 - DB passwords are consumed directly by Liquibase command-line flags, which can appear in process listings during deploy.
@@ -202,18 +203,18 @@ Deliverable: `docs/infra-inventory.md` or updated `plans/infra-migration-plan.md
 
 ### Phase 1 — Secrets cleanup
 
-1. Choose SSM Parameter Store SecureString or Secrets Manager.
-   - Recommended: Secrets Manager for DB/app secrets if rotation is desired; Parameter Store is fine for low-cost static secrets.
-2. Create per-environment secret paths, for example:
+Decision: use SSM Parameter Store SecureString. Terraform manages parameter names and read permissions, not secret values.
+
+1. Create per-environment secret paths, for example:
    - `/network-survey/staging/db/password`
-   - `/network-survey/staging/session-secret`
-   - `/network-survey/staging/resend-api-key`
+   - `/network-survey/staging/api/session-secret`
+   - `/network-survey/staging/api/resend-api-key`
    - `/network-survey/prod/...`
-3. Update Terraform so secret values are not required as normal variables for app runtime config.
-4. Update `remote-deploy.sh` to fetch secrets on instance at deploy time.
-5. Remove secret values from S3 `.env.prod`; keep only non-secret config or remove config bucket dependency entirely.
-6. Rotate secrets currently present in Terraform state/S3/local tfvars if exposure risk is unacceptable.
-7. Scrub old release directories on EC2 that contain copied `.env.prod` files, retaining only required current config.
+2. Update Terraform so API runtime secret values are not required as normal variables for app runtime config.
+3. Update `remote-deploy.sh` to fetch secrets on instance at deploy time.
+4. Remove secret values from S3 `.env.prod`; keep only non-secret config and SSM parameter names.
+5. Rotate secrets currently present in Terraform state/S3/local tfvars if exposure risk is unacceptable.
+6. Scrub old release directories on EC2 that contain copied `.env.prod` files, retaining only required current config.
 
 Deliverable: deploys work with secrets pulled from AWS secret storage, not Terraform-rendered S3 env files.
 
@@ -404,35 +405,31 @@ These are safe next implementation tracks under the current assumption that prod
    - Test deploy resource resolution in staging.
    - Add staging smoke coverage for login/check-auth and a minimal survey flow.
 
-## Decisions Needed Before Larger Changes
+## Decisions Recorded
 
-1. **Secrets backend choice**
-   - Use SSM Parameter Store SecureString or Secrets Manager?
-   - Default recommendation: SSM Parameter Store for lower cost/static secrets; Secrets Manager if rotation is desired.
+1. **Secrets backend**
+   - Decision: use SSM Parameter Store SecureString.
+   - Implementation note: Terraform should manage parameter names/permissions, not secret values. Secret values are created/rotated outside Terraform to avoid writing them into Terraform state.
 
 2. **Production DB ownership**
-   - Fold `terraform/prod-db` into the main prod Terraform root, or keep it as a separate root permanently?
-   - Default recommendation: fold it into the primary prod environment after state/source-of-truth inventory.
+   - Decision: fold `terraform/prod-db` into the main prod Terraform source of truth.
+   - Timing: after secrets and observability are improved.
 
 3. **Terraform refactor strategy**
-   - Do we migrate away from workspaces now to `terraform/envs/{staging,prod}`, or first finish secrets/observability in the current root?
-   - Default recommendation: finish secrets and observability first, then do state/root refactor.
+   - Decision: migrate away from workspaces to `terraform/envs/{staging,prod}` after secrets and observability.
 
 4. **Private networking strategy**
-   - Private EC2 with NAT Gateway, VPC endpoints only, or a hybrid?
-   - Default recommendation: VPC endpoints for SSM/S3/CloudWatch/secrets, NAT only if app outbound dependencies require it.
+   - Decision: use VPC endpoints for now. Add NAT only if required by app/runtime outbound dependencies.
 
 5. **Old production DB retirement window**
-   - How long should the old DB be retained before final snapshot and deletion?
-   - Default recommendation: set an explicit date now, create final snapshot, then delete after validation.
+   - Decision: retain the old production DB for 4 weeks, then create/confirm final snapshot and delete after validation.
 
 6. **IAM/OIDC ownership**
-   - Should Terraform import/manage the existing GitHub OIDC provider and deploy/Terraform roles?
-   - Default recommendation: yes, but after an inventory and with separate staging/prod deploy roles.
+   - Decision: leave existing GitHub OIDC/deploy/Terraform roles manually managed for now.
+   - Follow-up: revisit import/Terraform management after the main Terraform refactor and role split planning.
 
 7. **WAF/rate limiting**
-   - Add AWS WAF managed rules now or defer until the app is active again?
-   - Default recommendation: defer unless public abuse is observed; add before reactivating production users.
+   - Decision: defer until closer to production reactivation unless public abuse is observed.
 
 
 ## Acceptance Criteria

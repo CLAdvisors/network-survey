@@ -2,8 +2,8 @@
 #   terraform workspace select default
 #   terraform apply -var-file=prod.tfvars
 #
-# Secrets (db_password, session_secret, resend_api_key) must be supplied via
-# TF_VAR_* environment variables or an untracked *.auto.tfvars — never commit them.
+# db_password must be supplied via TF_VAR_db_password or an explicit untracked
+# *.local.tfvars. API runtime secrets are read from SSM Parameter Store.
 
 api_domain       = "demo.ona.api.bennetts.work"
 dashboard_domain = "demo.ona.dashboard.bennetts.work"

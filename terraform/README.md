@@ -1,46 +1,40 @@
-# Infrastructure
+# Terraform infrastructure
 
-One Terraform configuration, deployed per environment with **workspaces**:
+Terraform is being refactored from a single workspace-based root into explicit
+environment roots.
 
-| Workspace | Environment | Domains | tfvars |
+| Environment | Current root | Backend key | Notes |
 |---|---|---|---|
-| `default` | prod (the original "demo" stack) | `demo.ona.{api,dashboard,survey}.bennetts.work` | `prod.tfvars` |
-| `staging` | staging | `staging.ona.{api,dashboard,survey}.bennetts.work` | `staging.tfvars` |
+| staging | `terraform/envs/staging` | `envs/staging/terraform.tfstate` | New standalone root added in this PR. State migration is documented only; not yet executed. |
+| prod / prod-v2 | `terraform/envs/prod` | `prod-db/terraform.tfstate` | Active prod-v2 cutover stack. Preserve RDS and imported ACM certificates. |
+| legacy root | `terraform/` | workspace-based (`env/staging/terraform.tfstate` for staging, `terraform.tfstate` for default) | Kept intact for rollback/state reference. Do not use it for production applies. |
 
-The default workspace keeps the resource names that already exist in prod state, so
-adopting workspaces required no state surgery. Non-default workspaces prefix
-resource names with the workspace name (e.g. `staging-backend-security-group`).
+## Shared modules
 
-## What each environment contains
+`terraform/modules/frontend_static_site` contains the shared private S3 +
+CloudFront Origin Access Control pattern used by the new staging root. It keeps
+custom-domain support optional and is parameterized to preserve the staging
+resource names/attributes during the later state migration.
 
-- **API**: EC2 instance (pm2) behind an HTTPS ALB. App code is installed from
-  release artifacts in S3 via SSM Run Command (see
-  [deploy.yml](../.github/workflows/deploy.yml)) — never by re-running cloud-init.
-- **Database**: RDS Postgres 15, **not** publicly accessible, TLS enforced,
-  reachable only from the backend security group. Migrations run *on the
-  instance* (Liquibase is installed by cloud-init) during deploys.
-- **Frontends**: two S3 + CloudFront distributions (dashboard, survey), synced by CI.
-- **Buckets**: `config` (runtime `.env.prod`, rendered from `templates/env.tmpl`)
-  and `artifacts` (versioned API release tarballs). Buckets are private;
-  frontend buckets are CloudFront OAC-only, and managed buckets define baseline
-  public-access blocks/encryption/versioning where appropriate.
-- **Access**: no SSH by default — use SSM Session Manager
-  (`aws ssm start-session --target <instance-id>`). To open SSH anyway, set
-  `ssh_allowed_cidrs` to your IP.
+Prod-v2 frontend resources remain inline in `terraform/envs/prod` for now to
+avoid unnecessary state moves or accidental diffs against active production.
+Move prod to the module only in a later reviewed change with explicit
+`terraform state mv` commands and a no-op plan.
+
+The API/ALB/EC2/IAM pattern is intentionally not extracted yet: staging and
+prod-v2 differ enough that a larger module would increase risk. Prefer a small,
+validated follow-up after staging is safely under its environment root.
 
 ## Secrets
 
-`db_password` is still required by Terraform because Terraform currently manages
-RDS. Supply it via an environment variable or an untracked `*.local.tfvars` file
-passed explicitly with `-var-file`:
+`db_password` is required because Terraform manages RDS. Provide it via GitHub
+environment secret `TF_VAR_DB_PASSWORD` or locally as:
 
 ```sh
 export TF_VAR_db_password=...
 ```
 
-API runtime secrets now come from SSM Parameter Store SecureString values, not
-Terraform-rendered S3 config. Create these parameters before deploying an
-environment:
+API runtime secrets are stored in SSM Parameter Store SecureString values, e.g.:
 
 ```sh
 aws ssm put-parameter --type SecureString --overwrite \
@@ -51,105 +45,65 @@ aws ssm put-parameter --type SecureString --overwrite \
   --name /network-survey/staging/api/resend-api-key --value '...'
 ```
 
-Use `/network-survey/prod/...` for prod. **Never commit secret values** — the old
-`env.tmpl` contained a live Resend key; that key should be rotated in the Resend
-dashboard since it lives in git history. Avoid local `*.auto.tfvars` for
-environment-specific secrets because Terraform loads them for every workspace.
+Use `/network-survey/prod/...` for production runtime parameters. Never commit
+secret values or local `*.local.tfvars` files.
 
-## Applying
+## Staging migration plan (documented only)
+
+No state was migrated as part of this PR. The old root remains available so the
+current staging state is not broken while this branch is reviewed.
+
+When ready, migrate staging state from the old workspace key to the new explicit
+key. Use remote-state backups and inspect plans before any apply:
 
 ```sh
-# prod (default workspace)
-terraform workspace select default
-terraform apply -var-file=prod.tfvars
+# 1. Back up the existing staging state locally.
+terraform -chdir=terraform init
+terraform -chdir=terraform workspace select staging
+terraform -chdir=terraform state pull > staging-workspace-pre-migration.tfstate
 
-# staging
-terraform workspace new staging      # first time only
-terraform workspace select staging
-terraform apply -var-file=staging.tfvars
+# 2. Initialize the new staging root against the new backend key.
+terraform -chdir=terraform/envs/staging init
+
+# 3. Push the backed-up state into the new key only after review.
+#    This mutates remote state; do it in a maintenance window.
+terraform -chdir=terraform/envs/staging state push ../../../staging-workspace-pre-migration.tfstate
+
+# 4. Move frontend addresses into the module addresses so Terraform does not
+#    recreate S3/CloudFront resources.
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket.react_dashboard module.dashboard_frontend.aws_s3_bucket.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_public_access_block.react_dashboard_public_access module.dashboard_frontend.aws_s3_bucket_public_access_block.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_server_side_encryption_configuration.react_dashboard_encryption module.dashboard_frontend.aws_s3_bucket_server_side_encryption_configuration.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_versioning.react_dashboard_versioning module.dashboard_frontend.aws_s3_bucket_versioning.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_cors_configuration.react_dashboard_cors 'module.dashboard_frontend.aws_s3_bucket_cors_configuration.this[0]'
+terraform -chdir=terraform/envs/staging state mv aws_cloudfront_origin_access_control.react_dashboard_oac module.dashboard_frontend.aws_cloudfront_origin_access_control.this
+terraform -chdir=terraform/envs/staging state mv aws_cloudfront_distribution.react_dashboard_distribution module.dashboard_frontend.aws_cloudfront_distribution.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_policy.react_dashboard_policy module.dashboard_frontend.aws_s3_bucket_policy.this
+
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket.react_survey module.survey_frontend.aws_s3_bucket.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_public_access_block.react_survey_public_access module.survey_frontend.aws_s3_bucket_public_access_block.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_server_side_encryption_configuration.react_survey_encryption module.survey_frontend.aws_s3_bucket_server_side_encryption_configuration.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_versioning.react_survey_versioning module.survey_frontend.aws_s3_bucket_versioning.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_cors_configuration.react_survey_cors 'module.survey_frontend.aws_s3_bucket_cors_configuration.this[0]'
+terraform -chdir=terraform/envs/staging state mv aws_cloudfront_origin_access_control.react_survey_oac module.survey_frontend.aws_cloudfront_origin_access_control.this
+terraform -chdir=terraform/envs/staging state mv aws_cloudfront_distribution.react_survey_distribution module.survey_frontend.aws_cloudfront_distribution.this
+terraform -chdir=terraform/envs/staging state mv aws_s3_bucket_policy.react_survey_policy module.survey_frontend.aws_s3_bucket_policy.this
+
+# 5. Plan with the real staging DB password and confirm no destructive changes.
+TF_VAR_db_password=... terraform -chdir=terraform/envs/staging plan -var-file=staging.tfvars
 ```
 
-Standing up a **new** environment needs two passes, because the
-`aws_acm_certificate_validation` resources block until the DNS validation
-records exist:
+If the plan is not effectively a no-op, stop and either adjust configuration or
+restore from `staging-workspace-pre-migration.tfstate`.
 
-1. Create just the certificates:
-   `terraform apply -var-file=staging.tfvars -target=aws_acm_certificate.ssl_cert -target=aws_acm_certificate.ssl_cert_dashboard -target=aws_acm_certificate.ssl_cert_survey`
-2. Create DNS CNAMEs for the validation records (`terraform output ssl_cert_validation_records` etc.).
-3. Run the full `terraform apply -var-file=staging.tfvars`.
-4. Point the three domains at their targets: API domain → `alb_dns_name`,
-   dashboard/survey domains → `dashboard_cloudfront_domain` / `survey_cloudfront_domain`.
-5. Run the **Deploy** GitHub workflow for that environment — the instance boots
-   without app code until the first artifact deploy.
-6. Bootstrap an admin user (temporary until self-serve admin management):
-   `POST /api/register` against the API.
+## Production safety
 
-## CI/CD wiring (one-time GitHub setup)
+Production is already under `terraform/envs/prod`. Preserve:
 
-1. GitHub OIDC/deploy role is currently bootstrapped manually in AWS:
-   `arn:aws:iam::438465164125:role/github-actions-deploy`.
-   If Terraform should manage it later, import the existing OIDC provider and
-   role/policy before setting `manage_github_oidc = true`.
-2. In the GitHub repo, set **repository variables**:
-   - `AWS_DEPLOY_ROLE_ARN` = `arn:aws:iam::438465164125:role/github-actions-deploy`
-   - `AWS_TERRAFORM_ROLE_ARN` = `arn:aws:iam::438465164125:role/github-actions-terraform`
-   - `AWS_REGION` = `us-east-1` (optional; workflows default to it)
-3. Create **environments** `staging` and `production` under repo Settings →
-   Environments; add required reviewers to `production` to gate prod deploys.
+- RDS `network-survey-prod-postgres-v2` (Terraform `prevent_destroy` plus AWS
+  deletion protection).
+- Imported ACM certificates for `demo.ona.*` and their external DNS validation
+  records.
+- Legacy resources until a separate cleanup plan is approved.
 
-Deploy workflow behavior: every push to `main` deploys to staging; production
-deploys are manual (`workflow_dispatch`). The workflow resolves buckets,
-distributions, and the instance by tags (`Environment` + `App`), so no
-per-environment IDs need to be configured in GitHub. After deploy, it performs
-external smoke checks against the API, dashboard, and survey domains.
-
-Previous-artifact redeploy behavior: `Redeploy API Artifact` is manual and
-redeploys a previously published API artifact SHA through the same SSM path.
-Leave `mark_latest=true` when the redeployed artifact should become the instance
-bootstrap artifact for future replacement instances. This is not a database,
-schema, runtime-config, or frontend rollback.
-
-Terraform apply behavior: `.github/workflows/terraform-apply.yml` is manual and
-uses the `AWS_TERRAFORM_ROLE_ARN` role. The `production` environment should have
-required reviewers configured before production applies are allowed. Store
-`TF_VAR_DB_PASSWORD` as an environment-level secret for each environment.
-Runtime app secrets are stored in SSM Parameter Store instead.
-
-## Migrating the existing prod stack to this config
-
-The security fixes change live resources. Checklist for the first prod apply:
-
-- **Rotate the leaked Resend API key first** (it was hardcoded in `env.tmpl`).
-- Terraform now expects `TF_VAR_DB_PASSWORD`. Use the *existing* DB password for
-  `db_password` — RDS passwords are only changed if the value differs.
-- During the current inactive-production infra refactor, `prod.tfvars` sets
-  `api_config_db_host_override` so a root prod apply keeps the API runtime
-  config pointed at the replacement DB managed in `terraform/envs/prod`. Remove
-  that override only after prod DB ownership is folded into the primary prod
-  Terraform root.
-- The removed `aws_s3_object.react_dashboard_files` / `react_survey_files`
-  resources will otherwise **delete the live frontend files** on apply. Either
-  drop them from state first (`terraform state rm 'aws_s3_object.react_dashboard_files' 'aws_s3_object.react_survey_files'`)
-  or run the Deploy workflow immediately after apply to re-publish.
-- The removed `local_file.*` resources delete the generated
-  `db/liquibase-prod.sh(.ps1)` and `api/.env.prod` files on your machine — these
-  embedded the DB password and are replaced by on-instance migrations.
-- The old config attached the instance's S3 policy twice
-  (`attach_s3_policy` + `ec2_s3_policy` — same attachment). Destroying the
-  removed duplicate would detach the policy from the live role, so drop it from
-  state first: `terraform state rm aws_iam_role_policy_attachment.attach_s3_policy`.
-- `user_data` changed: AWS stops/starts the instance to update it (brief API
-  outage, new public IP — harmless behind the ALB). Cloud-init does **not**
-  re-run on an existing instance, so install the new runtime pieces once via SSM
-  or recreate the instance (`terraform taint aws_instance.backend`) — recreating
-  is cleaner and the deploy pipeline repopulates it.
-- RDS changes: `publicly_accessible=false`, new dedicated security group, and
-  the default parameter group (SSL required, replacing `postgres-no-ssl`, which
-  is deleted). Requires a reboot to fully take effect; plan a short window.
-  After SSL is enforced, only the new code path (API `DB_SSL=true`, deploy-time
-  Liquibase with `sslmode=verify-full`) can connect — local `liquibase-prod.sh`
-  runs stop working by design.
-- SSH ingress is removed. Confirm you can reach the instance via
-  `aws ssm start-session` (requires the instance to have picked up the new IAM
-  policy and SSM agent — Ubuntu ships it by default).
-- `db_deletion_protection = true` in prod also disables `skip_final_snapshot`.
+Do not run `terraform apply` or destructive state operations during this refactor.

@@ -43,8 +43,8 @@ jobs:
           set -euo pipefail
           case "${{ inputs.environment }}" in
             staging)
-              WORKING_DIR=terraform
-              WORKSPACE=staging
+              WORKING_DIR=terraform/envs/staging
+              WORKSPACE=
               VAR_FILE=staging.tfvars
               ;;
             prod-v2|prod)

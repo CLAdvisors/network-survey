@@ -12,6 +12,11 @@ moves DNS into Terraform.
 
 ## Current ownership
 
+Prod-v2 resources intentionally remain defined inline in this root in this PR.
+The shared frontend module is used first by staging only; moving active prod-v2
+CloudFront/S3 resources into that module would require explicit state moves and
+a reviewed no-op plan.
+
 Tracked here:
 
 - Replacement app stack discovered as `TF_ENV=prod-v2` by deploy tooling

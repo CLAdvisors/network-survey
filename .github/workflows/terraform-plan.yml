@@ -48,8 +48,8 @@ jobs:
           GH_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}"
           case "$GH_ENV" in
             staging)
-              WORKING_DIR=terraform
-              WORKSPACE=staging
+              WORKING_DIR=terraform/envs/staging
+              WORKSPACE=
               VAR_FILE=staging.tfvars
               ;;
             prod-v2|prod)
@@ -71,13 +71,16 @@ jobs:
         run: terraform fmt -check -recursive
 
       - name: Check sensitive variables
+        id: secrets
         env:
           TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
         run: |
           set -euo pipefail
           if [ -z "$TF_VAR_db_password" ]; then
-            echo "TF_VAR_DB_PASSWORD secret is required for Terraform plan." >&2
-            exit 1
+            echo "TF_VAR_DB_PASSWORD secret is unavailable; init/validate will run, plan will be skipped." >&2
+            echo "can_plan=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_plan=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Terraform init
@@ -94,6 +97,7 @@ jobs:
         run: terraform validate
 
       - name: Terraform plan
+        if: ${{ steps.secrets.outputs.can_plan == 'true' }}
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         env:
           TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}

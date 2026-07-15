@@ -134,7 +134,7 @@ variable "artifact_retention_days" {
 }
 
 variable "enable_frontend_custom_domains" {
-  description = "Attach demo dashboard/survey aliases and imported ACM certs to the replacement CloudFront distributions. Keep false until legacy CloudFront aliases are removed."
+  description = "Attach demo dashboard/survey aliases and imported ACM certs to the replacement CloudFront distributions. This is true after prod-v2 DNS cutover."
   type        = bool
-  default     = false
+  default     = true
 }

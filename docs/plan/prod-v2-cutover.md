@@ -2,6 +2,11 @@
 
 Branch: `prod-fresh-stack`
 
+Status: cutover completed. External DNS now points at replacement targets,
+frontend aliases are attached to replacement CloudFront distributions, GitHub
+production `TF_ENV` is set to `prod-v2`, and production deploy/smoke checks
+succeeded.
+
 ## What was created
 
 Terraform env: `terraform/envs/prod`
@@ -16,7 +21,7 @@ The replacement app stack was applied successfully while preserving:
 
 The account is currently at its VPC quota, so the replacement stack could not create another VPC. To proceed without deleting unrelated VPCs, the app stack creates fresh public subnets, route table, security groups, ALB, EC2, S3 buckets, and CloudFront distributions inside the existing prod DB VPC (`vpc-0a3c3c61ed4c7a097`).
 
-Frontend CloudFront distributions were created without custom aliases for now because AWS does not allow the same alternate domain name on both the legacy and replacement CloudFront distributions. The imported certs remain in Terraform with `prevent_destroy`; attach aliases by setting `enable_frontend_custom_domains=true` after removing the aliases from the legacy distributions during cutover.
+Frontend CloudFront distributions were initially created without custom aliases because AWS does not allow the same alternate domain name on both the legacy and replacement CloudFront distributions. During cutover, the aliases were removed from legacy distributions and attached to the replacement distributions. `enable_frontend_custom_domains` now defaults to `true`.
 
 ## Applied outputs / DNS targets
 
@@ -68,16 +73,16 @@ Existing production SSM Parameter Store paths are reused:
   - `https://d2awmr5sgbd2cb.cloudfront.net/` -> HTTP 200
   - `https://d3w07tujvhshv1.cloudfront.net/` -> HTTP 200
 
-## Cutover steps
+## Completed cutover steps
 
-1. Confirm no final user traffic needs the legacy demo stack.
-2. In the legacy CloudFront distributions, remove alternate domain aliases for:
+1. Confirmed no final user traffic needs the legacy demo stack.
+2. Removed alternate domain aliases from legacy CloudFront distributions:
    - `demo.ona.dashboard.bennetts.work`
    - `demo.ona.survey.bennetts.work`
-3. In `terraform/envs/prod`, apply with `-var enable_frontend_custom_domains=true` to attach the imported ACM certs and aliases to the replacement CloudFront distributions.
-4. Update external DNS CNAMEs to the targets above.
+3. Applied `terraform/envs/prod` with frontend custom domains enabled to attach the imported ACM certs and aliases to the replacement CloudFront distributions.
+4. Updated external DNS CNAMEs to the targets above.
 5. Set GitHub production environment variable `TF_ENV=prod-v2` so future production deploys target the replacement stack.
-6. Smoke test the public hostnames:
+6. Smoke tested the public hostnames:
    - `https://demo.ona.api.bennetts.work/health`
    - `https://demo.ona.dashboard.bennetts.work/`
    - `https://demo.ona.survey.bennetts.work/`

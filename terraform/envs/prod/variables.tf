@@ -19,7 +19,7 @@ variable "vpc_id" {
 }
 
 variable "backend_security_group_id" {
-  description = "Security group used by the prod API/backend; new DB allows Postgres from this SG"
+  description = "Legacy prod API/backend security group that can temporarily reach the replacement DB"
   default     = "sg-05b4dc3a549e37d53"
 }
 
@@ -89,20 +89,10 @@ variable "replacement_resource_environment" {
   default     = "prod-v2"
 }
 
-variable "app_vpc_cidr" {
-  description = "CIDR block for the fresh replacement prod app VPC"
-  default     = "10.42.0.0/16"
-}
-
 variable "app_public_subnet_cidrs" {
   description = "Two fresh public subnet CIDRs in the existing prod DB VPC (VPC quota prevents creating another VPC in this account)"
   type        = list(string)
   default     = ["10.0.10.0/24", "10.0.11.0/24"]
-}
-
-variable "existing_prod_vpc_cidr" {
-  description = "CIDR block for the existing VPC that contains network-survey-prod-postgres-v2"
-  default     = "10.0.0.0/16"
 }
 
 variable "app_instance_type" {
@@ -124,7 +114,13 @@ variable "ssh_key_name" {
 variable "alb_deletion_protection" {
   description = "Enable deletion protection on the replacement prod ALB"
   type        = bool
-  default     = false
+  default     = true
+}
+
+variable "enable_legacy_backend_db_access" {
+  description = "Temporarily allow the legacy prod backend security group to reach the replacement DB during migration"
+  type        = bool
+  default     = true
 }
 
 variable "artifact_retention_days" {

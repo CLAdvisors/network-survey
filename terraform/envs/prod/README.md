@@ -1,31 +1,46 @@
 # Production Environment Root
 
-This Terraform root currently owns the Terraform-managed production replacement
-RDS database plus the existing production deploy-glue resources that are safe to
-track independently (legacy S3 buckets, IAM inline policies, and imported ACM
-certificates). It was moved
-from `terraform/prod-db` into `terraform/envs/prod` as the first step away from
-workspace-based prod management.
+This Terraform root owns the current production environment state during the
+prod-v2 migration. The S3 backend key is still `prod-db/terraform.tfstate`, but
+that state now tracks more than the original replacement DB: it includes the
+prod-v2 replacement app stack, the protected replacement RDS instance, imported
+ACM certificates, and legacy deploy-glue resources that are safe to manage here.
 
-It intentionally does **not** create a parallel dashboard/API/survey stack.
-The existing `demo.ona.*` app stack continues to run while prod is inactive
-during the infra refactor. CloudFront distributions, ALB, EC2, and VPC resources
-are still transitional/manual and should be imported or replaced in later phases.
-The ACM certificates are preserved because DNS validation records are managed in
-an external DNS provider.
+External DNS is still manual. Keep the ACM DNS validation CNAMEs and any app
+cutover records in the external DNS provider unless a later change explicitly
+moves DNS into Terraform.
+
+## Current ownership
+
+Tracked here:
+
+- Replacement app stack discovered as `TF_ENV=prod-v2` by deploy tooling
+  (replacement ALB/backend, app buckets, CloudFront distributions, IAM, and
+  supporting security groups/subnets in the existing prod VPC).
+- Replacement production RDS: `network-survey-prod-postgres-v2`, with Terraform
+  `prevent_destroy` and AWS deletion protection enabled.
+- Imported `demo.ona.*` ACM certificates. They are protected by state and rely on
+  manual external DNS validation records.
+- Legacy deploy-glue that must stay available during transition: production S3
+  artifact/frontend buckets and IAM inline policies used by deploy/runtime roles.
+
+Not fully tracked here yet:
+
+- Legacy production ALB, EC2/backend, CloudFront distributions, and broad
+  VPC/subnet/route ownership. Preserve these until the prod-v2 cutover and
+  cleanup plan is complete.
 
 ## State
 
-The backend key is intentionally still:
+The backend key intentionally remains:
 
 ```text
 prod-db/terraform.tfstate
 ```
 
-Keeping the existing key avoids any state migration during this move and ensures
-this root continues to manage the existing replacement DB without recreating it.
-A later Terraform refactor can migrate the state key once all prod ownership is
-settled.
+Keeping the existing key avoided a state migration while expanding ownership
+from the replacement DB to the full prod-v2 environment. A later refactor may
+rename/move the key after legacy prod resources are retired.
 
 ## Current assumptions
 
@@ -36,6 +51,7 @@ settled.
 - Existing prod VPC: `vpc-0a3c3c61ed4c7a097`
 - Existing prod backend/API security group: `sg-05b4dc3a549e37d53`
 - Replacement DB is private, encrypted, uses `default.postgres15`, has deletion protection, and requires TLS.
+- Replacement ALB deletion protection defaults to enabled.
 - Existing production artifact/config bucket: `my-config-bucket-1xo22t`
 - Existing production dashboard bucket: `react-dashboard-7c1f1dec`
 - Existing production survey bucket: `react-survey-7c1f1dec`
@@ -71,9 +87,16 @@ The external DNS validation CNAMEs must remain in place for ACM renewal:
 | `demo.ona.dashboard.bennetts.work` | `_066e2be3dc4df9deefa1d51b7103c5b0.demo.ona.dashboard.bennetts.work.` | `_7227ea2510f9e80ad666d941dbc206dc.zfyfvmchrl.acm-validations.aws.` |
 | `demo.ona.survey.bennetts.work` | `_e8e6b911771e7b3fb20f2072efd586ea.demo.ona.survey.bennetts.work.` | `_5c80e6e378a0646a091614452d6b7a6b.zfyfvmchrl.acm-validations.aws.` |
 
-## Apply
+## Plan/apply
 
-Use a local, untracked var file for the DB password:
+Local operators should use an untracked `prod-db.local.tfvars` containing the
+current DB password:
+
+```hcl
+db_password = "..."
+```
+
+Current local commands:
 
 ```sh
 terraform -chdir=terraform/envs/prod init
@@ -81,25 +104,31 @@ terraform -chdir=terraform/envs/prod plan -var-file=prod-db.local.tfvars
 terraform -chdir=terraform/envs/prod apply -var-file=prod-db.local.tfvars
 ```
 
-`prod-db.local.tfvars` should contain:
-
-```hcl
-db_password = "..."
-```
-
 Use the same current prod DB password unless intentionally rotating the RDS
-master credential.
+master credential. GitHub Actions does not use `prod-db.local.tfvars`; workflow
+plans/applies for `environment=prod-v2` or `environment=prod` require the
+`TF_VAR_DB_PASSWORD` secret and run in `terraform/envs/prod`. The old root
+production workspace is intentionally blocked.
+
+## Deploy discovery and cleanup sequence
+
+- Keep replacement resources tagged/discovered with `TF_ENV=prod-v2` while any
+  legacy `prod` app resources still exist. This avoids duplicate deploy matches.
+- Do not create duplicate `Environment=prod`/`App=*` tag combinations across
+  legacy and replacement app resources during the transition.
+- Keep `enable_legacy_backend_db_access = true` until the legacy backend no
+  longer needs access to `network-survey-prod-postgres-v2`.
+- Before deleting the legacy backend security group, set
+  `enable_legacy_backend_db_access = false`, plan/apply, and confirm the DB SG
+  no longer references the legacy backend SG.
+- After legacy prod resources are retired, optionally retag the replacement app
+  discovery environment from `prod-v2` to `prod` in a planned change.
 
 ## Safety
 
-- Do not run the root workspace prod apply from `terraform/` until existing prod
-  app resources are imported/folded in or a replacement-prod migration is
-  explicitly chosen; that workspace currently has no prod state and would create
-  a new parallel stack.
-- This root tracks prod DB, legacy S3 buckets, IAM deploy/runtime-secret inline
-  policies, and imported ACM certificates. It does not yet track CloudFront
-  distribution config, ALB, EC2, or VPC/subnets/routes.
-- This root must preserve the existing `network-survey-prod-postgres-v2` data.
-  The DB resource has Terraform `prevent_destroy` plus AWS deletion protection.
-- Before destructive DB operations, confirm backups/final snapshots and rollback
-  path.
+- Do not run destructive applies. Preserve existing prod-v2 resources and DB
+  data unless a final snapshot/backup and rollback path are confirmed.
+- This root tracks prod DB, prod-v2 app stack, legacy S3 deploy-glue, IAM
+  deploy/runtime-secret inline policies, and imported ACM certificates.
+- The DB resource has Terraform `prevent_destroy` plus AWS deletion protection.
+- ACM DNS validation and app DNS cutover records are managed externally/manual.

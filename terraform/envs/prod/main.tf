@@ -12,15 +12,23 @@ resource "aws_security_group" "prod_db" {
   description = "Postgres access for the replacement production database"
   vpc_id      = var.vpc_id
 
+  dynamic "ingress" {
+    for_each = var.enable_legacy_backend_db_access ? [1] : []
+    content {
+      description     = "Postgres from legacy prod backend security group"
+      from_port       = 5432
+      to_port         = 5432
+      protocol        = "tcp"
+      security_groups = [var.backend_security_group_id]
+    }
+  }
+
   ingress {
-    description = "Postgres from legacy and replacement prod backend security groups"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    security_groups = [
-      var.backend_security_group_id,
-      aws_security_group.prod_backend.id,
-    ]
+    description     = "Postgres from replacement prod backend security group"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.prod_backend.id]
   }
 
   egress {

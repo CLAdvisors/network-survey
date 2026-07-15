@@ -13,11 +13,14 @@ resource "aws_security_group" "prod_db" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description     = "Postgres from prod backend security group"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [var.backend_security_group_id]
+    description = "Postgres from legacy and replacement prod backend security groups"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    security_groups = [
+      var.backend_security_group_id,
+      aws_security_group.prod_backend.id,
+    ]
   }
 
   egress {

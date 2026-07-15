@@ -53,3 +53,68 @@ output "prod_certificate_validation_records" {
   }
   description = "External DNS validation CNAMEs that must remain in place for ACM renewal."
 }
+
+output "replacement_resource_environment" {
+  value       = var.replacement_resource_environment
+  description = "Temporary Environment tag for deploy workflow discovery while legacy prod resources remain tagged Environment=prod."
+}
+
+output "backend_instance_id" {
+  value = aws_instance.prod_backend.id
+}
+
+output "backend_instance_public_dns" {
+  value = aws_instance.prod_backend.public_dns
+}
+
+output "config_bucket_name" {
+  value       = aws_s3_bucket.prod_app_config.bucket
+  description = "Replacement API runtime config bucket."
+}
+
+output "artifacts_bucket_name" {
+  value       = aws_s3_bucket.prod_app_artifacts.bucket
+  description = "Replacement API release artifact bucket."
+}
+
+output "dashboard_bucket_name" {
+  value       = aws_s3_bucket.prod_app_dashboard.bucket
+  description = "Replacement dashboard deployment bucket."
+}
+
+output "survey_bucket_name" {
+  value       = aws_s3_bucket.prod_app_survey.bucket
+  description = "Replacement survey deployment bucket."
+}
+
+output "dashboard_distribution_id" {
+  value = aws_cloudfront_distribution.prod_dashboard.id
+}
+
+output "survey_distribution_id" {
+  value = aws_cloudfront_distribution.prod_survey.id
+}
+
+output "runtime_secret_parameter_names" {
+  value = {
+    db_password    = local.db_password_parameter_name
+    session_secret = local.session_secret_parameter_name
+    resend_api_key = local.resend_api_key_parameter_name
+  }
+  description = "Existing production SSM Parameter Store paths reused by the replacement app runtime."
+}
+
+output "api_alb_dns_name" {
+  value       = aws_lb.prod_api.dns_name
+  description = "External DNS target: point demo.ona.api.bennetts.work CNAME here at cutover."
+}
+
+output "dashboard_cloudfront_domain" {
+  value       = aws_cloudfront_distribution.prod_dashboard.domain_name
+  description = "External DNS target: point demo.ona.dashboard.bennetts.work CNAME here after frontend aliases are attached."
+}
+
+output "survey_cloudfront_domain" {
+  value       = aws_cloudfront_distribution.prod_survey.domain_name
+  description = "External DNS target: point demo.ona.survey.bennetts.work CNAME here after frontend aliases are attached."
+}

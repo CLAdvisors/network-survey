@@ -68,3 +68,73 @@ variable "deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "api_domain" {
+  description = "Domain name for the production API"
+  default     = "demo.ona.api.bennetts.work"
+}
+
+variable "dashboard_domain" {
+  description = "Domain name for the production dashboard"
+  default     = "demo.ona.dashboard.bennetts.work"
+}
+
+variable "survey_domain" {
+  description = "Domain name for the production survey app"
+  default     = "demo.ona.survey.bennetts.work"
+}
+
+variable "replacement_resource_environment" {
+  description = "Environment tag used for replacement app resource discovery before legacy prod resources are retired"
+  default     = "prod-v2"
+}
+
+variable "app_vpc_cidr" {
+  description = "CIDR block for the fresh replacement prod app VPC"
+  default     = "10.42.0.0/16"
+}
+
+variable "app_public_subnet_cidrs" {
+  description = "Two fresh public subnet CIDRs in the existing prod DB VPC (VPC quota prevents creating another VPC in this account)"
+  type        = list(string)
+  default     = ["10.0.10.0/24", "10.0.11.0/24"]
+}
+
+variable "existing_prod_vpc_cidr" {
+  description = "CIDR block for the existing VPC that contains network-survey-prod-postgres-v2"
+  default     = "10.0.0.0/16"
+}
+
+variable "app_instance_type" {
+  description = "EC2 instance type for the replacement backend"
+  default     = "t3.micro"
+}
+
+variable "ssh_allowed_cidrs" {
+  description = "CIDR blocks allowed to SSH to the backend. Empty disables SSH ingress; use SSM Session Manager."
+  type        = list(string)
+  default     = []
+}
+
+variable "ssh_key_name" {
+  description = "EC2 key pair name for SSH, only used when ssh_allowed_cidrs is non-empty"
+  default     = "api-instance-key"
+}
+
+variable "alb_deletion_protection" {
+  description = "Enable deletion protection on the replacement prod ALB"
+  type        = bool
+  default     = false
+}
+
+variable "artifact_retention_days" {
+  description = "Number of days to retain noncurrent API artifact versions"
+  type        = number
+  default     = 30
+}
+
+variable "enable_frontend_custom_domains" {
+  description = "Attach demo dashboard/survey aliases and imported ACM certs to the replacement CloudFront distributions. Keep false until legacy CloudFront aliases are removed."
+  type        = bool
+  default     = false
+}

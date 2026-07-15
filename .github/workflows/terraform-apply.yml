@@ -7,7 +7,7 @@ on:
         description: Environment to apply
         required: true
         type: choice
-        options: [staging, production]
+        options: [staging, prod-v2, prod]
         default: staging
 
 permissions:
@@ -21,12 +21,8 @@ concurrency:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    # production is protected with required reviewers in GitHub Environments.
+    # prod/prod-v2 should be protected with required reviewers in GitHub Environments.
     environment: ${{ inputs.environment }}
-
-    defaults:
-      run:
-        working-directory: terraform
 
     steps:
       - uses: actions/checkout@v4
@@ -46,40 +42,64 @@ jobs:
         run: |
           set -euo pipefail
           case "${{ inputs.environment }}" in
-            production)
-              WORKSPACE=default
-              VAR_FILE=prod.tfvars
-              ;;
             staging)
+              WORKING_DIR=terraform
               WORKSPACE=staging
               VAR_FILE=staging.tfvars
               ;;
+            prod-v2|prod)
+              WORKING_DIR=terraform/envs/prod
+              WORKSPACE=
+              VAR_FILE=
+              ;;
+            production)
+              echo "The old root production workspace is blocked; use prod-v2/prod (terraform/envs/prod)." >&2
+              exit 1
+              ;;
             *) echo "Unknown environment: ${{ inputs.environment }}" >&2; exit 1 ;;
           esac
+          echo "WORKING_DIR=$WORKING_DIR" >> "$GITHUB_OUTPUT"
           echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "VAR_FILE=$VAR_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Terraform fmt
         run: terraform fmt -check -recursive
 
-      - name: Write sensitive tfvars
+      - name: Check sensitive variables
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          cat > ci.auto.tfvars <<EOF
-          db_password = "${{ secrets.TF_VAR_DB_PASSWORD }}"
-          EOF
+          if [ -z "$TF_VAR_db_password" ]; then
+            echo "TF_VAR_DB_PASSWORD secret is required for Terraform apply." >&2
+            exit 1
+          fi
 
       - name: Terraform init
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform init
 
       - name: Select workspace
+        if: ${{ steps.env.outputs.WORKSPACE != '' }}
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform workspace select "${{ steps.env.outputs.WORKSPACE }}"
 
       - name: Terraform validate
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform validate
 
       - name: Terraform plan
-        run: terraform plan -var-file="${{ steps.env.outputs.VAR_FILE }}" -input=false -out=tfplan
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          args=(-input=false -out=tfplan)
+          if [ -n "${{ steps.env.outputs.VAR_FILE }}" ]; then
+            args+=("-var-file=${{ steps.env.outputs.VAR_FILE }}")
+          fi
+          terraform plan "${args[@]}"
 
       - name: Terraform apply
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform apply -input=false -auto-approve tfplan

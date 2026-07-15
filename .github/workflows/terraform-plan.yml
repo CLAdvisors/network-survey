@@ -11,7 +11,7 @@ on:
         description: Environment to plan
         required: true
         type: choice
-        options: [staging, production]
+        options: [staging, prod-v2, prod]
         default: staging
 
 permissions:
@@ -27,10 +27,6 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
-
-    defaults:
-      run:
-        working-directory: terraform
 
     steps:
       - uses: actions/checkout@v4
@@ -51,37 +47,60 @@ jobs:
           set -euo pipefail
           GH_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}"
           case "$GH_ENV" in
-            production)
-              WORKSPACE=default
-              VAR_FILE=prod.tfvars
-              ;;
             staging)
+              WORKING_DIR=terraform
               WORKSPACE=staging
               VAR_FILE=staging.tfvars
               ;;
+            prod-v2|prod)
+              WORKING_DIR=terraform/envs/prod
+              WORKSPACE=
+              VAR_FILE=
+              ;;
+            production)
+              echo "The old root production workspace is blocked; use prod-v2/prod (terraform/envs/prod)." >&2
+              exit 1
+              ;;
             *) echo "Unknown environment: $GH_ENV" >&2; exit 1 ;;
           esac
+          echo "WORKING_DIR=$WORKING_DIR" >> "$GITHUB_OUTPUT"
           echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "VAR_FILE=$VAR_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Terraform fmt
         run: terraform fmt -check -recursive
 
-      - name: Write sensitive tfvars
+      - name: Check sensitive variables
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          cat > ci.auto.tfvars <<EOF
-          db_password = "${{ secrets.TF_VAR_DB_PASSWORD }}"
-          EOF
+          if [ -z "$TF_VAR_db_password" ]; then
+            echo "TF_VAR_DB_PASSWORD secret is required for Terraform plan." >&2
+            exit 1
+          fi
 
       - name: Terraform init
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform init
 
       - name: Select workspace
+        if: ${{ steps.env.outputs.WORKSPACE != '' }}
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform workspace select "${{ steps.env.outputs.WORKSPACE }}"
 
       - name: Terraform validate
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform validate
 
       - name: Terraform plan
-        run: terraform plan -var-file="${{ steps.env.outputs.VAR_FILE }}" -input=false
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          args=(-input=false)
+          if [ -n "${{ steps.env.outputs.VAR_FILE }}" ]; then
+            args+=("-var-file=${{ steps.env.outputs.VAR_FILE }}")
+          fi
+          terraform plan "${args[@]}"

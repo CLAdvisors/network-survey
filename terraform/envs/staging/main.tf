@@ -1,0 +1,636 @@
+data "aws_caller_identity" "current" {}
+
+# Create a VPC for networking
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = merge(local.common_tags, { Name = "${local.name_prefix}main-vpc" })
+}
+
+# Create additional subnets for RDS
+resource "aws_subnet" "db_subnet_1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "${var.aws_region}a"
+  map_public_ip_on_launch = true
+
+  tags = local.common_tags
+}
+
+resource "aws_subnet" "db_subnet_2" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.3.0/24"
+  availability_zone = "${var.aws_region}b"
+
+  tags = local.common_tags
+}
+
+# Create a DB subnet group
+resource "aws_db_subnet_group" "db_subnet_group" {
+  name = "${local.name_prefix}db-subnet-group"
+  subnet_ids = [
+    aws_subnet.db_subnet_1.id,
+    aws_subnet.db_subnet_2.id,
+  ]
+
+  tags = merge(local.common_tags, { Name = "DB Subnet Group" })
+}
+
+# Create a security group for the backend instance
+resource "aws_security_group" "backend_sg" {
+  name   = "${local.name_prefix}backend-security-group"
+  vpc_id = aws_vpc.main.id
+
+  # SSH is disabled by default; prefer SSM Session Manager.
+  # Set ssh_allowed_cidrs to open it to specific addresses only.
+  dynamic "ingress" {
+    for_each = length(var.ssh_allowed_cidrs) > 0 ? [1] : []
+    content {
+      description = "SSH from allowed CIDRs only"
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = var.ssh_allowed_cidrs
+    }
+  }
+
+  # The API port is only reachable through the ALB.
+  ingress {
+    description     = "API traffic from the ALB"
+    from_port       = 3000
+    to_port         = 3000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, { Name = "${local.name_prefix}backend-security-group" })
+}
+
+# Dedicated security group for the database: only the backend can reach it
+resource "aws_security_group" "db_sg" {
+  name   = "${local.name_prefix}db-security-group"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    description     = "Postgres from the backend instance only"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.backend_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, { Name = "${local.name_prefix}db-security-group" })
+}
+
+# Latest Ubuntu 22.04 LTS AMI. ignore_changes keeps newer AMI releases from
+# forcing replacement of already-running instances.
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+resource "aws_instance" "backend" {
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.db_subnet_1.id
+  vpc_security_group_ids      = [aws_security_group.backend_sg.id]
+  associate_public_ip_address = true
+  iam_instance_profile        = aws_iam_instance_profile.ec2_instance_profile.name
+  key_name                    = length(var.ssh_allowed_cidrs) > 0 ? var.ssh_key_name : null
+
+  user_data = templatefile("../../cloud-init-template.sh", {
+    config_bucket    = aws_s3_bucket.config_bucket.bucket
+    artifacts_bucket = aws_s3_bucket.artifacts.bucket
+    aws_region       = var.aws_region
+    environment      = local.environment
+  })
+
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${local.name_prefix}backend-instance"
+    App  = "ona-api"
+  })
+}
+
+# Create an Internet Gateway
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(local.common_tags, { Name = "${local.name_prefix}main-igw" })
+}
+
+# Create a public route table
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(local.common_tags, { Name = "${local.name_prefix}public-route-table" })
+}
+
+# Create a route to the Internet Gateway
+resource "aws_route" "igw_route" {
+  route_table_id         = aws_route_table.public_rt.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.igw.id
+}
+
+# Associate the public route table with the subnets
+resource "aws_route_table_association" "db_subnet_1" {
+  subnet_id      = aws_subnet.db_subnet_1.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+resource "aws_route_table_association" "db_subnet_2" {
+  subnet_id      = aws_subnet.db_subnet_2.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+resource "aws_db_instance" "postgres" {
+  allocated_storage      = 20
+  engine                 = "postgres"
+  engine_version         = "15.18"
+  instance_class         = "db.t3.micro"
+  db_name                = "ONA"
+  username               = var.db_user
+  password               = var.db_password
+  publicly_accessible    = false
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
+  # Default parameter group keeps rds.force_ssl = 1; the API and Liquibase
+  # connect with sslmode=require and verify against the RDS CA bundle.
+  parameter_group_name = "default.postgres15"
+  # Without this, the parameter-group switch waits for the maintenance window
+  # and deleting the old postgres-no-ssl group fails with "currently in use"
+  apply_immediately         = true
+  deletion_protection       = var.db_deletion_protection
+  skip_final_snapshot       = var.db_deletion_protection ? false : true
+  final_snapshot_identifier = var.db_deletion_protection ? "${local.name_prefix}ona-final-snapshot" : null
+
+  tags = merge(local.common_tags, { Name = "${local.name_prefix}postgres-db" })
+}
+
+# Create an S3 bucket to store configuration files
+resource "aws_s3_bucket" "config_bucket" {
+  bucket = local.config_bucket_name
+
+  tags = merge(local.common_tags, { Name = "Config Bucket" })
+}
+
+# Ensure the bucket is private by blocking public access
+resource "aws_s3_bucket_public_access_block" "config_bucket_public_access" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+}
+
+# Set object ownership to BucketOwnerEnforced to disable ACLs
+resource "aws_s3_bucket_ownership_controls" "config_bucket_ownership" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "config_bucket_encryption" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "config_bucket_versioning" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Add a random suffix to ensure the bucket name is unique
+resource "random_string" "suffix" {
+  length  = 6
+  upper   = false
+  special = false
+}
+
+# API runtime config, consumed by the instance at deploy time.
+# Secret values live in SSM Parameter Store; this object contains only secret
+# parameter names plus non-secret runtime config.
+resource "aws_s3_object" "api_config" {
+  bucket = aws_s3_bucket.config_bucket.id
+  key    = "configs/.env.prod"
+  content = templatefile("../../templates/env.tmpl", {
+    db_host                       = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
+    db_port                       = aws_db_instance.postgres.port
+    db_name                       = aws_db_instance.postgres.db_name
+    db_user                       = var.db_user
+    db_password_parameter_name    = local.db_password_parameter_name
+    frontend_url                  = local.frontend_url
+    survey_url                    = local.survey_url
+    session_secret_parameter_name = local.session_secret_parameter_name
+    session_cookie_name           = local.session_cookie_name
+    resend_api_key_parameter_name = local.resend_api_key_parameter_name
+  })
+}
+
+# S3 bucket for versioned API release artifacts (uploaded by CI, pulled by the
+# instance at deploy time via SSM — no instance rebuilds).
+resource "aws_s3_bucket" "artifacts" {
+  bucket = local.artifacts_bucket_name
+
+  tags = merge(local.common_tags, {
+    Name = "API Artifacts"
+    App  = "ona-artifacts"
+  })
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts_public_access" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "artifacts_versioning" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_encryption" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts_lifecycle" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  rule {
+    id     = "expire-old-artifact-versions"
+    status = "Enabled"
+
+    filter {
+      prefix = "api/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.artifact_retention_days
+    }
+  }
+}
+
+# IAM Role for the EC2 instance
+resource "aws_iam_role" "ec2_role" {
+  name               = "${local.name_prefix}ec2-role-config-access"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role_policy.json
+}
+
+# Policy to allow the EC2 instance to read config, release artifacts, and
+# runtime secrets from SSM Parameter Store.
+resource "aws_iam_policy" "s3_access_policy" {
+  name        = "${local.name_prefix}s3-config-access-policy"
+  description = "Allow EC2 to read the S3 config bucket and release artifacts"
+  policy      = data.aws_iam_policy_document.s3_access_policy.json
+}
+
+data "aws_iam_policy_document" "s3_access_policy" {
+  statement {
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    resources = [
+      "${aws_s3_bucket.config_bucket.arn}/*",
+      "${aws_s3_bucket.artifacts.arn}/*",
+    ]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.artifacts.arn]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+    ]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.db_password_parameter_name}",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.session_secret_parameter_name}",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.resend_api_key_parameter_name}",
+    ]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.aws_region}.amazonaws.com"]
+    }
+  }
+}
+
+# EC2 instance config role policy attachment
+resource "aws_iam_role_policy_attachment" "ec2_s3_policy" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = aws_iam_policy.s3_access_policy.arn
+}
+
+# SSM Session Manager + Run Command access (replaces SSH and enables
+# artifact-based deploys)
+resource "aws_iam_role_policy_attachment" "ec2_ssm_policy" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_s3_bucket_policy" "config_bucket_policy" {
+  bucket = aws_s3_bucket.config_bucket.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          AWS = "${aws_iam_role.ec2_role.arn}"
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.config_bucket.arn}/*"
+      }
+    ]
+  })
+}
+
+# EC2 Instance Profile
+resource "aws_iam_instance_profile" "ec2_instance_profile" {
+  name = "${local.name_prefix}instance-profile-access"
+  role = aws_iam_role.ec2_role.name
+}
+
+# IAM Role Trust Policy for EC2
+data "aws_iam_policy_document" "ec2_assume_role_policy" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+# Define the S3 bucket to store your static website or assets.
+# Build files are uploaded by the CI deploy workflow (aws s3 sync), not by
+# Terraform, so infra applies no longer depend on local build folders.
+# Generate a unique suffix for the bucket name
+resource "random_id" "bucket_id" {
+  byte_length = 4
+}
+
+module "dashboard_frontend" {
+  source = "../../modules/frontend_static_site"
+
+  site_name           = "dashboard-${random_id.bucket_id.hex}"
+  bucket_name         = local.dashboard_bucket_name
+  domain_name         = var.dashboard_domain
+  acm_certificate_arn = aws_acm_certificate.ssl_cert_dashboard.arn
+  origin_id           = "S3-react-app"
+  oac_name            = "dashboard-oac-${random_id.bucket_id.hex}"
+  oac_description     = "OAC for React Dashboard S3 Bucket"
+  cors_allowed_origins = [
+    local.frontend_url,
+  ]
+  bucket_tags = merge(local.common_tags, {
+    Name = "ReactAppBucket"
+    App  = "ona-dashboard"
+  })
+  distribution_tags = merge(local.common_tags, {
+    Name = "ReactAppCloudFront"
+    App  = "ona-dashboard"
+  })
+}
+
+module "survey_frontend" {
+  source = "../../modules/frontend_static_site"
+
+  site_name           = "survey-${random_id.bucket_id.hex}"
+  bucket_name         = local.survey_bucket_name
+  domain_name         = var.survey_domain
+  acm_certificate_arn = aws_acm_certificate.ssl_cert_survey.arn
+  origin_id           = "S3-react-app"
+  oac_name            = "survey-oac-${random_id.bucket_id.hex}"
+  oac_description     = "OAC for React survey S3 Bucket"
+  cors_allowed_origins = [
+    local.survey_url,
+  ]
+  bucket_tags = merge(local.common_tags, {
+    Name = "ReactAppBucket"
+    App  = "ona-survey"
+  })
+  distribution_tags = merge(local.common_tags, {
+    Name = "ReactAppCloudFront"
+    App  = "ona-survey"
+  })
+}
+
+# Create an Origin Access Control (OAC) for CloudFront to securely access the S3 bucket
+# Define the CloudFront distribution to serve content from the S3 bucket
+# Update the S3 bucket policy to allow access from the CloudFront distribution using OAC
+# Request an SSL certificate in ACM
+resource "aws_acm_certificate" "ssl_cert" {
+  domain_name       = var.api_domain
+  validation_method = "DNS"
+
+  tags = merge(local.common_tags, { Name = "SSL Certificate" })
+}
+
+# Request an SSL certificate in ACM for dashboard
+resource "aws_acm_certificate" "ssl_cert_dashboard" {
+  domain_name       = var.dashboard_domain
+  validation_method = "DNS"
+
+  tags = merge(local.common_tags, { Name = "SSL Certificate" })
+}
+
+# Request an SSL certificate in ACM for survey
+resource "aws_acm_certificate" "ssl_cert_survey" {
+  domain_name       = var.survey_domain
+  validation_method = "DNS"
+
+  tags = merge(local.common_tags, { Name = "SSL Certificate" })
+}
+
+# Wait for the certificate to be validated (manual process)
+resource "aws_acm_certificate_validation" "ssl_cert_validation" {
+  certificate_arn = aws_acm_certificate.ssl_cert.arn
+  validation_record_fqdns = [
+    for dvo in aws_acm_certificate.ssl_cert.domain_validation_options : dvo.resource_record_name
+  ]
+}
+
+# Wait for the certificate to be validated (manual process)
+resource "aws_acm_certificate_validation" "ssl_cert_dashboard_validation" {
+  certificate_arn = aws_acm_certificate.ssl_cert_dashboard.arn
+  validation_record_fqdns = [
+    for dvo in aws_acm_certificate.ssl_cert_dashboard.domain_validation_options : dvo.resource_record_name
+  ]
+}
+
+# Wait for the certificate to be validated (manual process)
+resource "aws_acm_certificate_validation" "ssl_cert_survey_validation" {
+  certificate_arn = aws_acm_certificate.ssl_cert_survey.arn
+  validation_record_fqdns = [
+    for dvo in aws_acm_certificate.ssl_cert_survey.domain_validation_options : dvo.resource_record_name
+  ]
+}
+
+# Security group for the ALB
+resource "aws_security_group" "alb_sg" {
+  name        = "${local.name_prefix}alb-security-group"
+  description = "Allow HTTPS traffic to the ALB"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "HTTPS from the internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP from the internet for redirect to HTTPS"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = local.common_tags
+}
+
+# Target group for backend instances
+resource "aws_lb_target_group" "backend_targets" {
+  name        = "${local.name_prefix}backend-targets"
+  protocol    = "HTTP"
+  port        = 3000 # Your backend app's port
+  vpc_id      = aws_vpc.main.id
+  target_type = "instance"
+
+  health_check {
+    path                = "/health"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 30
+  }
+}
+
+# ALB
+resource "aws_lb" "main_alb" {
+  name               = "${local.name_prefix}main-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets            = [aws_subnet.db_subnet_1.id, aws_subnet.db_subnet_2.id]
+
+  enable_deletion_protection = var.alb_deletion_protection
+  tags                       = merge(local.common_tags, { Name = "${local.name_prefix}main-alb" })
+}
+
+# HTTP Listener: always redirect cleartext requests to HTTPS.
+resource "aws_lb_listener" "http_redirect" {
+  load_balancer_arn = aws_lb.main_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+}
+
+# HTTPS Listener
+resource "aws_lb_listener" "https_listener" {
+  load_balancer_arn = aws_lb.main_alb.arn
+  port              = 443
+  protocol          = "HTTPS"
+
+  ssl_policy      = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn = aws_acm_certificate.ssl_cert.arn # Use your validated certificate's ARN
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend_targets.arn
+  }
+}
+
+# Register instances with the target group
+resource "aws_lb_target_group_attachment" "backend_attachments" {
+  for_each = {
+    instance1 = aws_instance.backend.id
+  }
+
+  target_group_arn = aws_lb_target_group.backend_targets.arn
+  target_id        = each.value
+}

@@ -9,6 +9,11 @@ on:
         type: choice
         options: [staging, prod-v2, prod]
         default: staging
+      confirm_staging_state_migrated:
+        description: Must be true to apply the new terraform/envs/staging root after state migration
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -43,8 +48,8 @@ jobs:
           set -euo pipefail
           case "${{ inputs.environment }}" in
             staging)
-              WORKING_DIR=terraform
-              WORKSPACE=staging
+              WORKING_DIR=terraform/envs/staging
+              WORKSPACE=
               VAR_FILE=staging.tfvars
               ;;
             prod-v2|prod)
@@ -61,6 +66,13 @@ jobs:
           echo "WORKING_DIR=$WORKING_DIR" >> "$GITHUB_OUTPUT"
           echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "VAR_FILE=$VAR_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Guard staging env-root apply
+        if: ${{ inputs.environment == 'staging' && !inputs.confirm_staging_state_migrated }}
+        run: |
+          echo "Staging now points at terraform/envs/staging with backend key envs/staging/terraform.tfstate." >&2
+          echo "Run the documented state migration/import steps first, then rerun with confirm_staging_state_migrated=true." >&2
+          exit 1
 
       - name: Terraform fmt
         run: terraform fmt -check -recursive

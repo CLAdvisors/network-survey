@@ -96,6 +96,10 @@ TF_VAR_db_password=... terraform -chdir=terraform/envs/staging plan -var-file=st
 If the plan is not effectively a no-op, stop and either adjust configuration or
 restore from `staging-workspace-pre-migration.tfstate`.
 
+The GitHub `Terraform Apply` workflow requires `confirm_staging_state_migrated=true`
+before it will apply `staging`, because the new backend key starts empty until
+these migration/import steps are completed.
+
 ## Production safety
 
 Production is already under `terraform/envs/prod`. Preserve:

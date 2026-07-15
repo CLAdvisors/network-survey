@@ -53,6 +53,10 @@ resource "aws_db_instance" "prod_replacement" {
   skip_final_snapshot       = false
   final_snapshot_identifier = "${var.db_identifier}-final"
 
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = merge(local.common_tags, {
     Name = var.db_identifier
   })

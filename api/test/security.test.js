@@ -11,7 +11,22 @@ process.env.ALLOW_PUBLIC_SIGNUP = 'false';
 process.env.AUTH_RATE_LIMIT_MAX = '1000';
 process.env.RESPONDENT_RATE_LIMIT_MAX = '1000';
 
-const { app, pool, validateRespondentToken, requireAuth, toSafeUser, columnExists, tableExists } = require('../server');
+const {
+  app,
+  pool,
+  validateRespondentToken,
+  requireAuth,
+  toSafeUser,
+  columnExists,
+  tableExists,
+  hasAnyRole,
+  resolveSurveyForUser,
+  getDefaultOrganizationForUser,
+  READ_SURVEY_ROLES,
+  ANALYST_ROLES,
+  EDITOR_ROLES,
+  ADMIN_ROLES,
+} = require('../server');
 
 test('dashboard/admin endpoints require authentication', async () => {
   const endpoints = [
@@ -213,19 +228,138 @@ test('safe user serialization omits password hashes', () => {
   assert.equal(safe.password, undefined);
 });
 
-test('Phase 2 IAM migration is included and avoids destructive operations', () => {
+test('Phase 2/3 IAM migrations are included and avoid destructive operations', () => {
   const changelog = fs.readFileSync(path.join(__dirname, '../../db/changelogs/master-changelog.xml'), 'utf8');
-  const migration = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_2_product_iam_foundation.sql'), 'utf8');
+  const phase2 = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_2_product_iam_foundation.sql'), 'utf8');
+  const archive = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_3_survey_archive.sql'), 'utf8');
 
   assert.match(changelog, /v1_2_product_iam_foundation\.sql/);
-  assert.match(migration, /CREATE EXTENSION IF NOT EXISTS pgcrypto/i);
-  assert.match(migration, /CREATE TABLE IF NOT EXISTS organizations/i);
-  assert.match(migration, /organization_memberships/i);
-  assert.match(migration, /ALTER TABLE Survey ADD COLUMN IF NOT EXISTS id UUID;/i);
-  assert.match(migration, /UPDATE Survey SET id = gen_random_uuid\(\) WHERE id IS NULL/i);
-  assert.match(migration, /ALTER TABLE Survey ALTER COLUMN id SET DEFAULT gen_random_uuid\(\)/i);
-  assert.match(migration, /conrelid = 'users'::regclass/i);
-  assert.doesNotMatch(migration, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|ALTER\s+TABLE[\s\S]+DROP\s+COLUMN/i);
+  assert.match(changelog, /v1_3_survey_archive\.sql/);
+  assert.match(phase2, /CREATE EXTENSION IF NOT EXISTS pgcrypto/i);
+  assert.match(phase2, /CREATE TABLE IF NOT EXISTS organizations/i);
+  assert.match(phase2, /organization_memberships/i);
+  assert.match(phase2, /ALTER TABLE Survey ADD COLUMN IF NOT EXISTS id UUID;/i);
+  assert.match(phase2, /UPDATE Survey SET id = gen_random_uuid\(\) WHERE id IS NULL/i);
+  assert.match(phase2, /ALTER TABLE Survey ALTER COLUMN id SET DEFAULT gen_random_uuid\(\)/i);
+  assert.match(phase2, /conrelid = 'users'::regclass/i);
+  assert.match(archive, /ADD COLUMN IF NOT EXISTS archived_at/i);
+  assert.match(archive, /ADD COLUMN IF NOT EXISTS archived_by_user_id/i);
+  assert.doesNotMatch(phase2 + '\n' + archive, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|ALTER\s+TABLE[\s\S]+DROP\s+COLUMN/i);
+});
+
+test('role policy matrix matches org-scoped authorization decisions', () => {
+  for (const role of ['viewer', 'analyst', 'editor', 'admin', 'owner']) {
+    assert.equal(hasAnyRole(role, READ_SURVEY_ROLES), true, `${role} can read metadata/questions`);
+  }
+
+  assert.equal(hasAnyRole('viewer', ANALYST_ROLES), false);
+  assert.equal(hasAnyRole('analyst', ANALYST_ROLES), true);
+  assert.equal(hasAnyRole('analyst', EDITOR_ROLES), false);
+  assert.equal(hasAnyRole('editor', EDITOR_ROLES), true);
+  assert.equal(hasAnyRole('editor', ADMIN_ROLES), false);
+  assert.equal(hasAnyRole('admin', ADMIN_ROLES), true);
+  assert.equal(hasAnyRole('owner', ADMIN_ROLES), true);
+});
+
+test('resolveSurveyForUser denies cross-org guessed surveyName before downstream reads', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  let queries = 0;
+  pool.query = async (sql, values) => {
+    queries += 1;
+    assert.match(sql, /LEFT JOIN organization_memberships/);
+    assert.deepEqual(values, [7, 'Org B Secret']);
+    return {
+      rows: [{
+        id: '22222222-2222-4222-8222-222222222222',
+        name: 'Org B Secret',
+        organization_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        role: null,
+      }]
+    };
+  };
+
+  const res = { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  const survey = await resolveSurveyForUser({ user: { id: 7, isPlatformAdmin: false } }, res, {
+    surveyName: 'Org B Secret',
+    allowedRoles: ANALYST_ROLES,
+  });
+
+  assert.equal(survey, null);
+  assert.equal(res.statusCode, 404);
+  assert.equal(queries, 1);
+});
+
+test('resolveSurveyForUser allows platform admin without membership', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  pool.query = async () => ({
+    rows: [{
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'Any Survey',
+      organization_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      role: null,
+    }]
+  });
+
+  const res = { status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  const survey = await resolveSurveyForUser({ user: { id: 1, isPlatformAdmin: true } }, res, {
+    surveyName: 'Any Survey',
+    allowedRoles: ADMIN_ROLES,
+  });
+
+  assert.equal(survey.name, 'Any Survey');
+  assert.equal(survey.role, 'owner');
+  assert.equal(res.statusCode, undefined);
+});
+
+test('survey create organization defaulting handles none, one, multiple, and platform admin explicit requirement', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  let memberships = [];
+  pool.query = async (sql, values) => {
+    assert.match(sql, /FROM organization_memberships/);
+    assert.deepEqual(values, [42]);
+    return { rows: memberships };
+  };
+
+  const makeRes = () => ({ statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
+  const req = { user: { id: 42, isPlatformAdmin: false } };
+
+  memberships = [];
+  let res = makeRes();
+  assert.equal(await getDefaultOrganizationForUser(req, res), null);
+  assert.equal(res.statusCode, 403);
+
+  memberships = [{ organization_id: 'org-a', role: 'editor' }];
+  res = makeRes();
+  assert.deepEqual(await getDefaultOrganizationForUser(req, res), memberships[0]);
+  assert.equal(res.statusCode, 200);
+
+  memberships = [{ organization_id: 'org-a', role: 'editor' }, { organization_id: 'org-b', role: 'owner' }];
+  res = makeRes();
+  assert.equal(await getDefaultOrganizationForUser(req, res), null);
+  assert.equal(res.statusCode, 400);
+
+  res = makeRes();
+  assert.equal(await getDefaultOrganizationForUser({ user: { id: 1, isPlatformAdmin: true } }, res), null);
+  assert.equal(res.statusCode, 400);
+});
+
+test('startSurvey email_sent update and survey archive implementation are scoped and non-destructive', () => {
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /UPDATE Respondent SET email_sent = true WHERE contact_info = ANY\(\$1\) AND survey_name = \$2/);
+  assert.match(serverSource, /UPDATE survey SET archived_at = CURRENT_TIMESTAMP, archived_by_user_id = \$1 WHERE id = \$2/);
+  assert.doesNotMatch(serverSource, /DELETE FROM email WHERE survey_name[\s\S]+DELETE FROM respondent WHERE survey_name[\s\S]+DELETE FROM survey WHERE name/);
 });
 
 test('/api/names rejects demo and does not query/return respondent names', async (t) => {

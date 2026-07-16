@@ -19,6 +19,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import EmailIcon from '@mui/icons-material/Email';
 import SendDemoDialog from './SendDemoDialog';
 import api from '../api/axios';
+import { useAuth } from '../context/AuthContext';
 
 const MenuCell = ({ row, onSurveyDeleted }) => {
   const [anchorEl, setAnchorEl] = useState(null);
@@ -31,6 +32,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     severity: 'success'
   });
   const open = Boolean(anchorEl);
+  const { canEditSurvey, canArchiveSurvey } = useAuth();
 
   // Add handler for closing snackbar
   const handleCloseSnackbar = (event, reason) => {
@@ -199,18 +201,24 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
           <VisibilityIcon fontSize="small" />
           Demo Survey
         </MenuItem>
-        <MenuItem onClick={handleSendDemo}>
-          <EmailIcon fontSize="small" />
-          Send Demo Email
-        </MenuItem>
-        <MenuItem onClick={handleStartClick}>
-          <PlayCircle fontSize="small" />
-          Start Survey
-        </MenuItem>
-        <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
-          <DeleteIcon fontSize="small" />
-          Delete Survey
-        </MenuItem>
+        {canEditSurvey(row) && (
+          <MenuItem onClick={handleSendDemo}>
+            <EmailIcon fontSize="small" />
+            Send Demo Email
+          </MenuItem>
+        )}
+        {canEditSurvey(row) && (
+          <MenuItem onClick={handleStartClick}>
+            <PlayCircle fontSize="small" />
+            Start Survey
+          </MenuItem>
+        )}
+        {canArchiveSurvey(row) && (
+          <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
+            <DeleteIcon fontSize="small" />
+            Archive Survey
+          </MenuItem>
+        )}
       </Menu>
 
       <Dialog
@@ -240,13 +248,13 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
         <DialogTitle>Delete Survey</DialogTitle>
         <DialogContent>
           <Typography>
-            Are you sure you want to delete the survey "{row.name}"? This action cannot be undone.
+            Are you sure you want to archive the survey "{row.name}"? Respondents and email templates will be preserved.
           </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleDeleteCancel}>Cancel</Button>
           <Button onClick={handleDeleteConfirm} variant="contained" color="error">
-            Delete Survey
+            Archive Survey
           </Button>
         </DialogActions>
       </Dialog>

@@ -6,13 +6,16 @@ import {
   DialogActions,
   TextField,
   Button,
+  MenuItem,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 
-const CreateSurveyDialog = ({ open, onClose, onSubmit }) => {
+const CreateSurveyDialog = ({ open, onClose, onSubmit, memberships = [] }) => {
   const [surveyName, setSurveyName] = React.useState('');
+  const [organizationId, setOrganizationId] = React.useState('');
   const [error, setError] = React.useState('');
   const theme = useTheme();
+  const creatableMemberships = memberships.filter(m => ['owner', 'admin', 'editor'].includes(m.role));
 
   const handleSubmit = () => {
     if (!surveyName.trim()) {
@@ -23,8 +26,13 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit }) => {
       setError('Only letters and numbers are allowed');
       return;
     }
-    onSubmit(surveyName);
+    if (creatableMemberships.length > 1 && !organizationId) {
+      setError('Choose an organization for this survey');
+      return;
+    }
+    onSubmit(surveyName, organizationId || undefined);
     setSurveyName('');
+    setOrganizationId('');
     setError('');
   };
 
@@ -40,6 +48,7 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit }) => {
 
   const handleClose = () => {
     setSurveyName('');
+    setOrganizationId('');
     setError('');
     onClose();
   };
@@ -78,6 +87,22 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit }) => {
           helperText={error}
           sx={{ mt: 1 }}
         />
+        {creatableMemberships.length > 1 && (
+          <TextField
+            select
+            margin="dense"
+            label="Organization"
+            fullWidth
+            value={organizationId}
+            onChange={(e) => setOrganizationId(e.target.value)}
+          >
+            {creatableMemberships.map((membership) => (
+              <MenuItem key={membership.organizationId} value={membership.organizationId}>
+                {membership.organizationName || membership.organizationSlug || membership.organizationId}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
       </DialogContent>
       <DialogActions sx={{ p: 2, pt: 0 }}>
         <Button onClick={handleClose} variant="outlined">

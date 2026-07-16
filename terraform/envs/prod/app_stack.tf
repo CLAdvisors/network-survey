@@ -78,282 +78,69 @@ resource "aws_route_table_association" "prod_app_public" {
   route_table_id = aws_route_table.prod_app_public.id
 }
 
-resource "aws_security_group" "prod_alb" {
-  name        = "${local.app_name_prefix}-alb"
-  description = "Public HTTPS access to the replacement prod API ALB"
-  vpc_id      = var.vpc_id
+module "api_backend" {
+  source = "../../modules/api_backend"
 
-  ingress {
-    description = "HTTP redirect"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  aws_region               = var.aws_region
+  environment              = var.environment
+  name_prefix              = local.app_name_prefix
+  vpc_id                   = var.vpc_id
+  backend_subnet_id        = aws_subnet.prod_app_public["a"].id
+  alb_subnet_ids           = [for subnet in aws_subnet.prod_app_public : subnet.id]
+  instance_type            = var.app_instance_type
+  ssh_allowed_cidrs        = var.ssh_allowed_cidrs
+  ssh_key_name             = var.ssh_key_name
+  certificate_arn          = aws_acm_certificate.prod_api.arn
+  config_bucket_name       = local.config_bucket_name
+  artifacts_bucket_name    = local.artifacts_bucket_name
+  artifact_retention_days  = var.artifact_retention_days
+  alb_deletion_protection  = var.alb_deletion_protection
+  cloud_init_template_path = "${path.module}/../../cloud-init-template.sh"
+  env_template_path        = "${path.module}/../../templates/env.tmpl"
 
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  db_host                       = aws_db_instance.prod_replacement.address
+  db_port                       = aws_db_instance.prod_replacement.port
+  db_name                       = aws_db_instance.prod_replacement.db_name
+  db_user                       = var.db_user
+  db_password_parameter_name    = local.db_password_parameter_name
+  session_secret_parameter_name = local.session_secret_parameter_name
+  resend_api_key_parameter_name = local.resend_api_key_parameter_name
+  frontend_url                  = local.frontend_url
+  survey_url                    = local.survey_url
+  session_cookie_name           = local.session_cookie_name
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  common_tags           = local.app_common_tags
+  config_bucket_tags    = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-config", App = "ona-config" })
+  artifacts_bucket_tags = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-artifacts", App = "ona-artifacts" })
 
-  tags = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-alb" })
-}
+  backend_security_group_name        = "${local.app_name_prefix}-backend"
+  backend_security_group_description = "Replacement prod API backend; ingress only from ALB"
+  backend_security_group_tags        = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-backend", App = "ona-api" })
+  backend_api_ingress_description    = "API from ALB"
 
-resource "aws_security_group" "prod_backend" {
-  name        = "${local.app_name_prefix}-backend"
-  description = "Replacement prod API backend; ingress only from ALB"
-  vpc_id      = var.vpc_id
+  alb_security_group_name        = "${local.app_name_prefix}-alb"
+  alb_security_group_description = "Public HTTPS access to the replacement prod API ALB"
+  alb_security_group_tags        = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-alb" })
+  alb_http_ingress_description   = "HTTP redirect"
+  alb_https_ingress_description  = "HTTPS"
 
-  ingress {
-    description     = "API from ALB"
-    from_port       = 3000
-    to_port         = 3000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.prod_alb.id]
-  }
+  backend_instance_name = "${local.app_name_prefix}-backend"
+  backend_instance_tags = merge(local.app_common_tags, { App = "ona-api" })
 
-  dynamic "ingress" {
-    for_each = length(var.ssh_allowed_cidrs) > 0 ? [1] : []
-    content {
-      description = "SSH from allowed CIDRs only"
-      from_port   = 22
-      to_port     = 22
-      protocol    = "tcp"
-      cidr_blocks = var.ssh_allowed_cidrs
-    }
-  }
+  iam_role_name             = "${local.app_name_prefix}-ec2-role"
+  iam_policy_name           = "${local.app_name_prefix}-runtime"
+  iam_policy_description    = "Allow replacement prod backend to read config, artifacts, and runtime secrets"
+  iam_instance_profile_name = "${local.app_name_prefix}-instance-profile"
+  iam_tags                  = local.app_common_tags
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(local.app_common_tags, {
-    Name = "${local.app_name_prefix}-backend"
-    App  = "ona-api"
-  })
-}
-
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"]
-
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-resource "aws_iam_role" "prod_backend" {
-  name               = "${local.app_name_prefix}-ec2-role"
-  assume_role_policy = data.aws_iam_policy_document.prod_backend_assume.json
-
-  tags = local.app_common_tags
-}
-
-data "aws_iam_policy_document" "prod_backend_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-  }
-}
-
-data "aws_iam_policy_document" "prod_backend_runtime" {
-  statement {
-    effect  = "Allow"
-    actions = ["s3:GetObject"]
-    resources = [
-      "${aws_s3_bucket.prod_app_config.arn}/*",
-      "${aws_s3_bucket.prod_app_artifacts.arn}/*",
-    ]
-  }
-
-  statement {
-    effect    = "Allow"
-    actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.prod_app_artifacts.arn]
-  }
-
-  statement {
-    effect  = "Allow"
-    actions = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = [
-      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.db_password_parameter_name}",
-      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.session_secret_parameter_name}",
-      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.resend_api_key_parameter_name}",
-    ]
-  }
-
-  statement {
-    effect    = "Allow"
-    actions   = ["kms:Decrypt"]
-    resources = ["*"]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ssm.${var.aws_region}.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_policy" "prod_backend_runtime" {
-  name        = "${local.app_name_prefix}-runtime"
-  description = "Allow replacement prod backend to read config, artifacts, and runtime secrets"
-  policy      = data.aws_iam_policy_document.prod_backend_runtime.json
-
-  tags = local.app_common_tags
-}
-
-resource "aws_iam_role_policy_attachment" "prod_backend_runtime" {
-  role       = aws_iam_role.prod_backend.name
-  policy_arn = aws_iam_policy.prod_backend_runtime.arn
-}
-
-resource "aws_iam_role_policy_attachment" "prod_backend_ssm" {
-  role       = aws_iam_role.prod_backend.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "prod_backend" {
-  name = "${local.app_name_prefix}-instance-profile"
-  role = aws_iam_role.prod_backend.name
-
-  tags = local.app_common_tags
-}
-
-resource "aws_instance" "prod_backend" {
-  ami                         = data.aws_ami.ubuntu.id
-  instance_type               = var.app_instance_type
-  subnet_id                   = aws_subnet.prod_app_public["a"].id
-  vpc_security_group_ids      = [aws_security_group.prod_backend.id]
-  associate_public_ip_address = true
-  iam_instance_profile        = aws_iam_instance_profile.prod_backend.name
-  key_name                    = length(var.ssh_allowed_cidrs) > 0 ? var.ssh_key_name : null
-
-  user_data = templatefile("../../cloud-init-template.sh", {
-    config_bucket    = aws_s3_bucket.prod_app_config.bucket
-    artifacts_bucket = aws_s3_bucket.prod_app_artifacts.bucket
-    aws_region       = var.aws_region
-    environment      = var.environment
-  })
-
-  lifecycle {
-    ignore_changes = [ami]
-  }
-
-  tags = merge(local.app_common_tags, {
-    Name = "${local.app_name_prefix}-backend"
-    App  = "ona-api"
-  })
-}
-
-resource "aws_lb_target_group" "prod_backend" {
-  name     = "${local.app_name_prefix}-api"
-  port     = 3000
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
-
-  health_check {
-    path                = "/health"
-    protocol            = "HTTP"
-    matcher             = "200"
-    interval            = 30
-    timeout             = 5
-    healthy_threshold   = 2
-    unhealthy_threshold = 3
-  }
-
-  tags = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-api" })
-}
-
-resource "aws_lb" "prod_api" {
-  name               = "${local.app_name_prefix}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.prod_alb.id]
-  subnets            = [for subnet in aws_subnet.prod_app_public : subnet.id]
-
-  enable_deletion_protection = var.alb_deletion_protection
-
-  tags = merge(local.app_common_tags, {
-    Name = "${local.app_name_prefix}-alb"
-    App  = "ona-api"
-  })
-}
-
-resource "aws_lb_listener" "prod_api_http" {
-  load_balancer_arn = aws_lb.prod_api.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type = "redirect"
-
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-    }
-  }
-}
-
-resource "aws_lb_listener" "prod_api_https" {
-  load_balancer_arn = aws_lb.prod_api.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate.prod_api.arn
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.prod_backend.arn
-  }
-}
-
-resource "aws_lb_target_group_attachment" "prod_backend" {
-  target_group_arn = aws_lb_target_group.prod_backend.arn
-  target_id        = aws_instance.prod_backend.id
-  port             = 3000
-}
-
-resource "aws_s3_bucket" "prod_app_config" {
-  bucket = local.config_bucket_name
-
-  tags = merge(local.app_common_tags, {
-    Name = "${local.app_name_prefix}-config"
-    App  = "ona-config"
-  })
-}
-
-resource "aws_s3_bucket" "prod_app_artifacts" {
-  bucket = local.artifacts_bucket_name
-
-  tags = merge(local.app_common_tags, {
-    Name = "${local.app_name_prefix}-artifacts"
-    App  = "ona-artifacts"
-  })
+  target_group_name            = "${local.app_name_prefix}-api"
+  target_group_tags            = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-api" })
+  target_group_attachment_port = 3000
+  alb_name                     = "${local.app_name_prefix}-alb"
+  alb_tags                     = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-alb", App = "ona-api" })
+  health_check_protocol        = "HTTP"
+  health_check_matcher         = "200"
+  health_check_timeout         = 5
 }
 
 module "dashboard_frontend" {
@@ -399,94 +186,5 @@ module "survey_frontend" {
   distribution_tags = merge(local.app_common_tags, {
     Name = "${local.app_name_prefix}-survey-cdn"
     App  = "ona-survey"
-  })
-}
-
-resource "aws_s3_bucket_public_access_block" "prod_app" {
-  for_each = {
-    config    = aws_s3_bucket.prod_app_config.id
-    artifacts = aws_s3_bucket.prod_app_artifacts.id
-  }
-
-  bucket                  = each.value
-  block_public_acls       = true
-  ignore_public_acls      = true
-  block_public_policy     = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "prod_app" {
-  for_each = {
-    config    = aws_s3_bucket.prod_app_config.id
-    artifacts = aws_s3_bucket.prod_app_artifacts.id
-  }
-
-  bucket = each.value
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_versioning" "prod_app" {
-  for_each = {
-    config    = aws_s3_bucket.prod_app_config.id
-    artifacts = aws_s3_bucket.prod_app_artifacts.id
-  }
-
-  bucket = each.value
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "prod_app_artifacts" {
-  bucket = aws_s3_bucket.prod_app_artifacts.id
-
-  rule {
-    id     = "expire-old-artifact-versions"
-    status = "Enabled"
-
-    filter {
-      prefix = "api/"
-    }
-
-    noncurrent_version_expiration {
-      noncurrent_days = var.artifact_retention_days
-    }
-  }
-}
-
-resource "aws_s3_object" "prod_api_config" {
-  bucket = aws_s3_bucket.prod_app_config.id
-  key    = "configs/.env.prod"
-  content = templatefile("../../templates/env.tmpl", {
-    db_host                       = aws_db_instance.prod_replacement.address
-    db_port                       = aws_db_instance.prod_replacement.port
-    db_name                       = aws_db_instance.prod_replacement.db_name
-    db_user                       = var.db_user
-    db_password_parameter_name    = local.db_password_parameter_name
-    frontend_url                  = local.frontend_url
-    survey_url                    = local.survey_url
-    session_secret_parameter_name = local.session_secret_parameter_name
-    session_cookie_name           = local.session_cookie_name
-    resend_api_key_parameter_name = local.resend_api_key_parameter_name
-  })
-}
-
-resource "aws_s3_bucket_policy" "prod_app_config" {
-  bucket = aws_s3_bucket.prod_app_config.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { AWS = aws_iam_role.prod_backend.arn }
-      Action    = "s3:GetObject"
-      Resource  = "${aws_s3_bucket.prod_app_config.arn}/*"
-    }]
   })
 }

@@ -28,7 +28,7 @@ resource "aws_security_group" "prod_db" {
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [aws_security_group.prod_backend.id]
+    security_groups = [module.api_backend.backend_security_group_id]
   }
 
   egress {

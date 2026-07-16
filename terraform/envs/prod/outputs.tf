@@ -60,20 +60,20 @@ output "replacement_resource_environment" {
 }
 
 output "backend_instance_id" {
-  value = aws_instance.prod_backend.id
+  value = module.api_backend.backend_instance_id
 }
 
 output "backend_instance_public_dns" {
-  value = aws_instance.prod_backend.public_dns
+  value = module.api_backend.backend_instance_public_dns
 }
 
 output "config_bucket_name" {
-  value       = aws_s3_bucket.prod_app_config.bucket
+  value       = module.api_backend.config_bucket_name
   description = "Replacement API runtime config bucket."
 }
 
 output "artifacts_bucket_name" {
-  value       = aws_s3_bucket.prod_app_artifacts.bucket
+  value       = module.api_backend.artifacts_bucket_name
   description = "Replacement API release artifact bucket."
 }
 
@@ -105,7 +105,7 @@ output "runtime_secret_parameter_names" {
 }
 
 output "api_alb_dns_name" {
-  value       = aws_lb.prod_api.dns_name
+  value       = module.api_backend.alb_dns_name
   description = "External DNS target: point demo.ona.api.bennetts.work CNAME here at cutover."
 }
 

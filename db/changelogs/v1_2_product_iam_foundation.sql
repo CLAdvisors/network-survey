@@ -25,14 +25,20 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by_user_id INT;
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'users_status_check'
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'users_status_check'
+          AND conrelid = 'users'::regclass
     ) THEN
         ALTER TABLE users ADD CONSTRAINT users_status_check
             CHECK (status IN ('invited', 'active', 'disabled'));
     END IF;
 
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'users_created_by_user_id_fkey'
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'users_created_by_user_id_fkey'
+          AND conrelid = 'users'::regclass
     ) THEN
         ALTER TABLE users ADD CONSTRAINT users_created_by_user_id_fkey
             FOREIGN KEY (created_by_user_id) REFERENCES users(id);
@@ -50,7 +56,11 @@ CREATE TABLE IF NOT EXISTS organization_memberships (
     PRIMARY KEY (organization_id, user_id)
 );
 
-ALTER TABLE Survey ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();
+-- Add Survey.id in phases to avoid the table rewrite/locking risk of ADD COLUMN ... DEFAULT
+-- on older PostgreSQL versions. Existing rows are backfilled before the default is attached.
+ALTER TABLE Survey ADD COLUMN IF NOT EXISTS id UUID;
+UPDATE Survey SET id = gen_random_uuid() WHERE id IS NULL;
+ALTER TABLE Survey ALTER COLUMN id SET DEFAULT gen_random_uuid();
 ALTER TABLE Survey ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organizations(id);
 ALTER TABLE Survey ADD COLUMN IF NOT EXISTS created_by_user_id INT REFERENCES users(id);
 
@@ -70,6 +80,9 @@ ON CONFLICT (slug) DO UPDATE SET updated_at = CURRENT_TIMESTAMP;
 UPDATE Survey
 SET organization_id = (SELECT id FROM organizations WHERE slug = 'default-imported')
 WHERE organization_id IS NULL;
+
+-- Defensive backfill in case this migration is rerun after a partially-applied local attempt.
+UPDATE Survey SET id = gen_random_uuid() WHERE id IS NULL;
 
 UPDATE Respondent r
 SET survey_id = s.id

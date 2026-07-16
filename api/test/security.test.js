@@ -11,7 +11,7 @@ process.env.ALLOW_PUBLIC_SIGNUP = 'false';
 process.env.AUTH_RATE_LIMIT_MAX = '1000';
 process.env.RESPONDENT_RATE_LIMIT_MAX = '1000';
 
-const { app, pool, validateRespondentToken, requireAuth, toSafeUser } = require('../server');
+const { app, pool, validateRespondentToken, requireAuth, toSafeUser, columnExists, tableExists } = require('../server');
 
 test('dashboard/admin endpoints require authentication', async () => {
   const endpoints = [
@@ -148,6 +148,48 @@ test('requireAuth loads current user and rejects disabled account status', async
   assert.match(res.body.error, /disabled/i);
 });
 
+test('schema capability helpers do not cache failed inspections as false', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  let calls = 0;
+  pool.query = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error('temporary metadata outage');
+    }
+    return { rows: [{ '?column?': 1 }] };
+  };
+
+  const columnName = `temporary_column_${Date.now()}`;
+  assert.equal(await columnExists('users', columnName), false);
+  assert.equal(await columnExists('users', columnName), true);
+  assert.equal(calls, 2);
+});
+
+test('schema capability helpers do not cache failed table inspections as false', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  let calls = 0;
+  pool.query = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error('temporary metadata outage');
+    }
+    return { rows: [{ '?column?': 1 }] };
+  };
+
+  const tableName = `temporary_table_${Date.now()}`;
+  assert.equal(await tableExists(tableName), false);
+  assert.equal(await tableExists(tableName), true);
+  assert.equal(calls, 2);
+});
+
 test('safe user serialization omits password hashes', () => {
   const safe = toSafeUser({
     id: 1,
@@ -179,7 +221,10 @@ test('Phase 2 IAM migration is included and avoids destructive operations', () =
   assert.match(migration, /CREATE EXTENSION IF NOT EXISTS pgcrypto/i);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS organizations/i);
   assert.match(migration, /organization_memberships/i);
-  assert.match(migration, /ALTER TABLE Survey ADD COLUMN IF NOT EXISTS id UUID/i);
+  assert.match(migration, /ALTER TABLE Survey ADD COLUMN IF NOT EXISTS id UUID;/i);
+  assert.match(migration, /UPDATE Survey SET id = gen_random_uuid\(\) WHERE id IS NULL/i);
+  assert.match(migration, /ALTER TABLE Survey ALTER COLUMN id SET DEFAULT gen_random_uuid\(\)/i);
+  assert.match(migration, /conrelid = 'users'::regclass/i);
   assert.doesNotMatch(migration, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|ALTER\s+TABLE[\s\S]+DROP\s+COLUMN/i);
 });
 

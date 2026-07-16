@@ -326,7 +326,6 @@ async function columnExists(tableName, columnName) {
     return exists;
   } catch (error) {
     console.warn(`Could not inspect schema column ${tableName}.${columnName}:`, error.message);
-    schemaCapabilityCache.set(cacheKey, false);
     return false;
   }
 }
@@ -351,7 +350,6 @@ async function tableExists(tableName) {
     return exists;
   } catch (error) {
     console.warn(`Could not inspect schema table ${tableName}:`, error.message);
-    schemaCapabilityCache.set(cacheKey, false);
     return false;
   }
 }

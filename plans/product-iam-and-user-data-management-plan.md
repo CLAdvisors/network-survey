@@ -278,6 +278,10 @@ Add a new Liquibase migration, for example `v1_2_product_iam_foundation.sql`:
    - Membership indexes by `user_id` and `organization_id`.
 6. Keep old columns and constraints until application code has moved.
 
+#### Phase 2 implementation note
+
+The Phase 2 foundation migration bootstraps existing data into a `Default / Imported` organization with slug `default-imported`. All existing dashboard users are backfilled as `owner` members because pre-IAM accounts effectively had global access; Phase 3 should tighten authorization and roles once real ownership is confirmed. The migration is additive only: it keeps legacy `Survey.name`, `Respondent.survey_name`, and `EMAIL.survey_name` in place and does not change primary keys.
+
 ### Phase 3: Owner-scoped API reads/writes
 
 1. Load current user in auth middleware from `users`, including `status` and platform-admin flag.

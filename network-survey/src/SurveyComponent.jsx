@@ -38,19 +38,19 @@ function SurveyComponent({setTitle}) {
     const surveyName = searchParams.get("surveyName"); 
 
     React.useEffect(() => {
-      if (!userId) return;
+      if (!userId || !surveyName) return;
       if (userId === 'demo') {
         setHasResponse(true);
         return;
       }
-      const statusUrl = buildApiUrl('/user/status', { userId });
+      const statusUrl = buildApiUrl('/user/status', { userId, surveyName });
       sendRequest(statusUrl, data => setHasResponse(data.hasResponse));
-    }, [userId]);
+    }, [userId, surveyName]);
 
     React.useEffect(() => {
       if (!userId || !surveyName) return;
       
-      const url = buildApiUrl('/questions', { surveyName });
+      const url = buildApiUrl('/questions', { surveyName, userId });
       sendRequest(url, (data) => { 
         setJson(data.questions); 
         setTitle(data.title); 

@@ -46,7 +46,6 @@ ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
 
 const TAGBOX_PLACEHOLDER = 'Start typing to search for people';
 const TAGBOX_PAGE_SIZE = 25;
-const PREVIEW_USER_ID = 'demo';
 const draggableQuestionRoots = new WeakMap();
 
 const configureTagboxPropertyMetadata = (() => {
@@ -344,13 +343,12 @@ const SurveyEditor = () => {
       const filter = typeof options.filter === 'string' ? options.filter : '';
 
       try {
-        const response = await api.get('/names', {
+        const response = await api.get('/admin/names', {
           params: {
             skip,
             take,
             filter,
-            surveyName: currentSurveyName,
-            userId: PREVIEW_USER_ID
+            surveyName: currentSurveyName
           }
         });
         const names = Array.isArray(response?.data?.names) ? response.data.names : [];
@@ -538,7 +536,7 @@ const SurveyEditor = () => {
       setLoading(true);
       try {
         // Use the full survey JSON endpoint
-        const response = await api.get(`/questions?surveyName=${selectedSurvey}`);
+        const response = await api.get(`/admin/questions?surveyName=${selectedSurvey}`);
         let json = response.data.questions || {};
         // Flatten any pages into a single elements array
         let elements = [];

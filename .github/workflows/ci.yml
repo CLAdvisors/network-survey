@@ -53,6 +53,10 @@ jobs:
         run: npm ci
         working-directory: api
 
+      - name: Run API unit/security tests
+        run: npm test
+        working-directory: api
+
       - name: Smoke test API against migrated database
         run: bash scripts/ci/api-smoke.sh
 

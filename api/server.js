@@ -10,6 +10,7 @@ const pgSession = require('connect-pg-simple')(session);
 const Papa = require('papaparse');
 const dotenvFlow = require('dotenv-flow');
 const bcrypt = require('bcrypt');
+const rateLimit = require('express-rate-limit');
 
 dotenvFlow.config();
 
@@ -221,11 +222,11 @@ async function startSurvey(surveyName){
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query
-async function executeQuery(query) {
+async function executeQuery(query, values = []) {
   const client = await pool.connect();
   
   try {
-    const result = await client.query(query);
+    const result = await client.query(query, values);
     return result;
   } finally {
     client.release();
@@ -283,9 +284,53 @@ app.use(session({
     domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined
   }
 }));
+const isLocalEnvironment = ['development', 'dev', 'local', 'test'].includes(process.env.NODE_ENV || 'development');
+const allowPublicSignup = process.env.ALLOW_PUBLIC_SIGNUP === 'true' || (isLocalEnvironment && process.env.ALLOW_PUBLIC_SIGNUP !== 'false');
+
+const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.AUTH_RATE_LIMIT_MAX) || 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please try again later.' },
+});
+
+const respondentRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.RESPONDENT_RATE_LIMIT_MAX) || 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+
+async function validateRespondentToken(surveyName, userId) {
+  if (!surveyName || surveyName === 'undefined' || surveyName === 'null') {
+    return { ok: false, status: 400, message: 'Survey name is required.' };
+  }
+
+  if (!userId) {
+    return { ok: false, status: 400, message: 'User ID is required.' };
+  }
+
+  const result = await pool.query(
+    'SELECT respondent_id, response, can_respond FROM Respondent WHERE uuid = $1 AND survey_name = $2',
+    [userId, surveyName]
+  );
+
+  if (result.rows.length === 0 || result.rows[0].can_respond !== true) {
+    return { ok: false, status: 403, message: 'Invalid respondent token for survey.' };
+  }
+
+  return { ok: true, respondent: result.rows[0] };
+}
+
 // Register user endpoint
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', authRateLimiter, async (req, res) => {
   try {
+    if (!allowPublicSignup) {
+      return res.status(403).json({ error: 'Public signup is disabled.' });
+    }
+
     const { username, password } = req.body;
 
     // Validate input
@@ -336,7 +381,7 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', authRateLimiter, async (req, res) => {
   const { username, password } = req.body;
   
   try {
@@ -351,24 +396,28 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Set session data
-    req.session.userId = user.id;
-    req.session.username = user.username;
-
-    // Save session explicitly
-    req.session.save(err => {
+    req.session.regenerate(err => {
       if (err) {
-        console.error('Session save error:', err);
-        return res.status(500).json({ error: 'Session save failed' });
+        console.error('Session regenerate error:', err);
+        return res.status(500).json({ error: 'Session setup failed' });
       }
 
-      // Return response after session is saved
-      res.json({
-        success: true,
-        user: {
-          id: user.id,
-          username: user.username
+      req.session.userId = user.id;
+      req.session.username = user.username;
+
+      req.session.save(saveErr => {
+        if (saveErr) {
+          console.error('Session save error:', saveErr);
+          return res.status(500).json({ error: 'Session save failed' });
         }
+
+        res.json({
+          success: true,
+          user: {
+            id: user.id,
+            username: user.username
+          }
+        });
       });
     });
   } catch (error) {
@@ -426,10 +475,8 @@ const requireAuth = (req, res, next) => {
 // Example usage: Adding a new survey
 async function insertSurvey(name, title) {
   const query = `INSERT INTO Survey (name, title, creation_date)
-                 VALUES ('${name}', '${title}', NOW())`;
-  const result = await executeQuery(query);
-  
-  // Handle the result as needed
+                 VALUES ($1, $2, NOW())`;
+  await executeQuery(query, [name, title]);
   console.log('Survey added successfully!');
 }
 async function insertUsers(users, deleteRow = null) {
@@ -540,18 +587,22 @@ async function insertQuestions(name, title, json) {
     await client.release();
   }
 }
-async function insertResponses(responses, userId) {
+async function insertResponses(responses, userId, surveyName) {
   const client = await pool.connect();
 
   try {
-    const query = 'UPDATE Respondent SET response = $1 WHERE uuid = $2';
-    const values = [responses, userId];
+    const query = 'UPDATE Respondent SET response = $1 WHERE uuid = $2 AND survey_name = $3';
+    const values = [responses, userId, surveyName];
 
-    await client.query(query, values);
+    const result = await client.query(query, values);
+    if (result.rowCount === 0) {
+      throw new Error('No matching respondent found for survey.');
+    }
 
     console.log('Survey modified successfully!');
   } catch (error) {
     console.error('Error occurred:', error);
+    throw error;
   } finally {
     await client.release();
   }  
@@ -595,7 +646,7 @@ function csvToJson(csvString, title) {
 
 
 // PUT API endpoint for creating a new survey
-app.post('/api/survey', express.json(), async (req, res) => {
+app.post('/api/survey', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
 
@@ -616,7 +667,7 @@ app.post('/api/survey', express.json(), async (req, res) => {
   }
 });
 
-app.post('/api/testEmail', express.json(), (req, res) => {
+app.post('/api/testEmail', express.json(), requireAuth, (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
   const language = data.language;
@@ -646,7 +697,7 @@ app.post('/api/testEmail', express.json(), (req, res) => {
   });
 });
 
-app.post('/api/startSurvey', express.json(), (req, res) => {
+app.post('/api/startSurvey', express.json(), requireAuth, (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
 
@@ -661,7 +712,7 @@ app.post('/api/startSurvey', express.json(), (req, res) => {
   .then(() => {res.status(200).json({ message: 'Survey started successfully!' });});
 });
 
-app.post('/api/updateEmails', express.json(), (req, res) => {
+app.post('/api/updateEmails', express.json(), requireAuth, (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
   const csvData = data.csvData;
@@ -695,7 +746,7 @@ app.post('/api/updateEmails', express.json(), (req, res) => {
   res.status(200).json({ message: 'Email data updated successfully.' }); 
 });
 // Modify the POST /api/updateTarget endpoint to handle the new fields
-app.post('/api/updateTarget', async (req, res) => {
+app.post('/api/updateTarget', requireAuth, async (req, res) => {
   const { csvData, surveyName, deleteRow } = req.body;
 
   if (!surveyName) {
@@ -775,7 +826,7 @@ app.post('/api/updateTarget', async (req, res) => {
   }
 });
 // GET API endpoint for retrieving email texts and available languages
-app.get('/api/survey-notifications/:surveyId', async (req, res) => {
+app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => {
   const surveyId = req.params.surveyId;
   if (!surveyId) {
     res.status(400).json({ message: 'Survey ID is required.' });
@@ -808,7 +859,7 @@ app.get('/api/survey-notifications/:surveyId', async (req, res) => {
 });
 
 // Modify the POST /api/updateTargets endpoint to handle the new fields
-app.post('/api/updateTargets', express.json(), (req, res) => {
+app.post('/api/updateTargets', express.json(), requireAuth, (req, res) => {
   const data = req.body;
   const csvData = data.csvData;
   const surveyName = data.surveyName;
@@ -911,7 +962,7 @@ function normalizeQuestionNames(json) {
   }
 }
 
-app.post('/api/updateQuestions', express.json(), (req, res) => {
+app.post('/api/updateQuestions', express.json(), requireAuth, (req, res) => {
   const data  = req.body;
   const surveyQuestions = data.questions;
   const surveyName = data.surveyName;
@@ -938,23 +989,75 @@ app.post('/api/updateQuestions', express.json(), (req, res) => {
 });
 
 // PUT API endpoint for answer submission
-app.post('/api/user', express.json(), (req, res) => {
-    const data  = req.body;
-    const userId  = data.userId;
+app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) => {
+  try {
+    const data = req.body;
+    const userId = data.userId;
     const surveyName = data.surveyName;
+
+    const validation = await validateRespondentToken(surveyName, userId);
+    if (!validation.ok) {
+      return res.status(validation.status).json({ message: validation.message });
+    }
+
     const answers = JSON.parse(data.answers);
     const answerTimeStamp = new Date().toLocaleString();
-    // add time stamp to answers
-    answers.timeStamp = answerTimeStamp; 
+    answers.timeStamp = answerTimeStamp;
 
-    // NEW DB CODE
-    insertResponses(answers, userId);
+    await insertResponses(answers, userId, surveyName);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error submitting response:', error);
+    res.status(500).json({ message: 'Failed to submit response.' });
+  }
+});
 
+// Authenticated dashboard preview endpoint for lazy loading respondent choices.
+app.get('/api/admin/names', requireAuth, async (req, res) => {
+  const { skip = 0, take = 10, filter = '', surveyName = '' } = req.query;
+
+  if (!surveyName || surveyName === 'undefined' || surveyName === 'null') {
+    return res.status(400).json({ message: 'Survey name is required.' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    const query = `
+      SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
+      FROM Respondent r
+      JOIN Survey s ON r.survey_name = s.name
+      WHERE s.name = $1
+      AND (r.name ILIKE $2 OR r.contact_info ILIKE $2)
+      ORDER BY r.name
+      OFFSET $3
+      LIMIT $4;
+    `;
+
+    const result = await client.query(query, [surveyName, `%${filter}%`, skip, take]);
+    const filteredNames = result.rows.map(user => `${user.name} (${user.contact_info})`);
+    const total = result.rows.length > 0 ? Number(result.rows[0].total_count) : 0;
+
+    res.status(200).json({
+      names: filteredNames,
+      total: Number.isFinite(total) && total >= 0 ? total : filteredNames.length
+    });
+  } catch (error) {
+    console.error('Error fetching admin preview names:', error);
+    res.status(500).json({ error: 'Failed to fetch names' });
+  } finally {
+    client.release();
+  }
 });
 
 // GET API endpoint for lazy loading the names list
-app.get('/api/names', async (req, res) => {
+app.get('/api/names', respondentRateLimiter, async (req, res) => {
   const { skip = 0, take = 10, filter = '', surveyName = '', userId = '' } = req.query;
+
+  const validation = await validateRespondentToken(surveyName, userId);
+  if (!validation.ok) {
+    return res.status(validation.status).json({ message: validation.message });
+  }
 
   const client = await pool.connect();
   
@@ -998,7 +1101,7 @@ app.get('/api/names', async (req, res) => {
 });
 
 // GET API list questions for dashboard
-app.get('/api/listQuestions', async (req, res) => {
+app.get('/api/listQuestions', requireAuth, async (req, res) => {
   const { surveyName = '' } = req.query;
 
   if(surveyName === '' || surveyName === 'undefined' || surveyName === null || surveyName === 'null') {
@@ -1048,42 +1151,72 @@ app.get('/api/listQuestions', async (req, res) => {
 });
 
 
-// GET API endpoint for survey questions
-app.get('/api/questions', async (req, res) => {
+// Authenticated dashboard preview endpoint for full SurveyJS question JSON.
+app.get('/api/admin/questions', requireAuth, async (req, res) => {
   const { surveyName = '' } = req.query;
 
-  if(surveyName === '' || surveyName === 'undefined' || surveyName === null || surveyName === 'null') {
-    res.status(404).json({ message: 'Survey name not found.' });
-    return;
+  if (!surveyName || surveyName === 'undefined' || surveyName === 'null') {
+    return res.status(400).json({ message: 'Survey name is required.' });
   }
 
-  // NEW DB CODE
   const client = await pool.connect();
 
-  const query = `
-  SELECT questions, title
-  FROM Survey
-  WHERE name = $1;
-  `;
+  try {
+    const query = `
+      SELECT questions, title
+      FROM Survey
+      WHERE name = $1;
+    `;
 
-  const values = [surveyName];
+    const result = await client.query(query, [surveyName]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Survey not found.' });
+    }
 
-  client.query(query, values)
-    .then(result => {
-      const jsonData = {title: result.rows[0].title, questions: result.rows[0].questions};
-      // Process the returned JSON data
-      res.status(200).json(jsonData);
-    })
-    .catch(error => {
-      // Handle the error
-      console.error(error);
-    })
-    .finally(() => client.release());
+    res.status(200).json({ title: result.rows[0].title, questions: result.rows[0].questions });
+  } catch (error) {
+    console.error('Error fetching admin survey questions:', error);
+    res.status(500).json({ message: 'Failed to fetch survey questions.' });
+  } finally {
+    client.release();
+  }
+});
 
-  });
+// GET API endpoint for survey questions
+app.get('/api/questions', respondentRateLimiter, async (req, res) => {
+  const { surveyName = '', userId = '' } = req.query;
+
+  const validation = await validateRespondentToken(surveyName, userId);
+  if (!validation.ok) {
+    return res.status(validation.status).json({ message: validation.message });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    const query = `
+      SELECT questions, title
+      FROM Survey
+      WHERE name = $1;
+    `;
+
+    const result = await client.query(query, [surveyName]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Survey not found.' });
+    }
+
+    const jsonData = { title: result.rows[0].title, questions: result.rows[0].questions };
+    res.status(200).json(jsonData);
+  } catch (error) {
+    console.error('Error fetching survey questions:', error);
+    res.status(500).json({ message: 'Failed to fetch survey questions.' });
+  } finally {
+    client.release();
+  }
+});
 
 // GET API endpoint for survey results
-app.get('/api/results', async (req, res) => {
+app.get('/api/results', requireAuth, async (req, res) => {
   const { surveyName = '' } = req.query;
   
 
@@ -1111,7 +1244,7 @@ app.get('/api/results', async (req, res) => {
 });
 
 // GET API endpoint for a list of survey targets and the status of their responses
-app.get('/api/targets', async(req, res) => {
+app.get('/api/targets', requireAuth, async(req, res) => {
   const { surveyName = '' } = req.query;
 
   const client = await pool.connect();
@@ -1174,7 +1307,7 @@ GROUP BY
 });
 
 // GET API endpoint for status of survey creation
-app.get('/api/surveyStatus', async (req, res) => {
+app.get('/api/surveyStatus', requireAuth, async (req, res) => {
   const { surveyName = '' } = req.query;
 
   if(surveyName === '' || surveyName === 'undefined' || surveyName === null || surveyName === 'null') {
@@ -1220,22 +1353,18 @@ GROUP BY
 });
 
 // GET API endpoint for checking if a user has a prior response
-app.get('/api/user/status', async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) {
-    return res.status(400).json({ message: 'User ID is required.' });
-  }
-  const client = await pool.connect();
+app.get('/api/user/status', respondentRateLimiter, async (req, res) => {
+  const { userId, surveyName } = req.query;
   try {
-    const query = `SELECT response IS NOT NULL AS has_response FROM Respondent WHERE uuid = $1`;
-    const result = await client.query(query, [userId]);
-    const hasResponse = result.rows.length > 0 ? result.rows[0].has_response : false;
-    res.status(200).json({ hasResponse });
+    const validation = await validateRespondentToken(surveyName, userId);
+    if (!validation.ok) {
+      return res.status(validation.status).json({ message: validation.message });
+    }
+
+    res.status(200).json({ hasResponse: validation.respondent.response !== null });
   } catch (error) {
     console.error('Error checking user status:', error);
     res.status(500).json({ message: 'Failed to check user status.' });
-  } finally {
-    client.release();
   }
 });
 
@@ -1397,7 +1526,10 @@ app.get('/health', async (req, res) => {
 });
 
 
-// Start the server
-app.listen(port, () => {
-  console.log(`Server is running on port: ${port}`);
-});
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Server is running on port: ${port}`);
+  });
+}
+
+module.exports = { app, pool, validateRespondentToken };

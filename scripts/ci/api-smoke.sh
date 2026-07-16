@@ -47,6 +47,33 @@ curl -fsS -X POST "$BASE/api/register" \
   -H 'Content-Type: application/json' \
   -d '{"username":"ci-smoke","password":"ci-smoke-password"}' | grep -q '"success":true'
 
+echo "==> Grant smoke user org membership"
+node <<'NODE'
+const { Pool } = require('./api/node_modules/pg');
+const pool = new Pool({
+  user: process.env.DB_USER || 'postgres',
+  password: process.env.DB_PASSWORD || 'postgres',
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT || 5432),
+  database: process.env.DB_NAME || 'ONA',
+});
+(async () => {
+  await pool.query(`
+    INSERT INTO organization_memberships (organization_id, user_id, role)
+    SELECT o.id, u.id, 'owner'
+    FROM organizations o
+    JOIN users u ON u.username = 'ci-smoke'
+    WHERE o.slug = 'default-imported'
+    ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role
+  `);
+  await pool.end();
+})().catch(async (error) => {
+  console.error(error);
+  await pool.end().catch(() => {});
+  process.exit(1);
+});
+NODE
+
 echo "==> Login"
 curl -fsS -c "$COOKIES" -X POST "$BASE/api/login" \
   -H 'Content-Type: application/json' \

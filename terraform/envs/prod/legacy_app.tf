@@ -7,6 +7,10 @@ locals {
     ManagedBy   = "terraform"
   }
 
+  legacy_app_tags = merge(local.prod_app_tags, {
+    Environment = var.legacy_resource_environment
+  })
+
   prod_config_artifacts_bucket = "my-config-bucket-1xo22t"
   prod_dashboard_bucket        = "react-dashboard-7c1f1dec"
   prod_survey_bucket           = "react-survey-7c1f1dec"
@@ -17,7 +21,7 @@ locals {
 resource "aws_s3_bucket" "prod_config_artifacts" {
   bucket = local.prod_config_artifacts_bucket
 
-  tags = merge(local.prod_app_tags, {
+  tags = merge(local.legacy_app_tags, {
     Name = "Config Bucket"
     App  = "ona-artifacts"
   })
@@ -26,7 +30,7 @@ resource "aws_s3_bucket" "prod_config_artifacts" {
 resource "aws_s3_bucket" "prod_dashboard" {
   bucket = local.prod_dashboard_bucket
 
-  tags = merge(local.prod_app_tags, {
+  tags = merge(local.legacy_app_tags, {
     Name = "ReactAppBucket"
     App  = "ona-dashboard"
   })
@@ -35,7 +39,7 @@ resource "aws_s3_bucket" "prod_dashboard" {
 resource "aws_s3_bucket" "prod_survey" {
   bucket = local.prod_survey_bucket
 
-  tags = merge(local.prod_app_tags, {
+  tags = merge(local.legacy_app_tags, {
     Name = "ReactAppBucket"
     App  = "ona-survey"
   })

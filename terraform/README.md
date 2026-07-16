@@ -6,24 +6,21 @@ environment roots.
 | Environment | Current root | Backend key | Notes |
 |---|---|---|---|
 | staging | `terraform/envs/staging` | `envs/staging/terraform.tfstate` | New standalone root added in this PR. State migration is documented only; not yet executed. |
-| prod / prod-v2 | `terraform/envs/prod` | `prod-db/terraform.tfstate` | Active prod-v2 cutover stack. Preserve RDS and imported ACM certificates. |
+| prod / prod-v2 | `terraform/envs/prod` | `envs/prod/terraform.tfstate` | Active prod-v2 cutover stack. Migrate from old `prod-db/terraform.tfstate` key before any plan/apply; preserve RDS and imported ACM certificates. |
 | legacy root | `terraform/` | workspace-based (`env/staging/terraform.tfstate` for staging, `terraform.tfstate` for default) | Kept intact for rollback/state reference. Do not use it for production applies. |
 
 ## Shared modules
 
 `terraform/modules/frontend_static_site` contains the shared private S3 +
-CloudFront Origin Access Control pattern used by the new staging root. It keeps
-custom-domain support optional and is parameterized to preserve the staging
-resource names/attributes during the later state migration.
-
-Prod-v2 frontend resources remain inline in `terraform/envs/prod` for now to
-avoid unnecessary state moves or accidental diffs against active production.
-Move prod to the module only in a later reviewed change with explicit
-`terraform state mv` commands and a no-op plan.
+CloudFront Origin Access Control pattern used by staging and prod-v2 dashboard /
+survey frontends. Prod-v2 requires the explicit `terraform state mv` commands in
+`terraform/envs/prod/README.md` before any plan/apply so the module migration is
+an address-only no-op.
 
 The API/ALB/EC2/IAM pattern is intentionally not extracted yet: staging and
-prod-v2 differ enough that a larger module would increase risk. Prefer a small,
-validated follow-up after staging is safely under its environment root.
+prod-v2 differ enough that a larger module would increase risk. See the
+candidate notes in `terraform/modules/api_backend/README.md`; prefer a small,
+validated follow-up after state migrations are complete.
 
 ## Secrets
 
@@ -102,7 +99,10 @@ these migration/import steps are completed.
 
 ## Production safety
 
-Production is already under `terraform/envs/prod`. Preserve:
+Production is under `terraform/envs/prod`, but the backend key is being
+normalized from `prod-db/terraform.tfstate` to `envs/prod/terraform.tfstate`.
+Follow `terraform/envs/prod/README.md` before running any prod plan/apply.
+Preserve:
 
 - RDS `network-survey-prod-postgres-v2` (Terraform `prevent_destroy` plus AWS
   deletion protection).

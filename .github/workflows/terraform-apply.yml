@@ -14,6 +14,11 @@ on:
         required: true
         type: boolean
         default: false
+      confirm_prod_state_migrated:
+        description: Must be true to apply terraform/envs/prod after migrating the backend key to envs/prod/terraform.tfstate and moving frontend state addresses
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   id-token: write
@@ -72,6 +77,13 @@ jobs:
         run: |
           echo "Staging now points at terraform/envs/staging with backend key envs/staging/terraform.tfstate." >&2
           echo "Run the documented state migration/import steps first, then rerun with confirm_staging_state_migrated=true." >&2
+          exit 1
+
+      - name: Guard prod backend/address migration apply
+        if: ${{ (inputs.environment == 'prod' || inputs.environment == 'prod-v2') && !inputs.confirm_prod_state_migrated }}
+        run: |
+          echo "Production now points at backend key envs/prod/terraform.tfstate and frontend resources live under module addresses." >&2
+          echo "Run the documented backend migration and terraform state mv commands first, verify a no-op plan, then rerun with confirm_prod_state_migrated=true." >&2
           exit 1
 
       - name: Terraform fmt

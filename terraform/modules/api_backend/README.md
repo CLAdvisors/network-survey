@@ -1,18 +1,16 @@
-# API/backend module candidate
+# API/backend Terraform module
 
-This directory is intentionally documentation-only for now. The production and
-staging API/backend stacks currently differ in enough active-resource details
-(VPC ownership, subnet layout, RDS access, IAM policy scope, imported/legacy
-cutover concerns, and prod-v2 discovery tags) that extracting a live module in
-this change would increase replacement risk.
+Shared module for the Network Survey API/backend stack used by `terraform/envs/staging` and `terraform/envs/prod`.
 
-Future extraction should be done after prod-v2 state/address migration is
-verified with a no-op plan. Recommended approach:
+The module owns the common backend resources only:
 
-1. Inventory staging and prod backend resource arguments and lifecycle rules.
-2. Design module inputs for existing VPC/subnets/security groups, ALB listeners,
-   runtime SSM parameter names, artifact/config buckets, and discovery tags.
-3. Introduce the module in one environment at a time with explicit
-   `terraform state mv` commands and a reviewed no-op plan before any apply.
-4. Keep RDS resources outside the module until DB ownership and backup/rollback
-   procedures are separately reviewed.
+- API config and artifact S3 buckets and bucket controls
+- Runtime config S3 object
+- EC2 IAM role, policy, policy attachments, and instance profile
+- Backend EC2 instance and Ubuntu AMI lookup
+- API ALB, HTTP/HTTPS listeners, target group, attachment
+- Backend and ALB security groups
+
+Environment roots continue to own database resources, ACM certificates, frontend modules, and environment-specific networking/subnets.
+
+Before applying this refactor in an environment, move the existing state addresses into the module addresses documented in `../../docs/api-backend-module-state-moves.md`, then verify a no-op or expected-no-replacement plan.

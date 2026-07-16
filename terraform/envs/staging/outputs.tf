@@ -3,11 +3,11 @@ output "environment" {
 }
 
 output "backend_instance_id" {
-  value = aws_instance.backend.id
+  value = module.api_backend.backend_instance_id
 }
 
 output "backend_instance_public_ip" {
-  value = aws_instance.backend.public_dns
+  value = module.api_backend.backend_instance_public_dns
 }
 
 output "db_endpoint" {
@@ -19,12 +19,12 @@ output "db_username" {
 }
 
 output "config_bucket_name" {
-  value       = aws_s3_bucket.config_bucket.bucket
+  value       = module.api_backend.config_bucket_name
   description = "Name of the S3 bucket where configuration files are stored"
 }
 
 output "artifacts_bucket_name" {
-  value       = aws_s3_bucket.artifacts.bucket
+  value       = module.api_backend.artifacts_bucket_name
   description = "S3 bucket where CI publishes API release artifacts"
 }
 
@@ -92,7 +92,7 @@ output "ssl_cert_survey_validation_records" {
 }
 
 output "alb_dns_name" {
-  value       = aws_lb.main_alb.dns_name
+  value       = module.api_backend.alb_dns_name
   description = "The DNS name of the ALB. Point the API domain's CNAME record here."
 }
 

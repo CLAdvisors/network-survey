@@ -5,9 +5,10 @@ This root is the staging successor to the legacy workspace-based root at
 
 - Backend bucket: `network-survey-terraform-state-438465164125`
 - Backend key: `envs/staging/terraform.tfstate`
-- No Terraform state was migrated in this PR.
-- Do not run `terraform apply` from this root until the migration steps in
-  `terraform/README.md` have been reviewed and executed.
+- This is the active staging Terraform root.
+- Staging state has been migrated into this backend key.
+- Plans/applies from this root are expected to be no-op unless an intentional
+  staging change is being reviewed.
 
 Secrets:
 
@@ -20,4 +21,11 @@ Validate locally:
 ```sh
 terraform init -backend=false
 terraform validate
+```
+
+Plan against the active staging state:
+
+```sh
+terraform init
+terraform plan -var-file=staging.tfvars
 ```

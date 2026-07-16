@@ -7,7 +7,7 @@ production stacks.
 |---|---|---|---|
 | staging | `terraform/envs/staging` | `envs/staging/terraform.tfstate` | Active staging stack. Migrated from the old workspace root. |
 | prod | `terraform/envs/prod` | `envs/prod/terraform.tfstate` | Active production stack. Migrated from the old `prod-db/terraform.tfstate` key. |
-| legacy root | `terraform/` | workspace-based / default | Kept only for history/rollback reference. Do not use for active staging or production applies. |
+| legacy root | `terraform/` | workspace-based / default | Historical/rollback reference only. A guard in `legacy-root-disabled.tf` intentionally blocks plans/applies unless `allow_legacy_root_apply=true` is explicitly set for a reviewed rollback. |
 
 ## Shared modules
 
@@ -15,10 +15,7 @@ production stacks.
 CloudFront Origin Access Control pattern used by both staging and production
 frontend distributions.
 
-The API/ALB/EC2/IAM pattern is not yet extracted into an active module because
-staging and production still differ in DB ownership, naming history, and rollout
-requirements. `terraform/modules/api_backend/README.md` documents the candidate
-module boundary for a future low-risk extraction.
+`terraform/modules/api_backend` contains the shared API/ALB/EC2/IAM/config/artifact bucket pattern used by both staging and production. Environment-specific roots still own their DBs, ACM certificates, domains, and network inputs.
 
 ## Secrets
 
@@ -52,6 +49,11 @@ terraform -chdir=terraform/envs/prod plan
 GitHub `Terraform Plan` / `Terraform Apply` workflows now target these env roots.
 Production deploy discovery uses `Environment=prod`; no production `TF_ENV`
 override is required.
+
+Do not run `terraform plan` or `terraform apply` from the legacy workspace-based
+`terraform/` root during normal operations. It is intentionally blocked by
+`legacy-root-disabled.tf` to prevent accidental recreation or mutation of retired
+infrastructure.
 
 ## Production safety
 

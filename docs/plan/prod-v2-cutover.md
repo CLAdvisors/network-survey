@@ -3,9 +3,14 @@
 Branch: `prod-fresh-stack`
 
 Status: cutover completed. External DNS now points at replacement targets,
-frontend aliases are attached to replacement CloudFront distributions, GitHub
-production `TF_ENV` is set to `prod-v2`, and production deploy/smoke checks
+frontend aliases are attached to replacement CloudFront distributions, legacy
+prod app resources have been retired, production deploy discovery has been
+normalized back to `Environment=prod`, and production deploy/smoke checks
 succeeded.
+
+Historical note: this document describes the replacement stack while it still
+used `prod-v2` names/tags during cutover. Do **not** set production `TF_ENV` to
+`prod-v2` now; no production `TF_ENV` override is required after final cleanup.
 
 ## What was created
 
@@ -33,15 +38,7 @@ External DNS is not in AWS. At cutover, update CNAMEs to:
 | `demo.ona.dashboard.bennetts.work` | `d2awmr5sgbd2cb.cloudfront.net` |
 | `demo.ona.survey.bennetts.work` | `d3w07tujvhshv1.cloudfront.net` |
 
-Replacement resource discovery tag for deploy workflow while legacy resources remain: `Environment=prod-v2`.
-
-Before using the production GitHub deploy workflow for the replacement stack, set the GitHub **production** environment variable:
-
-```text
-TF_ENV=prod-v2
-```
-
-Do this during/after DNS cutover. Until then, the workflow's external smoke checks still use the `demo.ona.*` hostnames and may validate the legacy stack instead of the replacement stack.
+Replacement resources originally used `Environment=prod-v2` while legacy resources remained. After legacy cleanup, deploy discovery was normalized to `Environment=prod`. The GitHub production deploy workflow should not set a `TF_ENV` override.
 
 ## Runtime/deploy resources
 
@@ -81,9 +78,9 @@ Existing production SSM Parameter Store paths are reused:
    - `demo.ona.survey.bennetts.work`
 3. Applied `terraform/envs/prod` with frontend custom domains enabled to attach the imported ACM certs and aliases to the replacement CloudFront distributions.
 4. Updated external DNS CNAMEs to the targets above.
-5. Set GitHub production environment variable `TF_ENV=prod-v2` so future production deploys target the replacement stack.
+5. Temporarily set GitHub production environment variable `TF_ENV=prod-v2` during replacement-stack cutover, then removed that override after legacy cleanup and normalized deploy discovery to `Environment=prod`.
 6. Smoke tested the public hostnames:
    - `https://demo.ona.api.bennetts.work/health`
    - `https://demo.ona.dashboard.bennetts.work/`
    - `https://demo.ona.survey.bennetts.work/`
-7. After a soak period, plan legacy cleanup separately. Do not destroy `network-survey-prod-postgres-v2` or the imported ACM certs.
+7. Retired legacy app resources after the soak period. Do not destroy `network-survey-prod-postgres-v2` or the imported ACM certs.

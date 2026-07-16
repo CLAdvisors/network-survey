@@ -303,6 +303,111 @@ const respondentRateLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 
+const schemaCapabilityCache = new Map();
+
+async function columnExists(tableName, columnName) {
+  const cacheKey = `column:${tableName}.${columnName}`;
+  if (schemaCapabilityCache.has(cacheKey)) {
+    return schemaCapabilityCache.get(cacheKey);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = current_schema()
+         AND table_name = $1
+         AND column_name = $2
+       LIMIT 1`,
+      [tableName.toLowerCase(), columnName]
+    );
+    const exists = result.rows.length > 0;
+    schemaCapabilityCache.set(cacheKey, exists);
+    return exists;
+  } catch (error) {
+    console.warn(`Could not inspect schema column ${tableName}.${columnName}:`, error.message);
+    schemaCapabilityCache.set(cacheKey, false);
+    return false;
+  }
+}
+
+async function tableExists(tableName) {
+  const cacheKey = `table:${tableName}`;
+  if (schemaCapabilityCache.has(cacheKey)) {
+    return schemaCapabilityCache.get(cacheKey);
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT 1
+       FROM information_schema.tables
+       WHERE table_schema = current_schema()
+         AND table_name = $1
+       LIMIT 1`,
+      [tableName.toLowerCase()]
+    );
+    const exists = result.rows.length > 0;
+    schemaCapabilityCache.set(cacheKey, exists);
+    return exists;
+  } catch (error) {
+    console.warn(`Could not inspect schema table ${tableName}:`, error.message);
+    schemaCapabilityCache.set(cacheKey, false);
+    return false;
+  }
+}
+
+function toSafeUser(user) {
+  if (!user) return null;
+
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email || null,
+    displayName: user.display_name || null,
+    status: user.status || 'active',
+    isPlatformAdmin: Boolean(user.is_platform_admin),
+    lastLoginAt: user.last_login_at || null,
+  };
+}
+
+async function getUserById(userId) {
+  const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+  return result.rows[0] || null;
+}
+
+async function getUserMemberships(userId) {
+  if (!await tableExists('organization_memberships')) {
+    return [];
+  }
+
+  const result = await pool.query(
+    `SELECT om.organization_id AS "organizationId",
+            om.role,
+            o.name AS "organizationName",
+            o.slug AS "organizationSlug"
+     FROM organization_memberships om
+     LEFT JOIN organizations o ON o.id = om.organization_id
+     WHERE om.user_id = $1
+     ORDER BY o.name NULLS LAST, om.role`,
+    [userId]
+  );
+
+  return result.rows;
+}
+
+async function updateLastLoginIfSupported(userId) {
+  if (!await columnExists('users', 'last_login_at')) {
+    return;
+  }
+
+  try {
+    await pool.query('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = $1', [userId]);
+  } catch (error) {
+    // Keep login backward-compatible if the column is not present in an older local DB.
+    console.warn('Could not update users.last_login_at:', error.message);
+  }
+}
+
 async function validateRespondentToken(surveyName, userId) {
   if (!surveyName || surveyName === 'undefined' || surveyName === 'null') {
     return { ok: false, status: 400, message: 'Survey name is required.' };
@@ -331,7 +436,7 @@ app.post('/api/register', authRateLimiter, async (req, res) => {
       return res.status(403).json({ error: 'Public signup is disabled.' });
     }
 
-    const { username, password } = req.body;
+    const { username, password, email, displayName, display_name: displayNameSnake } = req.body;
 
     // Validate input
     if (!username || !password) {
@@ -361,17 +466,31 @@ app.post('/api/register', authRateLimiter, async (req, res) => {
     // Hash password and create user
     const hashedPassword = await bcrypt.hash(password, 10);
     
+    const insertColumns = ['username', 'password'];
+    const insertValues = [username, hashedPassword];
+    const placeholders = ['$1', '$2'];
+
+    if (email && await columnExists('users', 'email')) {
+      insertColumns.push('email');
+      insertValues.push(email);
+      placeholders.push(`$${insertValues.length}`);
+    }
+
+    const displayNameValue = displayName || displayNameSnake;
+    if (displayNameValue && await columnExists('users', 'display_name')) {
+      insertColumns.push('display_name');
+      insertValues.push(displayNameValue);
+      placeholders.push(`$${insertValues.length}`);
+    }
+
     const result = await pool.query(
-      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
-      [username, hashedPassword]
+      `INSERT INTO users (${insertColumns.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING *`,
+      insertValues
     );
 
     res.status(201).json({
       success: true,
-      user: {
-        id: result.rows[0].id,
-        username: result.rows[0].username
-      }
+      user: toSafeUser(result.rows[0])
     });
   } catch (error) {
     console.error('Registration error:', error);
@@ -396,6 +515,12 @@ app.post('/api/login', authRateLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    if ((user.status || 'active') === 'disabled') {
+      return res.status(403).json({ error: 'Account is disabled' });
+    }
+
+    await updateLastLoginIfSupported(user.id);
+
     req.session.regenerate(err => {
       if (err) {
         console.error('Session regenerate error:', err);
@@ -413,10 +538,7 @@ app.post('/api/login', authRateLimiter, async (req, res) => {
 
         res.json({
           success: true,
-          user: {
-            id: user.id,
-            username: user.username
-          }
+          user: toSafeUser({ ...user, last_login_at: new Date().toISOString() })
         });
       });
     });
@@ -439,7 +561,7 @@ app.post('/api/logout', (req, res) => {
 });
 
 // Modified check-auth endpoint with better error handling
-app.get('/api/check-auth', (req, res) => {
+app.get('/api/check-auth', async (req, res) => {
 
   if (!req.session) {
     return res.status(500).json({ 
@@ -447,28 +569,58 @@ app.get('/api/check-auth', (req, res) => {
     });
   }
 
-  if (req.session.userId) {
-    res.json({
-      isAuthenticated: true,
-      user: {
-        id: req.session.userId,
-        username: req.session.username
-      }
-    });
-  } else {
-    res.status(401).json({ 
+  if (!req.session.userId) {
+    return res.status(401).json({ 
       isAuthenticated: false,
       message: 'No active session found'
     });
   }
+
+  try {
+    const user = await getUserById(req.session.userId);
+
+    if (!user) {
+      return res.status(401).json({ isAuthenticated: false, message: 'User not found' });
+    }
+
+    if ((user.status || 'active') === 'disabled') {
+      return res.status(403).json({ isAuthenticated: false, message: 'Account is disabled' });
+    }
+
+    res.json({
+      isAuthenticated: true,
+      user: toSafeUser(user),
+      memberships: await getUserMemberships(user.id)
+    });
+  } catch (error) {
+    console.error('Check auth error:', error);
+    res.status(500).json({ error: 'Failed to check authentication' });
+  }
 });
 
 // Auth middleware for protected routes
-const requireAuth = (req, res, next) => {
-  if (!req.session.userId) {
+const requireAuth = async (req, res, next) => {
+  if (!req.session?.userId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  next();
+
+  try {
+    const user = await getUserById(req.session.userId);
+
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if ((user.status || 'active') === 'disabled') {
+      return res.status(403).json({ error: 'Account is disabled' });
+    }
+
+    req.user = toSafeUser(user);
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(500).json({ error: 'Authentication check failed' });
+  }
 };
 
 
@@ -1532,4 +1684,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, pool, validateRespondentToken };
+module.exports = {
+  app,
+  pool,
+  validateRespondentToken,
+  requireAuth,
+  toSafeUser,
+  columnExists,
+  tableExists,
+};

@@ -381,7 +381,8 @@ test('/api/names rejects demo and does not query/return respondent names', async
   assert.equal(res.status, 403);
   assert.equal(res.body.names, undefined);
   assert.equal(calls.length, 1, 'only the token validation query should run');
-  assert.match(calls[0].sql, /WHERE uuid = \$1 AND survey_name = \$2/);
+  assert.match(calls[0].sql, /JOIN Survey s/);
+  assert.match(calls[0].sql, /s\.archived_at IS NULL/);
   assert.deepEqual(calls[0].values, ['demo', 'Survey A']);
 });
 
@@ -409,6 +410,42 @@ test('respondent routes reject invalid or mismatched survey/token before returni
   assert.equal(submitRes.status, 403);
 });
 
+test('respondent routes reject archived survey tokens without dashboard session', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  const calls = [];
+  pool.query = async (sql, values) => {
+    calls.push({ sql, values });
+    assert.match(sql, /s\.archived_at IS NULL/);
+    assert.deepEqual(values, ['archived-token', 'Archived Survey']);
+    return { rows: [] };
+  };
+
+  const questionRes = await request(app)
+    .get('/api/questions')
+    .query({ surveyName: 'Archived Survey', userId: 'archived-token' });
+  assert.equal(questionRes.status, 403);
+
+  const statusRes = await request(app)
+    .get('/api/user/status')
+    .query({ surveyName: 'Archived Survey', userId: 'archived-token' });
+  assert.equal(statusRes.status, 403);
+
+  const submitRes = await request(app)
+    .post('/api/user')
+    .send({ surveyName: 'Archived Survey', userId: 'archived-token', answers: '{}' });
+  assert.equal(submitRes.status, 403);
+
+  const namesRes = await request(app)
+    .get('/api/names')
+    .query({ surveyName: 'Archived Survey', userId: 'archived-token' });
+  assert.equal(namesRes.status, 403);
+  assert.equal(calls.length, 4);
+});
+
 test('/api/questions rejects demo token for arbitrary survey definitions', async (t) => {
   const originalQuery = pool.query;
   t.after(() => {
@@ -424,7 +461,7 @@ test('/api/questions rejects demo token for arbitrary survey definitions', async
   assert.equal(res.status, 403);
 });
 
-test('respondent token validation requires uuid, surveyName match, and can_respond=true', async (t) => {
+test('respondent token validation requires uuid, surveyName match, can_respond=true, and active survey', async (t) => {
   const originalQuery = pool.query;
   t.after(() => {
     pool.query = originalQuery;
@@ -433,17 +470,24 @@ test('respondent token validation requires uuid, surveyName match, and can_respo
   const calls = [];
   pool.query = async (sql, values) => {
     calls.push({ sql, values });
+    assert.match(sql, /JOIN Survey s/);
+    assert.match(sql, /s\.archived_at IS NULL/);
     if (values[0] === 'valid-token' && values[1] === 'Survey A') {
-      return { rows: [{ respondent_id: 1, response: null, can_respond: true }] };
+      return { rows: [{ respondent_id: 1, response: null, can_respond: true, survey_id: 'survey-a-id' }] };
     }
     if (values[0] === 'disabled-token' && values[1] === 'Survey A') {
-      return { rows: [{ respondent_id: 2, response: null, can_respond: false }] };
+      return { rows: [{ respondent_id: 2, response: null, can_respond: false, survey_id: 'survey-a-id' }] };
+    }
+    // Archived surveys are rejected because the JOIN + archived_at predicate returns no rows.
+    if (values[0] === 'archived-token' && values[1] === 'Archived Survey') {
+      return { rows: [] };
     }
     return { rows: [] };
   };
 
   const ok = await validateRespondentToken('Survey A', 'valid-token');
   assert.equal(ok.ok, true);
+  assert.equal(ok.respondent.survey_id, 'survey-a-id');
   assert.deepEqual(calls.at(-1).values, ['valid-token', 'Survey A']);
 
   const wrongSurvey = await validateRespondentToken('Survey B', 'valid-token');
@@ -453,6 +497,10 @@ test('respondent token validation requires uuid, surveyName match, and can_respo
   const disabled = await validateRespondentToken('Survey A', 'disabled-token');
   assert.equal(disabled.ok, false);
   assert.equal(disabled.status, 403);
+
+  const archived = await validateRespondentToken('Archived Survey', 'archived-token');
+  assert.equal(archived.ok, false);
+  assert.equal(archived.status, 403);
 
   const demo = await validateRespondentToken('Survey A', 'demo');
   assert.equal(demo.ok, false);

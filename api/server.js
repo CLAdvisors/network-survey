@@ -446,7 +446,12 @@ async function validateRespondentToken(surveyName, userId) {
   }
 
   const result = await pool.query(
-    'SELECT respondent_id, response, can_respond, survey_id FROM Respondent WHERE uuid = $1 AND survey_name = $2',
+    `SELECT r.respondent_id, r.response, r.can_respond, r.survey_id
+     FROM Respondent r
+     JOIN Survey s ON (r.survey_id = s.id OR (r.survey_id IS NULL AND r.survey_name = s.name))
+     WHERE r.uuid = $1
+       AND r.survey_name = $2
+       AND s.archived_at IS NULL`,
     [userId, surveyName]
   );
 

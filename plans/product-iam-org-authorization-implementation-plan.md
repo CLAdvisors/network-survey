@@ -10,7 +10,7 @@ Implemented on branch `product-iam-org-auth-pr1`:
 - Survey creation now attaches `organization_id` and `created_by_user_id`; single editor+ membership defaults, multiple memberships require `organizationId`, no membership gets 403, and platform admins must specify an org.
 - Added additive Liquibase migration `v1_3_survey_archive.sql` for `Survey.archived_at` and `archived_by_user_id`; frontend-compatible `DELETE /api/survey/:surveyName` now archives rather than hard-deleting related data.
 - Fixed start-survey `email_sent` update to scope status changes by survey name after central survey resolution.
-- Preserved respondent public token endpoints without dashboard session requirements and kept public `demo` rejection.
+- Preserved respondent public token endpoints without dashboard session requirements, kept public `demo` rejection, and now reject archived surveys during respondent token validation.
 - Added API tests for role matrix, cross-org guessed-name denial, platform admin bypass, survey-create org default behavior, archive migration/static safety, and respondent regressions.
 - Added minimal dashboard compatibility: memberships in auth context, role helpers, multi-org create org picker, basic 403 event emission, and obvious edit/archive controls hidden for lower roles.
 

@@ -10,7 +10,7 @@ export DEBIAN_FRONTEND=noninteractive
 export AWS_DEFAULT_REGION=${aws_region}
 
 apt-get update -y
-apt-get install -y curl unzip awscli openjdk-17-jre-headless postgresql-client
+apt-get install -y curl unzip awscli openjdk-17-jre-headless postgresql-client build-essential python3
 
 # Node.js 20 LTS
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -

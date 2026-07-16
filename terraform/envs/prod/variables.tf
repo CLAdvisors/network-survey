@@ -85,17 +85,7 @@ variable "survey_domain" {
 }
 
 variable "replacement_resource_environment" {
-  description = "Environment tag used for replacement app resource discovery before legacy prod resources are retired"
-  default     = "prod-v2"
-}
-
-variable "legacy_resource_environment" {
-  description = "Environment tag for legacy deploy-glue resources so active deploy discovery can reserve Environment=prod for the normalized replacement stack later. Apply only after confirming legacy deploy discovery no longer needs Environment=prod."
-  default     = "prod-legacy"
-}
-
-variable "normalized_resource_environment" {
-  description = "Future Environment tag for the replacement app stack after legacy prod-tagged resources are retired; documented only until replacement_resource_environment is intentionally changed."
+  description = "Environment tag used for active production app resource discovery after legacy prod resources were retired"
   default     = "prod"
 }
 
@@ -128,9 +118,9 @@ variable "alb_deletion_protection" {
 }
 
 variable "enable_legacy_backend_db_access" {
-  description = "Temporarily allow the legacy prod backend security group to reach the replacement DB during migration"
+  description = "Temporarily allow the retired legacy prod backend security group to reach the replacement DB; should remain false after cutover cleanup"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "artifact_retention_days" {

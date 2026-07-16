@@ -56,17 +56,7 @@ output "prod_certificate_validation_records" {
 
 output "replacement_resource_environment" {
   value       = var.replacement_resource_environment
-  description = "Temporary Environment tag for deploy workflow discovery while legacy prod resources remain tagged Environment=prod."
-}
-
-output "legacy_resource_environment" {
-  value       = var.legacy_resource_environment
-  description = "Environment tag assigned to legacy deploy-glue resources after the legacy discovery retag is applied."
-}
-
-output "normalized_resource_environment" {
-  value       = var.normalized_resource_environment
-  description = "Future replacement app discovery Environment tag after legacy prod-tagged resources are retired."
+  description = "Environment tag for active production deploy workflow discovery."
 }
 
 output "backend_instance_id" {

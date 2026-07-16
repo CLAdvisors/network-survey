@@ -446,6 +446,13 @@ These are safe next implementation tracks under the current assumption that prod
 7. **WAF/rate limiting**
    - Decision: defer until closer to production reactivation unless public abuse is observed.
 
+8. **Private networking and API HA path**
+   - Decision: prefer ASG + EC2 over ECS/Fargate for the next backend architecture step because it is likely cheaper for this small always-on API.
+   - Roadmap: see `plans/private-networking-and-ha-roadmap.md`.
+   - Initial target: ASG-managed EC2 with desired capacity `1` for self-healing.
+   - Hardened target: API instances in private subnets with no public IPs.
+   - HA target: ASG desired capacity `2` across AZs when production uptime requirements justify the additional EC2 cost.
+
 
 ## Acceptance Criteria
 

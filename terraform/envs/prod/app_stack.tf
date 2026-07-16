@@ -356,20 +356,48 @@ resource "aws_s3_bucket" "prod_app_artifacts" {
   })
 }
 
-resource "aws_s3_bucket" "prod_app_dashboard" {
-  bucket = local.dashboard_bucket_name
+module "dashboard_frontend" {
+  source = "../../modules/frontend_static_site"
 
-  tags = merge(local.app_common_tags, {
+  site_name            = "dashboard"
+  bucket_name          = local.dashboard_bucket_name
+  domain_name          = var.dashboard_domain
+  acm_certificate_arn  = aws_acm_certificate.prod_dashboard.arn
+  enable_custom_domain = var.enable_frontend_custom_domains
+  origin_id            = "S3-dashboard"
+  oac_name             = "${local.app_name_prefix}-dashboard-${random_id.frontend_suffix.hex}"
+  oac_description      = "OAC for replacement prod dashboard"
+
+  bucket_tags = merge(local.app_common_tags, {
     Name = "${local.app_name_prefix}-dashboard"
+    App  = "ona-dashboard"
+  })
+
+  distribution_tags = merge(local.app_common_tags, {
+    Name = "${local.app_name_prefix}-dashboard-cdn"
     App  = "ona-dashboard"
   })
 }
 
-resource "aws_s3_bucket" "prod_app_survey" {
-  bucket = local.survey_bucket_name
+module "survey_frontend" {
+  source = "../../modules/frontend_static_site"
 
-  tags = merge(local.app_common_tags, {
+  site_name            = "survey"
+  bucket_name          = local.survey_bucket_name
+  domain_name          = var.survey_domain
+  acm_certificate_arn  = aws_acm_certificate.prod_survey.arn
+  enable_custom_domain = var.enable_frontend_custom_domains
+  origin_id            = "S3-survey"
+  oac_name             = "${local.app_name_prefix}-survey-${random_id.frontend_suffix.hex}"
+  oac_description      = "OAC for replacement prod survey"
+
+  bucket_tags = merge(local.app_common_tags, {
     Name = "${local.app_name_prefix}-survey"
+    App  = "ona-survey"
+  })
+
+  distribution_tags = merge(local.app_common_tags, {
+    Name = "${local.app_name_prefix}-survey-cdn"
     App  = "ona-survey"
   })
 }
@@ -378,8 +406,6 @@ resource "aws_s3_bucket_public_access_block" "prod_app" {
   for_each = {
     config    = aws_s3_bucket.prod_app_config.id
     artifacts = aws_s3_bucket.prod_app_artifacts.id
-    dashboard = aws_s3_bucket.prod_app_dashboard.id
-    survey    = aws_s3_bucket.prod_app_survey.id
   }
 
   bucket                  = each.value
@@ -393,8 +419,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "prod_app" {
   for_each = {
     config    = aws_s3_bucket.prod_app_config.id
     artifacts = aws_s3_bucket.prod_app_artifacts.id
-    dashboard = aws_s3_bucket.prod_app_dashboard.id
-    survey    = aws_s3_bucket.prod_app_survey.id
   }
 
   bucket = each.value
@@ -410,8 +434,6 @@ resource "aws_s3_bucket_versioning" "prod_app" {
   for_each = {
     config    = aws_s3_bucket.prod_app_config.id
     artifacts = aws_s3_bucket.prod_app_artifacts.id
-    dashboard = aws_s3_bucket.prod_app_dashboard.id
-    survey    = aws_s3_bucket.prod_app_survey.id
   }
 
   bucket = each.value
@@ -465,194 +487,6 @@ resource "aws_s3_bucket_policy" "prod_app_config" {
       Principal = { AWS = aws_iam_role.prod_backend.arn }
       Action    = "s3:GetObject"
       Resource  = "${aws_s3_bucket.prod_app_config.arn}/*"
-    }]
-  })
-}
-
-resource "aws_cloudfront_origin_access_control" "prod_dashboard" {
-  name                              = "${local.app_name_prefix}-dashboard-${random_id.frontend_suffix.hex}"
-  description                       = "OAC for replacement prod dashboard"
-  origin_access_control_origin_type = "s3"
-  signing_behavior                  = "always"
-  signing_protocol                  = "sigv4"
-}
-
-resource "aws_cloudfront_origin_access_control" "prod_survey" {
-  name                              = "${local.app_name_prefix}-survey-${random_id.frontend_suffix.hex}"
-  description                       = "OAC for replacement prod survey"
-  origin_access_control_origin_type = "s3"
-  signing_behavior                  = "always"
-  signing_protocol                  = "sigv4"
-}
-
-resource "aws_cloudfront_distribution" "prod_dashboard" {
-  origin {
-    domain_name              = aws_s3_bucket.prod_app_dashboard.bucket_regional_domain_name
-    origin_id                = "S3-dashboard"
-    origin_access_control_id = aws_cloudfront_origin_access_control.prod_dashboard.id
-  }
-
-  enabled             = true
-  is_ipv6_enabled     = true
-  default_root_object = "index.html"
-  aliases             = var.enable_frontend_custom_domains ? [var.dashboard_domain] : []
-
-  default_cache_behavior {
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "S3-dashboard"
-    viewer_protocol_policy = "redirect-to-https"
-    compress               = true
-
-    forwarded_values {
-      query_string            = true
-      query_string_cache_keys = ["v"]
-      headers                 = ["Origin"]
-      cookies { forward = "none" }
-    }
-
-    min_ttl     = 0
-    default_ttl = 3600
-    max_ttl     = 86400
-  }
-
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  restrictions {
-    geo_restriction { restriction_type = "none" }
-  }
-
-  dynamic "viewer_certificate" {
-    for_each = var.enable_frontend_custom_domains ? [1] : []
-    content {
-      acm_certificate_arn      = aws_acm_certificate.prod_dashboard.arn
-      ssl_support_method       = "sni-only"
-      minimum_protocol_version = "TLSv1.2_2021"
-    }
-  }
-
-  dynamic "viewer_certificate" {
-    for_each = var.enable_frontend_custom_domains ? [] : [1]
-    content {
-      cloudfront_default_certificate = true
-    }
-  }
-
-  tags = merge(local.app_common_tags, {
-    Name = "${local.app_name_prefix}-dashboard-cdn"
-    App  = "ona-dashboard"
-  })
-}
-
-resource "aws_cloudfront_distribution" "prod_survey" {
-  origin {
-    domain_name              = aws_s3_bucket.prod_app_survey.bucket_regional_domain_name
-    origin_id                = "S3-survey"
-    origin_access_control_id = aws_cloudfront_origin_access_control.prod_survey.id
-  }
-
-  enabled             = true
-  is_ipv6_enabled     = true
-  default_root_object = "index.html"
-  aliases             = var.enable_frontend_custom_domains ? [var.survey_domain] : []
-
-  default_cache_behavior {
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "S3-survey"
-    viewer_protocol_policy = "redirect-to-https"
-    compress               = true
-
-    forwarded_values {
-      query_string            = true
-      query_string_cache_keys = ["v"]
-      headers                 = ["Origin"]
-      cookies { forward = "none" }
-    }
-
-    min_ttl     = 0
-    default_ttl = 3600
-    max_ttl     = 86400
-  }
-
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  restrictions {
-    geo_restriction { restriction_type = "none" }
-  }
-
-  dynamic "viewer_certificate" {
-    for_each = var.enable_frontend_custom_domains ? [1] : []
-    content {
-      acm_certificate_arn      = aws_acm_certificate.prod_survey.arn
-      ssl_support_method       = "sni-only"
-      minimum_protocol_version = "TLSv1.2_2021"
-    }
-  }
-
-  dynamic "viewer_certificate" {
-    for_each = var.enable_frontend_custom_domains ? [] : [1]
-    content {
-      cloudfront_default_certificate = true
-    }
-  }
-
-  tags = merge(local.app_common_tags, {
-    Name = "${local.app_name_prefix}-survey-cdn"
-    App  = "ona-survey"
-  })
-}
-
-resource "aws_s3_bucket_policy" "prod_app_dashboard" {
-  bucket = aws_s3_bucket.prod_app_dashboard.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "cloudfront.amazonaws.com" }
-      Action    = "s3:GetObject"
-      Resource  = "${aws_s3_bucket.prod_app_dashboard.arn}/*"
-      Condition = { StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.prod_dashboard.arn } }
-    }]
-  })
-}
-
-resource "aws_s3_bucket_policy" "prod_app_survey" {
-  bucket = aws_s3_bucket.prod_app_survey.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "cloudfront.amazonaws.com" }
-      Action    = "s3:GetObject"
-      Resource  = "${aws_s3_bucket.prod_app_survey.arn}/*"
-      Condition = { StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.prod_survey.arn } }
     }]
   })
 }

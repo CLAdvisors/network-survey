@@ -89,6 +89,16 @@ variable "replacement_resource_environment" {
   default     = "prod-v2"
 }
 
+variable "legacy_resource_environment" {
+  description = "Environment tag for legacy deploy-glue resources so active deploy discovery can reserve Environment=prod for the normalized replacement stack later. Apply only after confirming legacy deploy discovery no longer needs Environment=prod."
+  default     = "prod-legacy"
+}
+
+variable "normalized_resource_environment" {
+  description = "Future Environment tag for the replacement app stack after legacy prod-tagged resources are retired; documented only until replacement_resource_environment is intentionally changed."
+  default     = "prod"
+}
+
 variable "app_public_subnet_cidrs" {
   description = "Two fresh public subnet CIDRs in the existing prod DB VPC (VPC quota prevents creating another VPC in this account)"
   type        = list(string)

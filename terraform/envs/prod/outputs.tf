@@ -59,6 +59,16 @@ output "replacement_resource_environment" {
   description = "Temporary Environment tag for deploy workflow discovery while legacy prod resources remain tagged Environment=prod."
 }
 
+output "legacy_resource_environment" {
+  value       = var.legacy_resource_environment
+  description = "Environment tag assigned to legacy deploy-glue resources after the legacy discovery retag is applied."
+}
+
+output "normalized_resource_environment" {
+  value       = var.normalized_resource_environment
+  description = "Future replacement app discovery Environment tag after legacy prod-tagged resources are retired."
+}
+
 output "backend_instance_id" {
   value = aws_instance.prod_backend.id
 }
@@ -78,21 +88,21 @@ output "artifacts_bucket_name" {
 }
 
 output "dashboard_bucket_name" {
-  value       = aws_s3_bucket.prod_app_dashboard.bucket
+  value       = module.dashboard_frontend.bucket_name
   description = "Replacement dashboard deployment bucket."
 }
 
 output "survey_bucket_name" {
-  value       = aws_s3_bucket.prod_app_survey.bucket
+  value       = module.survey_frontend.bucket_name
   description = "Replacement survey deployment bucket."
 }
 
 output "dashboard_distribution_id" {
-  value = aws_cloudfront_distribution.prod_dashboard.id
+  value = module.dashboard_frontend.distribution_id
 }
 
 output "survey_distribution_id" {
-  value = aws_cloudfront_distribution.prod_survey.id
+  value = module.survey_frontend.distribution_id
 }
 
 output "runtime_secret_parameter_names" {
@@ -110,11 +120,11 @@ output "api_alb_dns_name" {
 }
 
 output "dashboard_cloudfront_domain" {
-  value       = aws_cloudfront_distribution.prod_dashboard.domain_name
+  value       = module.dashboard_frontend.cloudfront_domain_name
   description = "External DNS target: point demo.ona.dashboard.bennetts.work CNAME here after frontend aliases are attached."
 }
 
 output "survey_cloudfront_domain" {
-  value       = aws_cloudfront_distribution.prod_survey.domain_name
+  value       = module.survey_frontend.cloudfront_domain_name
   description = "External DNS target: point demo.ona.survey.bennetts.work CNAME here after frontend aliases are attached."
 }

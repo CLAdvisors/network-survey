@@ -1,6 +1,6 @@
 --liquibase formatted sql
 
---changeset cladvisors:product-iam-survey-archive-1
+--changeset cladvisors:product-iam-survey-archive-1 splitStatements:false
 --comment Add additive soft-archive fields for org-scoped survey lifecycle authorization.
 ALTER TABLE Survey ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP NULL;
 ALTER TABLE Survey ADD COLUMN IF NOT EXISTS archived_by_user_id INTEGER NULL;

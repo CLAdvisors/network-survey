@@ -11,7 +11,7 @@ on:
         description: Environment to plan
         required: true
         type: choice
-        options: [staging, prod-v2, prod]
+        options: [staging, prod]
         default: staging
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
               WORKSPACE=
               VAR_FILE=staging.tfvars
               ;;
-            prod-v2|prod)
+            prod)
               WORKING_DIR=terraform/envs/prod
               WORKSPACE=
               VAR_FILE=

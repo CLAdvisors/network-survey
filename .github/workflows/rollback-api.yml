@@ -50,9 +50,6 @@ jobs:
           set -euo pipefail
           case "${{ inputs.environment }}" in
             production)
-              # Keep production environment var TF_ENV=prod-v2 until legacy
-              # Environment=prod resources are retired/retagged; then remove
-              # the override and use the normalized prod default.
               DEFAULT_TF_ENV=prod
               DEFAULT_API_HOST=demo.ona.api.bennetts.work
               ;;

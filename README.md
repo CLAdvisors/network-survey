@@ -29,6 +29,8 @@ Use the root scripts instead of starting each service in a separate terminal.
 
 The API runner treats `RESEND_API_KEY` or `RESEND_KEY` as optional for startup. Email-sending features will fail at runtime if neither key is configured.
 
+Public dashboard self-signup is controlled by `ALLOW_PUBLIC_SIGNUP`. It defaults to enabled only in local/dev/test when unset; set `ALLOW_PUBLIC_SIGNUP=false` for staging/production unless public account creation is explicitly desired. `AUTH_RATE_LIMIT_MAX` and `RESPONDENT_RATE_LIMIT_MAX` can tune API throttling for login/register and respondent-token endpoints.
+
 ### Database bootstrap notes
 
 - `db:setup` reads DB credentials from `api/.env.local`

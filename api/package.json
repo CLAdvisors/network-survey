@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
   "author": "",
   "license": "ISC",
@@ -17,6 +17,7 @@
     "dotenv": "^16.3.1",
     "dotenv-flow": "^4.1.0",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.5.2",
     "express-session": "^1.18.1",
     "fs": "^0.0.1-security",
     "nanoid": "^3.3.4",
@@ -26,6 +27,7 @@
     "sqlite3": "^5.1.6"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "nodemon": "^2.0.22",
+    "supertest": "^7.2.2"
   }
 }

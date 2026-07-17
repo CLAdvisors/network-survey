@@ -117,7 +117,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
                 try {
                   const response = await api.post('/testEmail', {
                     email: row.email,
-                    surveyName: params.row.surveyName,
+                    surveyName,
                     language: row.language
                   });
                   alert(response.data?.message || 'Email sent successfully via test route!');

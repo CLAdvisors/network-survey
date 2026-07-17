@@ -239,13 +239,20 @@ test('remaining IAM migration adds audit, invite/reset, and non-destructive surv
   assert.match(remaining, /CREATE TABLE IF NOT EXISTS password_reset_tokens/i);
   assert.match(remaining, /ALTER TABLE Survey ADD COLUMN IF NOT EXISTS display_name/i);
   assert.match(remaining, /CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_org_slug_active/i);
+  assert.match(remaining, /active_slug_population/i);
+  assert.match(remaining, /active_slug_duplicates/i);
+  assert.match(remaining, /slug = s\.slug \|\| '-' \|\| s\.id::text/i);
   assert.doesNotMatch(remaining, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|ALTER\s+TABLE[\s\S]+DROP\s+COLUMN/i);
 });
 
-test('password reset request stores only token hash and returns raw token once for manual delivery', async (t) => {
+test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {
   const originalQuery = pool.query;
+  const originalReturnDevTokens = process.env.RETURN_DEV_TOKENS;
+  process.env.RETURN_DEV_TOKENS = 'true';
   t.after(() => {
     pool.query = originalQuery;
+    if (originalReturnDevTokens === undefined) delete process.env.RETURN_DEV_TOKENS;
+    else process.env.RETURN_DEV_TOKENS = originalReturnDevTokens;
   });
 
   const calls = [];
@@ -270,6 +277,33 @@ test('password reset request stores only token hash and returns raw token once f
   assert.ok(insertCall);
   assert.notEqual(insertCall.values[1], res.body.token);
   assert.equal(insertCall.values[1], hashToken(res.body.token));
+});
+
+test('password reset request does not expose raw token based on NODE_ENV alone', async (t) => {
+  const originalQuery = pool.query;
+  const originalReturnDevTokens = process.env.RETURN_DEV_TOKENS;
+  delete process.env.RETURN_DEV_TOKENS;
+  t.after(() => {
+    pool.query = originalQuery;
+    if (originalReturnDevTokens === undefined) delete process.env.RETURN_DEV_TOKENS;
+    else process.env.RETURN_DEV_TOKENS = originalReturnDevTokens;
+  });
+
+  pool.query = async (sql) => {
+    if (/SELECT id, username, email FROM users/.test(sql)) {
+      return { rows: [{ id: 19, username: 'reset-user', email: 'reset@example.com' }] };
+    }
+    return { rows: [], rowCount: 1 };
+  };
+
+  const res = await request(app)
+    .post('/api/password-reset/request')
+    .send({ username: 'reset-user' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.token, undefined);
+  assert.equal(res.body.resetUrl, undefined);
 });
 
 test('member update API prevents admins from assigning owner role', async (t) => {
@@ -308,6 +342,9 @@ test('member update API prevents admins from assigning owner role', async (t) =>
   pool.connect = async () => ({
     query: async (sql, values) => {
       if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql === 'COMMIT') return { rows: [], rowCount: 0 };
+      if (/SELECT om\.role\s+FROM organization_memberships om/.test(sql)) {
+        return { rows: [{ role: 'admin' }] };
+      }
       if (/SELECT om\.role, u\.status, u\.username/.test(sql)) {
         return { rows: [{ role: 'editor', status: 'active', username: 'target-user' }] };
       }
@@ -334,6 +371,8 @@ test('member management, invite, reset, and audit routes are present with requir
   assert.match(serverSource, /Cannot remove the last active owner/);
   assert.match(serverSource, /Only owners can modify owners/);
   assert.match(serverSource, /Only owners can assign owner role/);
+  assert.match(serverSource, /lockedActorMembership/);
+  assert.match(serverSource, /FOR UPDATE`/);
   assert.match(serverSource, /lockRows: true/);
   assert.match(serverSource, /app\.post\('\/api\/orgs\/:organizationId\/invites'/);
   assert.match(serverSource, /app\.post\('\/api\/invites\/accept'/);
@@ -341,6 +380,68 @@ test('member management, invite, reset, and audit routes are present with requir
   assert.match(serverSource, /app\.post\('\/api\/password-reset\/complete'/);
   assert.match(serverSource, /eventType: 'member\.updated'/);
   assert.match(serverSource, /eventType: 'survey\.archived'/);
+});
+
+test('/api/testEmail rejects arbitrary recipients instead of falling back to another respondent token', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const hashedPassword = await bcrypt.hash('password123', 4);
+  pool.query = async (sql, values) => {
+    if (/SELECT \* FROM users WHERE username = \$1/.test(sql)) {
+      return { rows: [{ id: 31, username: 'editor-user', password: hashedPassword, status: 'active' }] };
+    }
+    if (/SELECT \* FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ id: 31, username: 'editor-user', status: 'active' }] };
+    }
+    if (/information_schema\.columns/.test(sql)) return { rows: [] };
+    if (/SELECT[\s\S]+sess[\s\S]+FROM[\s\S]+sessions/i.test(sql)) {
+      return { rows: [{ sess: { cookie: {}, userId: 31, username: 'editor-user' } }], rowCount: 1 };
+    }
+    if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
+    if (/LEFT JOIN organization_memberships/.test(sql)) {
+      return {
+        rows: [{
+          id: '11111111-1111-4111-8111-111111111111',
+          name: 'Survey A',
+          organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          role: 'editor',
+        }]
+      };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+
+  const sendTestQueries = [];
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      sendTestQueries.push({ sql, values });
+      if (/SELECT text FROM email/.test(sql)) return { rows: [{ text: 'Hello {{link}}' }] };
+      if (/SELECT uuid FROM Respondent/.test(sql)) {
+        assert.match(sql, /lower\(contact_info\) = lower\(\$3\)/);
+        assert.deepEqual(values, ['11111111-1111-4111-8111-111111111111', 'Survey A', 'attacker@example.com']);
+        return { rows: [] };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+    release() {}
+  });
+
+  const agent = request.agent(app);
+  const loginRes = await agent.post('/api/login').send({ username: 'editor-user', password: 'password123' });
+  assert.equal(loginRes.status, 200);
+
+  const res = await agent
+    .post('/api/testEmail')
+    .send({ surveyName: 'Survey A', language: 'English', email: 'attacker@example.com' });
+
+  assert.equal(res.status, 404);
+  assert.match(res.body.message, /Reminders can only be sent/);
+  assert.equal(sendTestQueries.some((call) => /SELECT uuid FROM Respondent/.test(call.sql)), true);
 });
 
 test('dashboard read-only tables hide edit controls and demo email avoids public demo token', () => {
@@ -354,7 +455,10 @@ test('dashboard read-only tables hide edit controls and demo email avoids public
   assert.match(respondentTable, /readOnly = false/);
   assert.match(respondentTable, /disabled=\{readOnly\}/);
   assert.match(respondentTable, /!readOnly &&/);
+  assert.match(respondentTable, /surveyName,/);
+  assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);
   assert.doesNotMatch(serverSource, /sendMail\(email, 'demo'/);
+  assert.match(serverSource, /lower\(contact_info\) = lower\(\$3\)/);
   assert.match(serverSource, /No active respondent token found/);
 });
 

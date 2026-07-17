@@ -5,7 +5,43 @@
 ALTER TABLE Survey ADD COLUMN IF NOT EXISTS display_name TEXT;
 ALTER TABLE Survey ADD COLUMN IF NOT EXISTS slug TEXT;
 UPDATE Survey SET display_name = name WHERE display_name IS NULL;
-UPDATE Survey SET slug = lower(regexp_replace(name, '[^a-zA-Z0-9]+', '-', 'g')) WHERE slug IS NULL;
+WITH slug_candidates AS (
+    SELECT
+        id,
+        organization_id,
+        COALESCE(NULLIF(trim(both '-' FROM lower(regexp_replace(name, '[^a-zA-Z0-9]+', '-', 'g'))), ''), 'survey') AS base_slug
+    FROM Survey
+    WHERE slug IS NULL
+), active_slug_population AS (
+    SELECT sc.id, sc.organization_id, sc.base_slug
+    FROM slug_candidates sc
+    JOIN Survey s ON s.id = sc.id
+    WHERE s.archived_at IS NULL AND sc.organization_id IS NOT NULL
+    UNION ALL
+    SELECT existing.id, existing.organization_id, existing.slug AS base_slug
+    FROM Survey existing
+    WHERE existing.slug IS NOT NULL AND existing.archived_at IS NULL AND existing.organization_id IS NOT NULL
+), collision_flags AS (
+    SELECT id, COUNT(*) OVER (PARTITION BY organization_id, base_slug) AS active_collision_count
+    FROM active_slug_population
+)
+UPDATE Survey s
+SET slug = CASE
+    WHEN COALESCE(cf.active_collision_count, 1) > 1 THEN sc.base_slug || '-' || s.id::text
+    ELSE sc.base_slug
+END
+FROM slug_candidates sc
+LEFT JOIN collision_flags cf ON cf.id = sc.id
+WHERE s.id = sc.id;
+WITH active_slug_duplicates AS (
+    SELECT id, ROW_NUMBER() OVER (PARTITION BY organization_id, slug ORDER BY id) AS duplicate_ordinal
+    FROM Survey
+    WHERE archived_at IS NULL AND organization_id IS NOT NULL AND slug IS NOT NULL
+)
+UPDATE Survey s
+SET slug = s.slug || '-' || s.id::text
+FROM active_slug_duplicates d
+WHERE s.id = d.id AND d.duplicate_ordinal > 1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_org_slug_active ON Survey (organization_id, slug) WHERE archived_at IS NULL AND organization_id IS NOT NULL AND slug IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS audit_events (

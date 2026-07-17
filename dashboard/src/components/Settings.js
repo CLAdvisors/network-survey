@@ -73,26 +73,41 @@ const Settings = () => {
                 <Typography variant="h6">{membership.organizationName || membership.organizationId}</Typography>
                 <Typography color="text.secondary">Your role: {membership.role}</Typography>
                 {!canManage && <Typography sx={{ mt: 2 }}>Member management is available to owners and admins.</Typography>}
-                {canManage && members.map((member) => (
-                  <Stack key={member.id} direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mt: 2 }} alignItems="center">
-                    <Box sx={{ flexGrow: 1 }}>
-                      <Typography>{member.displayName || member.username}</Typography>
-                      <Typography color="text.secondary" variant="body2">{member.email || member.username}</Typography>
-                    </Box>
-                    <FormControl size="small" sx={{ minWidth: 130 }}>
-                      <InputLabel>Role</InputLabel>
-                      <Select label="Role" value={member.role} onChange={(e) => updateMember(membership.organizationId, member.id, { role: e.target.value })}>
-                        {roles.map((role) => <MenuItem key={role} value={role}>{role}</MenuItem>)}
-                      </Select>
-                    </FormControl>
-                    <FormControl size="small" sx={{ minWidth: 130 }}>
-                      <InputLabel>Status</InputLabel>
-                      <Select label="Status" value={member.status} onChange={(e) => updateMember(membership.organizationId, member.id, { status: e.target.value })}>
-                        {statuses.map((status) => <MenuItem key={status} value={status}>{status}</MenuItem>)}
-                      </Select>
-                    </FormControl>
-                  </Stack>
-                ))}
+                {canManage && members.map((member) => {
+                  const canManageOwners = user?.isPlatformAdmin || membership.role === 'owner';
+                  const canModifyMember = canManageOwners || member.role !== 'owner';
+                  const selectableRoles = canManageOwners ? roles : roles.filter((role) => role !== 'owner');
+
+                  return (
+                    <Stack key={member.id} direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mt: 2 }} alignItems="center">
+                      <Box sx={{ flexGrow: 1 }}>
+                        <Typography>{member.displayName || member.username}</Typography>
+                        <Typography color="text.secondary" variant="body2">{member.email || member.username}</Typography>
+                      </Box>
+                      {canModifyMember ? (
+                        <>
+                          <FormControl size="small" sx={{ minWidth: 130 }}>
+                            <InputLabel>Role</InputLabel>
+                            <Select label="Role" value={member.role} onChange={(e) => updateMember(membership.organizationId, member.id, { role: e.target.value })}>
+                              {selectableRoles.map((role) => <MenuItem key={role} value={role}>{role}</MenuItem>)}
+                            </Select>
+                          </FormControl>
+                          <FormControl size="small" sx={{ minWidth: 130 }}>
+                            <InputLabel>Status</InputLabel>
+                            <Select label="Status" value={member.status} onChange={(e) => updateMember(membership.organizationId, member.id, { status: e.target.value })}>
+                              {statuses.map((status) => <MenuItem key={status} value={status}>{status}</MenuItem>)}
+                            </Select>
+                          </FormControl>
+                        </>
+                      ) : (
+                        <Box sx={{ minWidth: 260 }}>
+                          <Typography variant="body2">Role: {member.role}</Typography>
+                          <Typography color="text.secondary" variant="body2">Status: {member.status}</Typography>
+                        </Box>
+                      )}
+                    </Stack>
+                  );
+                })}
               </CardContent>
             </Card>
           );

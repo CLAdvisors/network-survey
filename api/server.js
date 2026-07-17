@@ -174,7 +174,6 @@ async function sendTestMail(email, survey, lang) {
   try {
     const query = `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
     const values = [survey.id, survey.name, lang];
-    console.log(values);
     const response = await client.query(query, values);
     
     if (!response.rows || response.rows.length === 0) {
@@ -188,17 +187,22 @@ async function sendTestMail(email, survey, lang) {
 
     const respondentResult = await client.query(
       `SELECT uuid FROM Respondent
-       WHERE ${legacySurveyPredicate()} AND can_respond = true AND uuid IS NOT NULL
+       WHERE ${legacySurveyPredicate()}
+         AND can_respond = true
+         AND uuid IS NOT NULL
+         AND lower(contact_info) = lower($3)
        ORDER BY respondent_id
        LIMIT 1`,
-      [survey.id, survey.name]
+      [survey.id, survey.name, email]
     );
-    const demoToken = respondentResult.rows[0]?.uuid;
-    if (!demoToken) {
-      throw new Error(`No active respondent token found for survey '${survey.name}'. Seed or add a respondent before sending a demo email.`);
+    const respondentToken = respondentResult.rows[0]?.uuid;
+    if (!respondentToken) {
+      const error = new Error(`No active respondent token found for '${email}' on survey '${survey.name}'. Reminders can only be sent to that respondent's own email address.`);
+      error.statusCode = 404;
+      throw error;
     }
 
-    await sendMail(email, demoToken, survey.name, text);
+    await sendMail(email, respondentToken, survey.name, text);
   } finally {
     client.release();
   }
@@ -842,6 +846,21 @@ app.patch('/api/orgs/:organizationId/members/:userId', express.json(), requireAu
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const actorResult = await client.query(
+      `SELECT om.role
+       FROM organization_memberships om
+       JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1 AND om.user_id = $2
+         AND COALESCE(u.status, 'active') = 'active'
+       FOR UPDATE`,
+      [organizationId, req.user.id]
+    );
+    const lockedActorMembership = actorResult.rows[0];
+    if (!actorMembership.platformAdmin && !hasAnyRole(lockedActorMembership?.role, ADMIN_ROLES)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Organization admin access is required.' });
+    }
+
     const targetResult = await client.query(
       `SELECT om.role, u.status, u.username
        FROM organization_memberships om
@@ -856,7 +875,7 @@ app.patch('/api/orgs/:organizationId/members/:userId', express.json(), requireAu
       return res.status(404).json({ message: 'Member not found.' });
     }
 
-    const actorCanManageOwners = actorMembership.role === 'owner' || actorMembership.platformAdmin;
+    const actorCanManageOwners = lockedActorMembership?.role === 'owner' || actorMembership.platformAdmin;
     if (target.role === 'owner' && !actorCanManageOwners) {
       await client.query('ROLLBACK');
       return res.status(403).json({ message: 'Only owners can modify owners.' });
@@ -972,7 +991,7 @@ app.post('/api/password-reset/request', express.json(), authRateLimiter, async (
     const token = newRawToken();
     await pool.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + interval '1 hour')`, [user.id, hashToken(token)]);
     await logAuditEvent({ actorUserId: user.id, targetUserId: user.id, eventType: 'password_reset.requested' });
-    const devTokenPayload = process.env.NODE_ENV !== 'production' || process.env.RETURN_DEV_TOKENS === 'true'
+    const devTokenPayload = process.env.RETURN_DEV_TOKENS === 'true'
       ? { token, resetUrl: `${process.env.DASHBOARD_URL || ''}/reset-password?token=${token}` }
       : {};
     res.json({ success: true, ...devTokenPayload });
@@ -1278,7 +1297,7 @@ app.post('/api/testEmail', express.json(), requireAuth, async (req, res) => {
     res.status(200).json({ message: 'Test email sent successfully!' });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: error.message || 'Error occurred while sending test email.' });
+    res.status(error.statusCode || 500).json({ message: error.message || 'Error occurred while sending test email.' });
   }
 });
 

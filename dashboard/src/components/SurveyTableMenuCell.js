@@ -15,7 +15,6 @@ import {
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayCircle from '@mui/icons-material/PlayCircle';
-import VisibilityIcon from '@mui/icons-material/Visibility';
 import EmailIcon from '@mui/icons-material/Email';
 import SendDemoDialog from './SendDemoDialog';
 import api from '../api/axios';
@@ -64,7 +63,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
   // Modify handleStartConfirm
   const handleStartConfirm = async () => {
     try {
-      await api.post('/startSurvey', { surveyName: row.name });
+      await api.post('/startSurvey', { surveyName: row.id || row.name });
       setStartConfirmOpen(false);
       setSnackbar({
         open: true,
@@ -96,7 +95,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
 
   const handleDeleteConfirm = async () => {
     try {
-      const response = await api.delete(`/survey/${row.name}`);
+      const response = await api.delete(`/survey/${row.id || row.name}`);
       if (response.status === 200) {
         onSurveyDeleted(row.name);
       }
@@ -113,12 +112,6 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     setDeleteConfirmOpen(false);
   };
 
-  const handleView = (event) => {
-    event.stopPropagation();
-    window.open(`${process.env.REACT_APP_SURVEY_PROTOCOL}://${process.env.REACT_APP_SURVEY_ENDPOINT}/?surveyName=${row.name}&userId=demo`);
-    handleClose();
-  };
-
   const handleSendDemo = (event) => {
     event.stopPropagation();
     setSendDemoOpen(true);
@@ -128,7 +121,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
   const handleSendDemoSubmit = async (email, language) => {
     try {
       await api.post('/testEmail', {
-        surveyName: row.name,
+        surveyName: row.id || row.name,
         email: email,
         language: language
       });
@@ -197,10 +190,6 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
         transformOrigin={{ horizontal: 'right', vertical: 'top' }}
         anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
       >
-        <MenuItem onClick={handleView}>
-          <VisibilityIcon fontSize="small" />
-          Demo Survey
-        </MenuItem>
         {canEditSurvey(row) && (
           <MenuItem onClick={handleSendDemo}>
             <EmailIcon fontSize="small" />
@@ -263,7 +252,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
         open={sendDemoOpen}
         onClose={() => setSendDemoOpen(false)}
         onSubmit={handleSendDemoSubmit}
-        surveyName={row.name}
+        surveyName={row.id || row.name}
       />
       
     </>

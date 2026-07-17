@@ -257,7 +257,7 @@ const Results = () => {
             onChange={(e) => setSelectedSurvey(e.target.value)}
           >
             {surveys.map((survey) => (
-              <MenuItem key={survey.name} value={survey.name}>
+              <MenuItem key={survey.id || survey.name} value={survey.id || survey.name}>
                 {survey.name}
               </MenuItem>
             ))}

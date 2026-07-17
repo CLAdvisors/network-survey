@@ -26,6 +26,7 @@ const {
   ANALYST_ROLES,
   EDITOR_ROLES,
   ADMIN_ROLES,
+  hashToken,
 } = require('../server');
 
 test('dashboard/admin endpoints require authentication', async () => {
@@ -226,6 +227,76 @@ test('safe user serialization omits password hashes', () => {
     lastLoginAt: null,
   });
   assert.equal(safe.password, undefined);
+});
+
+test('remaining IAM migration adds audit, invite/reset, and non-destructive survey identifier foundation', () => {
+  const changelog = fs.readFileSync(path.join(__dirname, '../../db/changelogs/master-changelog.xml'), 'utf8');
+  const remaining = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_4_product_iam_remaining.sql'), 'utf8');
+
+  assert.match(changelog, /v1_4_product_iam_remaining\.sql/);
+  assert.match(remaining, /CREATE TABLE IF NOT EXISTS audit_events/i);
+  assert.match(remaining, /CREATE TABLE IF NOT EXISTS organization_invites/i);
+  assert.match(remaining, /CREATE TABLE IF NOT EXISTS password_reset_tokens/i);
+  assert.match(remaining, /ALTER TABLE Survey ADD COLUMN IF NOT EXISTS display_name/i);
+  assert.match(remaining, /CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_org_slug_active/i);
+  assert.doesNotMatch(remaining, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|ALTER\s+TABLE[\s\S]+DROP\s+COLUMN/i);
+});
+
+test('password reset request stores only token hash and returns raw token once for manual delivery', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  const calls = [];
+  pool.query = async (sql, values) => {
+    calls.push({ sql, values });
+    if (/SELECT id, username, email FROM users/.test(sql)) {
+      return { rows: [{ id: 9, username: 'reset-user', email: 'reset@example.com' }] };
+    }
+    if (/information_schema\.tables/.test(sql)) {
+      return { rows: [] };
+    }
+    return { rows: [], rowCount: 1 };
+  };
+
+  const res = await request(app)
+    .post('/api/password-reset/request')
+    .send({ username: 'reset-user' });
+
+  assert.equal(res.status, 200);
+  assert.equal(typeof res.body.token, 'string');
+  const insertCall = calls.find(call => /INSERT INTO password_reset_tokens/.test(call.sql));
+  assert.ok(insertCall);
+  assert.notEqual(insertCall.values[1], res.body.token);
+  assert.equal(insertCall.values[1], hashToken(res.body.token));
+});
+
+test('member management, invite, reset, and audit routes are present with required guardrails', () => {
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /app\.get\('\/api\/orgs\/:organizationId\/members'/);
+  assert.match(serverSource, /app\.patch\('\/api\/orgs\/:organizationId\/members\/:userId'/);
+  assert.match(serverSource, /You cannot disable your own account/);
+  assert.match(serverSource, /Cannot remove the last active owner/);
+  assert.match(serverSource, /Only owners can modify owners/);
+  assert.match(serverSource, /app\.post\('\/api\/orgs\/:organizationId\/invites'/);
+  assert.match(serverSource, /app\.post\('\/api\/invites\/accept'/);
+  assert.match(serverSource, /app\.post\('\/api\/password-reset\/request'/);
+  assert.match(serverSource, /app\.post\('\/api\/password-reset\/complete'/);
+  assert.match(serverSource, /eventType: 'member\.updated'/);
+  assert.match(serverSource, /eventType: 'survey\.archived'/);
+});
+
+test('demo seed is local-guarded, idempotent, and uses real respondent tokens', () => {
+  const seed = fs.readFileSync(path.join(__dirname, '../../scripts/dev/seed-demo-account.js'), 'utf8');
+  const menu = fs.readFileSync(path.join(__dirname, '../../dashboard/src/components/SurveyTableMenuCell.js'), 'utf8');
+  assert.match(seed, /DEMO_SEED_ALLOW_NONLOCAL/);
+  assert.match(seed, /ON CONFLICT \(slug\) DO UPDATE/);
+  assert.match(seed, /ON CONFLICT \(username\) DO UPDATE/);
+  assert.match(seed, /ON CONFLICT \(name, survey_name\) DO UPDATE/);
+  assert.match(seed, /demo-alex-token/);
+  assert.doesNotMatch(seed, /userId=demo/);
+  assert.doesNotMatch(menu, /userId=demo/);
 });
 
 test('Phase 2/3 IAM migrations are included and avoid destructive operations', () => {

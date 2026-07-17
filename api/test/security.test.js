@@ -272,6 +272,60 @@ test('password reset request stores only token hash and returns raw token once f
   assert.equal(insertCall.values[1], hashToken(res.body.token));
 });
 
+test('member update API prevents admins from assigning owner role', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const hashedPassword = await bcrypt.hash('password123', 4);
+  pool.query = async (sql, values) => {
+    if (/SELECT \* FROM users WHERE username = \$1/.test(sql)) {
+      return { rows: [{ id: 10, username: 'admin-user', password: hashedPassword, status: 'active' }] };
+    }
+    if (/SELECT \* FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ id: 10, username: 'admin-user', status: 'active' }] };
+    }
+    if (/information_schema\.columns/.test(sql)) return { rows: [] };
+    if (/SELECT[\s\S]+sess[\s\S]+FROM[\s\S]+sessions/i.test(sql)) {
+      return { rows: [{ sess: { cookie: {}, userId: 10, username: 'admin-user' } }], rowCount: 1 };
+    }
+    if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
+    if (/FROM organization_memberships om/.test(sql)) return { rows: [] };
+    if (/FROM organization_memberships\s+WHERE organization_id = \$1 AND user_id = \$2/.test(sql)) {
+      return { rows: [{ role: 'admin', organization_id: values[0] }] };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+
+  const agent = request.agent(app);
+  const loginRes = await agent.post('/api/login').send({ username: 'admin-user', password: 'password123' });
+  assert.equal(loginRes.status, 200);
+
+  let updateAttempted = false;
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql === 'COMMIT') return { rows: [], rowCount: 0 };
+      if (/SELECT om\.role, u\.status, u\.username/.test(sql)) {
+        return { rows: [{ role: 'editor', status: 'active', username: 'target-user' }] };
+      }
+      if (/UPDATE organization_memberships|UPDATE users/.test(sql)) updateAttempted = true;
+      return { rows: [], rowCount: 0 };
+    },
+    release() {}
+  });
+
+  const res = await agent
+    .patch('/api/orgs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/members/11')
+    .send({ role: 'owner' });
+
+  assert.equal(res.status, 403);
+  assert.match(res.body.message, /Only owners can assign owner role/);
+  assert.equal(updateAttempted, false);
+});
+
 test('member management, invite, reset, and audit routes are present with required guardrails', () => {
   const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
   assert.match(serverSource, /app\.get\('\/api\/orgs\/:organizationId\/members'/);
@@ -279,12 +333,29 @@ test('member management, invite, reset, and audit routes are present with requir
   assert.match(serverSource, /You cannot disable your own account/);
   assert.match(serverSource, /Cannot remove the last active owner/);
   assert.match(serverSource, /Only owners can modify owners/);
+  assert.match(serverSource, /Only owners can assign owner role/);
+  assert.match(serverSource, /lockRows: true/);
   assert.match(serverSource, /app\.post\('\/api\/orgs\/:organizationId\/invites'/);
   assert.match(serverSource, /app\.post\('\/api\/invites\/accept'/);
   assert.match(serverSource, /app\.post\('\/api\/password-reset\/request'/);
   assert.match(serverSource, /app\.post\('\/api\/password-reset\/complete'/);
   assert.match(serverSource, /eventType: 'member\.updated'/);
   assert.match(serverSource, /eventType: 'survey\.archived'/);
+});
+
+test('dashboard read-only tables hide edit controls and demo email avoids public demo token', () => {
+  const questionTable = fs.readFileSync(path.join(__dirname, '../../dashboard/src/components/QuestionTable.js'), 'utf8');
+  const respondentTable = fs.readFileSync(path.join(__dirname, '../../dashboard/src/components/RespondentTable.js'), 'utf8');
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+
+  assert.match(questionTable, /readOnly = false/);
+  assert.match(questionTable, /editable: !readOnly/);
+  assert.match(questionTable, /!readOnly &&/);
+  assert.match(respondentTable, /readOnly = false/);
+  assert.match(respondentTable, /disabled=\{readOnly\}/);
+  assert.match(respondentTable, /!readOnly &&/);
+  assert.doesNotMatch(serverSource, /sendMail\(email, 'demo'/);
+  assert.match(serverSource, /No active respondent token found/);
 });
 
 test('demo seed is local-guarded, idempotent, and uses real respondent tokens', () => {

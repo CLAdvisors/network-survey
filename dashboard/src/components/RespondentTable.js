@@ -51,7 +51,7 @@ const formatRowsToCSV = (rows) => {
   return `${CSV_HEADER}\n${dataRows.join('\n')}`;
 };
 
-const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
+const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = false }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
@@ -64,13 +64,13 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
   ]);
 
   const columns = [
-    { field: 'name', headerName: 'User Name', width: 150, editable: true },
-    { field: 'email', headerName: 'Email', width: 200, editable: true },
+    { field: 'name', headerName: 'User Name', width: 150, editable: !readOnly },
+    { field: 'email', headerName: 'Email', width: 200, editable: !readOnly },
     { 
       field: 'language', 
       headerName: 'Language', 
       width: 130,
-      editable: true,
+      editable: !readOnly,
       type: 'singleSelect',
       valueOptions: LANGUAGES.map(lang => lang.label),
       renderCell: (params) => {
@@ -87,6 +87,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
       renderCell: (params) => (
         <Switch
           checked={params.value}
+          disabled={readOnly}
           onChange={(e) => {
             e.stopPropagation();
             const newValue = e.target.checked;
@@ -149,7 +150,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
         />
       ),
     }
-  ];
+  ].filter(column => !readOnly || column.field !== 'actions');
 
 
 
@@ -188,6 +189,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
   };
 
   const handleProcessRowUpdate = (newRow) => {
+    if (readOnly) return originalRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
@@ -284,24 +286,26 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
         <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold' }}>
           Respondent Table
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <AddRowButton onClick={handleAddRow} />
-          <TableUploadButton
-            onUpload={handleUpload}
-            templateData={TEMPLATE_DATA}
-            tableName="Respondents"
-          />
-          {hasChanges && (
-            <Button
-              variant="contained"
-              startIcon={<SaveIcon />}
-              onClick={handleSave}
-              size="small"
-            >
-              Save
-            </Button>
-          )}
-        </Box>
+        {!readOnly && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AddRowButton onClick={handleAddRow} />
+            <TableUploadButton
+              onUpload={handleUpload}
+              templateData={TEMPLATE_DATA}
+              tableName="Respondents"
+            />
+            {hasChanges && (
+              <Button
+                variant="contained"
+                startIcon={<SaveIcon />}
+                onClick={handleSave}
+                size="small"
+              >
+                Save
+              </Button>
+            )}
+          </Box>
+        )}
       </Box>
 
       <DataGrid
@@ -312,7 +316,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate }) => {
         }}
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={handleProcessRowUpdate}
+        processRowUpdate={readOnly ? undefined : handleProcessRowUpdate}
         components={{
           Toolbar: GridToolbar,
         }}

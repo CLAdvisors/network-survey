@@ -186,7 +186,19 @@ async function sendTestMail(email, survey, lang) {
       throw new Error(`Email text is undefined for survey '${survey.name}'`);
     }
 
-    sendMail(email, 'demo', survey.name, text);
+    const respondentResult = await client.query(
+      `SELECT uuid FROM Respondent
+       WHERE ${legacySurveyPredicate()} AND can_respond = true AND uuid IS NOT NULL
+       ORDER BY respondent_id
+       LIMIT 1`,
+      [survey.id, survey.name]
+    );
+    const demoToken = respondentResult.rows[0]?.uuid;
+    if (!demoToken) {
+      throw new Error(`No active respondent token found for survey '${survey.name}'. Seed or add a respondent before sending a demo email.`);
+    }
+
+    await sendMail(email, demoToken, survey.name, text);
   } finally {
     client.release();
   }
@@ -748,14 +760,30 @@ async function getDefaultOrganizationForUser(req, res, requestedOrganizationId =
   return memberships[0];
 }
 
-async function getActiveOwnerCount(organizationId, excludeUserId = null) {
+async function getActiveOwnerCount(organizationId, excludeUserId = null, queryable = pool, { lockRows = false } = {}) {
   const values = [organizationId];
   let excludeSql = '';
   if (excludeUserId) {
     values.push(excludeUserId);
     excludeSql = ` AND u.id <> $${values.length}`;
   }
-  const result = await pool.query(
+
+  if (lockRows) {
+    const result = await queryable.query(
+      `SELECT om.user_id
+       FROM organization_memberships om
+       JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1
+         AND om.role = 'owner'
+         AND COALESCE(u.status, 'active') = 'active'
+       ORDER BY om.user_id
+       FOR UPDATE OF om, u`,
+      [organizationId]
+    );
+    return result.rows.filter(row => Number(row.user_id) !== Number(excludeUserId)).length;
+  }
+
+  const result = await queryable.query(
     `SELECT COUNT(*)::int AS count
      FROM organization_memberships om
      JOIN users u ON u.id = om.user_id
@@ -828,13 +856,18 @@ app.patch('/api/orgs/:organizationId/members/:userId', express.json(), requireAu
       return res.status(404).json({ message: 'Member not found.' });
     }
 
-    if (target.role === 'owner' && actorMembership.role !== 'owner' && !actorMembership.platformAdmin) {
+    const actorCanManageOwners = actorMembership.role === 'owner' || actorMembership.platformAdmin;
+    if (target.role === 'owner' && !actorCanManageOwners) {
       await client.query('ROLLBACK');
       return res.status(403).json({ message: 'Only owners can modify owners.' });
     }
+    if (nextRole === 'owner' && !actorCanManageOwners) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Only owners can assign owner role.' });
+    }
 
     const wouldRemoveActiveOwner = target.role === 'owner' && (nextRole && nextRole !== 'owner' || nextStatus === 'disabled');
-    if (wouldRemoveActiveOwner && await getActiveOwnerCount(organizationId, targetUserId) < 1) {
+    if (wouldRemoveActiveOwner && await getActiveOwnerCount(organizationId, targetUserId, client, { lockRows: true }) < 1) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: 'Cannot remove the last active owner.' });
     }
@@ -900,10 +933,10 @@ app.post('/api/invites/accept', express.json(), authRateLimiter, async (req, res
     );
     const invite = inviteResult.rows[0];
     if (!invite) { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Invite is invalid or expired.' }); }
-    const existingUsername = await client.query('SELECT id FROM users WHERE username = $1', [username]);
-    if (existingUsername.rows.length > 0) {
+    const existingUser = await client.query('SELECT id, username, email FROM users WHERE username = $1 OR email = $2 LIMIT 1', [username, invite.email]);
+    if (existingUser.rows.length > 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ message: 'Username already exists. Ask an admin to add the existing account directly.' });
+      return res.status(400).json({ message: 'An account already exists for this username or invite email. Ask an admin to add the existing account directly.' });
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     const userResult = await client.query(

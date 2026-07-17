@@ -13,7 +13,7 @@ import AuthLayout from './components/AuthLayout';
 import Landing from './components/Landing';
 import { useTheme } from '@mui/material/styles';
 import { useAuth } from './context/AuthContext';
-import { Box, CircularProgress } from '@mui/material';
+import { Box, CircularProgress, Snackbar, Alert } from '@mui/material';
 import { NetworkProvider } from './context/NetworkContext';
 import SurveyEditor from './components/SurveyEditor'; // Import the SurveyEditor component
 import EditIcon from '@mui/icons-material/Edit'; // Import an icon for the editor
@@ -30,6 +30,13 @@ const AppContent = () => {
     const location = useLocation();
     const theme = useTheme();
     const { isAuthenticated, isLoading } = useAuth();
+    const [forbiddenMessage, setForbiddenMessage] = React.useState('');
+
+    React.useEffect(() => {
+      const handler = (event) => setForbiddenMessage(event.detail || 'You do not have permission to perform that action.');
+      window.addEventListener('cla:forbidden', handler);
+      return () => window.removeEventListener('cla:forbidden', handler);
+    }, []);
   
     const router = {
       pathname: location.pathname,
@@ -95,6 +102,16 @@ const AppContent = () => {
               gap: '16px',
             }}
           >
+            <Snackbar
+              open={Boolean(forbiddenMessage)}
+              autoHideDuration={6000}
+              onClose={() => setForbiddenMessage('')}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            >
+              <Alert severity="warning" variant="filled" onClose={() => setForbiddenMessage('')}>
+                {forbiddenMessage}
+              </Alert>
+            </Snackbar>
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/results" element={<Results />} />

@@ -9,6 +9,7 @@ import QuestionTable from "./QuestionTable";
 import CreateSurveyDialog from "./CreateSurveyDialog";
 import EmailNotificationEditor from "./EmailNotificationEditor";
 import CollapsibleSection from "./CollapsibleSection";
+import { useAuth } from "../context/AuthContext";
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -17,6 +18,7 @@ const Dashboard = () => {
   const [questionData, setQuestionData] = React.useState(null);
   const [respondentData, setRespondentData] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+  const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
 
   const fetchSurveyData = async () => {
     try {
@@ -48,7 +50,23 @@ const Dashboard = () => {
       if (!selectSurvey) return;
 
       try {
-        // Fetch respondent data
+        // Fetch question data; viewers are allowed to see question text.
+        const questionResponse = await api.get(
+          `/listQuestions?surveyName=${selectSurvey.name}`
+        );
+        setQuestionData(questionResponse.data.questions);
+      } catch (err) {
+        console.log(err);
+        setQuestionData(null);
+      }
+
+      if (!canViewSensitiveSurveyData(selectSurvey)) {
+        setRespondentData(null);
+        return;
+      }
+
+      try {
+        // Fetch respondent data for analyst+ roles only because it includes PII.
         const respondentResponse = await api.get(
           `/targets?surveyName=${selectSurvey.name}`
         );
@@ -58,27 +76,22 @@ const Dashboard = () => {
           (respondent) => respondent.name !== "None"
         );
         setRespondentData(filteredRespondents);
-
-        // Fetch question data
-        const questionResponse = await api.get(
-          `/listQuestions?surveyName=${selectSurvey.name}`
-        );
-        setQuestionData(questionResponse.data.questions);
       } catch (err) {
         console.log(err);
+        setRespondentData(null);
       }
     };
 
     fetchRelatedData();
-  }, [selectSurvey]);
+  }, [selectSurvey, canViewSensitiveSurveyData]);
 
   const handleSelectRow = (childData) => {
     setSelectSurvey(childData);
   };
 
-  const handleCreateSurvey = async (surveyName) => {
+  const handleCreateSurvey = async (surveyName, organizationId) => {
     try {
-      const response = await api.post("/survey", { surveyName: surveyName });
+      const response = await api.post("/survey", { surveyName, organizationId });
       if (response.status === 200) {
         await fetchSurveyData();
       }
@@ -123,14 +136,16 @@ const Dashboard = () => {
       <CollapsibleSection 
         title="Surveys"
         actions={
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => setCreateDialogOpen(true)}
-            size="small"
-          >
-            Create Survey
-          </Button>
+          memberships?.some(m => ['owner', 'admin', 'editor'].includes(m.role)) ? (
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => setCreateDialogOpen(true)}
+              size="small"
+            >
+              Create Survey
+            </Button>
+          ) : null
         }
       >
         <SurveyTable 
@@ -145,6 +160,7 @@ const Dashboard = () => {
         open={createDialogOpen}
         onClose={() => setCreateDialogOpen(false)}
         onSubmit={handleCreateSurvey}
+        memberships={memberships}
       />
 
       <CollapsibleSection title="Survey Questions">
@@ -152,20 +168,26 @@ const Dashboard = () => {
           rows={questionData} 
           surveyName={selectSurvey?.name}
           onQuestionsUpdate={handleQuestionsUpdate}
+          readOnly={!canEditSurvey(selectSurvey)}
         />
       </CollapsibleSection>
 
-      <CollapsibleSection title="Email Notifications">
-        <EmailNotificationEditor surveyId={selectSurvey?.name} />
-      </CollapsibleSection>
+      {canEditSurvey(selectSurvey) && (
+        <CollapsibleSection title="Email Notifications">
+          <EmailNotificationEditor surveyId={selectSurvey?.name} />
+        </CollapsibleSection>
+      )}
 
-      <CollapsibleSection title="Survey Respondents">
-        <RespondentTable
-          rows={respondentData}
-          surveyName={selectSurvey?.name}
-          onRespondentsUpdate={handleRespondentsUpdate}
-        />
-      </CollapsibleSection>
+      {canViewSensitiveSurveyData(selectSurvey) && (
+        <CollapsibleSection title="Survey Respondents">
+          <RespondentTable
+            rows={respondentData}
+            surveyName={selectSurvey?.name}
+            onRespondentsUpdate={handleRespondentsUpdate}
+            readOnly={!canEditSurvey(selectSurvey)}
+          />
+        </CollapsibleSection>
+      )}
     </Box>
   );
 };

@@ -89,7 +89,8 @@ async function sendMail(email, id, surveyName, text) {
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
       subject: 'CLA Network Survey',
-      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2]
+      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2],
+      surveyName
     };
 
     // Add delay to respect rate limit
@@ -136,15 +137,24 @@ async function processEmailQueue() {
     }));
 
     // Update email_sent status for successful sends
-    const successfulEmails = results.filter(r => r.success).map(r => r.email);
-    if (successfulEmails.length > 0) {
-      try {
-        await pool.query(
-          'UPDATE Respondent SET email_sent = true WHERE contact_info = ANY($1)',
-          [successfulEmails]
-        );
-      } catch (error) {
-        console.error('Failed to update email_sent status:', error);
+    const successfulBySurvey = results.reduce((grouped, result) => {
+      if (!result.success) return grouped;
+      const surveyName = batch.find(emailData => emailData.to === result.email)?.surveyName;
+      if (!surveyName) return grouped;
+      grouped[surveyName] = grouped[surveyName] || [];
+      grouped[surveyName].push(result.email);
+      return grouped;
+    }, {});
+    for (const [surveyName, successfulEmails] of Object.entries(successfulBySurvey)) {
+      if (successfulEmails.length > 0) {
+        try {
+          await pool.query(
+            'UPDATE Respondent SET email_sent = true WHERE contact_info = ANY($1) AND survey_name = $2',
+            [successfulEmails, surveyName]
+          );
+        } catch (error) {
+          console.error('Failed to update email_sent status:', error);
+        }
       }
     }
 
@@ -158,34 +168,34 @@ async function processEmailQueue() {
 }
 
 // User test email function (allow admin user to send test email to themselves)
-async function sendTestMail(email, surveyName, lang) {
+async function sendTestMail(email, survey, lang) {
   const client = await pool.connect();
   try {
-    const query = 'SELECT text FROM email WHERE survey_name = $1 AND lang = $2';
-    const values = [surveyName, lang];
+    const query = `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
+    const values = [survey.id, survey.name, lang];
     console.log(values);
     const response = await client.query(query, values);
     
     if (!response.rows || response.rows.length === 0) {
-      throw new Error(`Email template not found for survey '${surveyName}' in language '${lang}'`);
+      throw new Error(`Email template not found for survey '${survey.name}' in language '${lang}'`);
     }
 
     const text = response.rows[0].text;
     if (text === undefined || text === null) {
-      throw new Error(`Email text is undefined for survey '${surveyName}'`);
+      throw new Error(`Email text is undefined for survey '${survey.name}'`);
     }
 
-    sendMail(email, 'demo', surveyName, text);
+    sendMail(email, 'demo', survey.name, text);
   } finally {
     client.release();
   }
 }
 
-async function startSurvey(surveyName){
+async function startSurvey(survey){
   // Pull all users from the database
   const client = await pool.connect();
-  const query = 'SELECT name, contact_info, uuid, lang FROM Respondent WHERE survey_name = $1 AND can_respond = true';
-  const values = [surveyName];
+  const query = `SELECT name, contact_info, uuid, lang FROM Respondent WHERE ${legacySurveyPredicate()} AND can_respond = true`;
+  const values = [survey.id, survey.name];
   let respondents = [];
   let emails = [];
   await client.query(query, values)
@@ -199,8 +209,8 @@ async function startSurvey(surveyName){
     });
 
   // Pull the email text from the database for each language
-  const emailQuery = 'SELECT lang, text FROM email WHERE survey_name = $1';
-  const emailValues = [surveyName];
+  const emailQuery = `SELECT lang, text FROM email WHERE ${legacySurveyPredicate()}`;
+  const emailValues = [survey.id, survey.name];
   await client.query(emailQuery, emailValues)
     .then(response => {
         emails = response.rows.map(row => ({
@@ -216,7 +226,7 @@ async function startSurvey(surveyName){
     
     // Send the emails
     respondents.forEach(respondent => {
-      sendMail(respondent.email, respondent.userId, surveyName, emailMap[respondent.language].replace(/"/g, "").replace(/'/g, ""));
+      sendMail(respondent.email, respondent.userId, survey.name, emailMap[respondent.language].replace(/"/g, "").replace(/'/g, ""));
     });
   }
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
@@ -304,6 +314,26 @@ const respondentRateLimiter = rateLimit({
 });
 
 const schemaCapabilityCache = new Map();
+
+const ROLE_RANK = { viewer: 10, analyst: 20, editor: 30, admin: 40, owner: 50 };
+const READ_SURVEY_ROLES = ['owner', 'admin', 'editor', 'analyst', 'viewer'];
+const ANALYST_ROLES = ['owner', 'admin', 'editor', 'analyst'];
+const EDITOR_ROLES = ['owner', 'admin', 'editor'];
+const ADMIN_ROLES = ['owner', 'admin'];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function hasAnyRole(role, allowedRoles) {
+  return Boolean(role && allowedRoles.includes(role));
+}
+
+function isPlatformAdmin(user) {
+  return Boolean(user?.isPlatformAdmin || user?.is_platform_admin);
+}
+
+function legacySurveyPredicate(alias = '') {
+  const prefix = alias ? `${alias}.` : '';
+  return `(${prefix}survey_id = $1 OR (${prefix}survey_id IS NULL AND ${prefix}survey_name = $2))`;
+}
 
 async function columnExists(tableName, columnName) {
   const cacheKey = `column:${tableName}.${columnName}`;
@@ -416,7 +446,12 @@ async function validateRespondentToken(surveyName, userId) {
   }
 
   const result = await pool.query(
-    'SELECT respondent_id, response, can_respond FROM Respondent WHERE uuid = $1 AND survey_name = $2',
+    `SELECT r.respondent_id, r.response, r.can_respond, r.survey_id
+     FROM Respondent r
+     JOIN Survey s ON (r.survey_id = s.id OR (r.survey_id IS NULL AND r.survey_name = s.name))
+     WHERE r.uuid = $1
+       AND r.survey_name = $2
+       AND s.archived_at IS NULL`,
     [userId, surveyName]
   );
 
@@ -534,10 +569,22 @@ app.post('/api/login', authRateLimiter, async (req, res) => {
           return res.status(500).json({ error: 'Session save failed' });
         }
 
-        res.json({
-          success: true,
-          user: toSafeUser({ ...user, last_login_at: new Date().toISOString() })
-        });
+        getUserMemberships(user.id)
+          .then(memberships => {
+            res.json({
+              success: true,
+              user: toSafeUser({ ...user, last_login_at: new Date().toISOString() }),
+              memberships
+            });
+          })
+          .catch(error => {
+            console.error('Membership lookup after login failed:', error);
+            res.json({
+              success: true,
+              user: toSafeUser({ ...user, last_login_at: new Date().toISOString() }),
+              memberships: []
+            });
+          });
       });
     });
   } catch (error) {
@@ -621,15 +668,120 @@ const requireAuth = async (req, res, next) => {
   }
 };
 
+async function requireOrgAccess(req, res, organizationId, allowedRoles) {
+  if (!organizationId) {
+    res.status(400).json({ message: 'Organization ID is required.' });
+    return null;
+  }
+
+  if (isPlatformAdmin(req.user)) {
+    return { role: 'owner', organization_id: organizationId, platformAdmin: true };
+  }
+
+  const result = await pool.query(
+    `SELECT role, organization_id
+     FROM organization_memberships
+     WHERE organization_id = $1 AND user_id = $2
+     LIMIT 1`,
+    [organizationId, req.user.id]
+  );
+
+  const membership = result.rows[0];
+  if (!membership || !hasAnyRole(membership.role, allowedRoles)) {
+    res.status(403).json({ message: 'Forbidden.' });
+    return null;
+  }
+  return membership;
+}
+
+async function getDefaultOrganizationForUser(req, res, requestedOrganizationId = null) {
+  if (requestedOrganizationId) {
+    return requireOrgAccess(req, res, requestedOrganizationId, EDITOR_ROLES);
+  }
+
+  if (isPlatformAdmin(req.user)) {
+    res.status(400).json({ message: 'Platform admins must provide organizationId when creating surveys.' });
+    return null;
+  }
+
+  const result = await pool.query(
+    `SELECT organization_id, role
+     FROM organization_memberships
+     WHERE user_id = $1
+     ORDER BY created_at NULLS LAST, organization_id`,
+    [req.user.id]
+  );
+  const memberships = result.rows.filter(row => hasAnyRole(row.role, EDITOR_ROLES));
+
+  if (memberships.length === 0) {
+    res.status(403).json({ message: 'No organization membership with survey creation permission.' });
+    return null;
+  }
+  if (memberships.length > 1) {
+    res.status(400).json({ message: 'organizationId is required when you belong to multiple organizations.' });
+    return null;
+  }
+  return memberships[0];
+}
+
+async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRoles = READ_SURVEY_ROLES } = {}) {
+  if (!surveyId && surveyName && UUID_RE.test(surveyName)) {
+    surveyId = surveyName;
+    surveyName = null;
+  }
+
+  if (!surveyName && !surveyId) {
+    res.status(400).json({ message: 'Survey identifier is required.' });
+    return null;
+  }
+
+  const values = [req.user.id];
+  const predicates = ['s.archived_at IS NULL'];
+  if (surveyId) {
+    values.push(surveyId);
+    predicates.push(`s.id = $${values.length}`);
+  }
+  if (surveyName) {
+    values.push(surveyName);
+    predicates.push(`s.name = $${values.length}`);
+  }
+
+  const result = await pool.query(
+    `SELECT s.id, s.name, s.title, s.creation_date, s.questions,
+            s.organization_id, s.created_by_user_id, om.role
+     FROM Survey s
+     LEFT JOIN organization_memberships om
+       ON om.organization_id = s.organization_id AND om.user_id = $1
+     WHERE (${predicates.slice(1).join(' OR ')})
+       AND s.archived_at IS NULL
+     ORDER BY s.creation_date DESC NULLS LAST
+     LIMIT 1`,
+    values
+  );
+
+  const survey = result.rows[0];
+  if (!survey) {
+    res.status(404).json({ message: 'Survey not found.' });
+    return null;
+  }
+  if (!isPlatformAdmin(req.user) && !hasAnyRole(survey.role, allowedRoles)) {
+    res.status(404).json({ message: 'Survey not found.' });
+    return null;
+  }
+  return { ...survey, role: isPlatformAdmin(req.user) ? 'owner' : survey.role };
+}
+
 
 // Example usage: Adding a new survey
-async function insertSurvey(name, title) {
-  const query = `INSERT INTO Survey (name, title, creation_date)
-                 VALUES ($1, $2, NOW())`;
-  await executeQuery(query, [name, title]);
+async function insertSurvey(name, title, organizationId, createdByUserId) {
+  const query = `INSERT INTO Survey (name, title, creation_date, organization_id, created_by_user_id)
+                 VALUES ($1, $2, NOW(), $3, $4)
+                 RETURNING id, name, organization_id, created_by_user_id`;
+  const result = await executeQuery(query, [name, title, organizationId, createdByUserId]);
   console.log('Survey added successfully!');
+  return result.rows[0];
 }
-async function insertUsers(users, deleteRow = null) {
+async function insertUsers(users, deleteRow = null, survey = null) {
   const client = await pool.connect();
 
   try {
@@ -639,22 +791,23 @@ async function insertUsers(users, deleteRow = null) {
     if (deleteRow) {
       const deleteQuery = `
         DELETE FROM Respondent 
-        WHERE name = $1 AND survey_name = $2
+        WHERE name = $1 AND (survey_id = $2 OR (survey_id IS NULL AND survey_name = $3))
       `;
-      await client.query(deleteQuery, [deleteRow.name, deleteRow.surveyName]);
+      await client.query(deleteQuery, [deleteRow.name, survey?.id || deleteRow.surveyId || null, survey?.name || deleteRow.surveyName]);
     }
 
     // Then insert/update the modified rows
     for (const user of users) {
       const query = `
         INSERT INTO Respondent 
-          (name, contact_info, uuid, survey_name, can_respond, lang) 
+          (name, contact_info, uuid, survey_name, survey_id, can_respond, lang) 
         VALUES 
-          ($1, $2, $3, $4, $5, $6)
+          ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (name, survey_name) 
         DO UPDATE SET
           contact_info = EXCLUDED.contact_info,
           can_respond = EXCLUDED.can_respond,
+          survey_id = EXCLUDED.survey_id,
           lang = EXCLUDED.lang
       `;
       
@@ -662,7 +815,8 @@ async function insertUsers(users, deleteRow = null) {
         user.userName,
         user.email,
         nanoid(),  // Generate new UUID for all rows
-        user.surveyName,
+        survey?.name || user.surveyName,
+        survey?.id || user.surveyId || null,
         user.canRespond !== undefined ? user.canRespond : true, // Default to true if not specified
         user.language || 'English' // Default to English if not specified
       ];
@@ -679,7 +833,7 @@ async function insertUsers(users, deleteRow = null) {
     client.release();
   }
 }
-async function insertEmails(data) {
+async function insertEmails(data, survey = null) {
   // Start a PostgreSQL client from the pool
   const client = await pool.connect();
   console.log(data);
@@ -690,12 +844,13 @@ async function insertEmails(data) {
     // Iterate through the emails and insert or update them
     for (const email of data) {
       const query = `
-        INSERT INTO email (survey_name, lang, text)
-        VALUES ($1, $2, $3)
+        INSERT INTO email (survey_name, survey_id, lang, text)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (survey_name, lang) DO UPDATE
-        SET text = EXCLUDED.text
+        SET text = EXCLUDED.text,
+            survey_id = EXCLUDED.survey_id
       `;
-      const values = [email.surveyName, email.language, email.text.replace(/"/g, "").replace(/'/g, "")];
+      const values = [survey?.name || email.surveyName, survey?.id || email.surveyId || null, email.language, email.text.replace(/"/g, "").replace(/'/g, "")];
       await client.query(query, values);
     }
 
@@ -715,18 +870,18 @@ async function insertEmails(data) {
   }
 }
 
-async function insertQuestions(name, title, json) {
+async function insertQuestions(name, title, json, surveyId = null) {
   const client = await pool.connect();
 
   try {
     if (title === undefined || title === null || title === '') {
       // Preserve existing survey title; only update questions JSON
-      const query = 'UPDATE Survey SET questions = $1 WHERE name = $2';
-      const values = [json, name];
+      const query = surveyId ? 'UPDATE Survey SET questions = $1 WHERE id = $2' : 'UPDATE Survey SET questions = $1 WHERE name = $2';
+      const values = [json, surveyId || name];
       await client.query(query, values);
     } else {
-      const query = 'UPDATE Survey SET title = $1, questions = $2 WHERE name = $3';
-      const values = [title, json, name];
+      const query = surveyId ? 'UPDATE Survey SET title = $1, questions = $2 WHERE id = $3' : 'UPDATE Survey SET title = $1, questions = $2 WHERE name = $3';
+      const values = [title, json, surveyId || name];
       await client.query(query, values);
     }
 
@@ -737,12 +892,14 @@ async function insertQuestions(name, title, json) {
     await client.release();
   }
 }
-async function insertResponses(responses, userId, surveyName) {
+async function insertResponses(responses, userId, surveyName, surveyId = null) {
   const client = await pool.connect();
 
   try {
-    const query = 'UPDATE Respondent SET response = $1 WHERE uuid = $2 AND survey_name = $3';
-    const values = [responses, userId, surveyName];
+    const query = surveyId
+      ? 'UPDATE Respondent SET response = $1 WHERE uuid = $2 AND (survey_id = $3 OR (survey_id IS NULL AND survey_name = $4))'
+      : 'UPDATE Respondent SET response = $1 WHERE uuid = $2 AND survey_name = $3';
+    const values = surveyId ? [responses, userId, surveyId, surveyName] : [responses, userId, surveyName];
 
     const result = await client.query(query, values);
     if (result.rowCount === 0) {
@@ -808,16 +965,21 @@ app.post('/api/survey', express.json(), requireAuth, async (req, res) => {
   try {
     // The placeholder respondent references Survey(name), so the survey row
     // must be committed first
-    await insertSurvey(surveyName, '');
-    await insertUsers([{userName: 'None', email: 'N/A', surveyName: surveyName, canRespond: false, language: 'English'}]);
-    res.status(200).json({ message: 'Survey created successfully!' });
+    const org = await getDefaultOrganizationForUser(req, res, data.organizationId || data.organization_id || null);
+    if (!org) return;
+    const survey = await insertSurvey(surveyName, '', org.organization_id, req.user.id);
+    await insertUsers([{userName: 'None', email: 'N/A', surveyName: surveyName, canRespond: false, language: 'English'}], null, survey);
+    res.status(200).json({ message: 'Survey created successfully!', survey: { id: survey.id, name: survey.name, organizationId: survey.organization_id } });
   } catch (error) {
     console.error(error);
+    if (error.code === '23505') {
+      return res.status(409).json({ message: 'A survey with that name already exists.' });
+    }
     res.status(500).json({ message: 'Failed to create survey.' });
   }
 });
 
-app.post('/api/testEmail', express.json(), requireAuth, (req, res) => {
+app.post('/api/testEmail', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
   const language = data.language;
@@ -835,19 +997,19 @@ app.post('/api/testEmail', express.json(), requireAuth, (req, res) => {
     res.status(400).json({ message: 'Email name is required.' });
     return;
   }
-  console.log()
-  // Call the function to add a new survey
-  sendTestMail(email, surveyName, language)
-  .then(() => {
+
+  try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+    await sendTestMail(email, survey, language);
     res.status(200).json({ message: 'Test email sent successfully!' });
-  })
-  .catch(error => {
+  } catch (error) {
     console.error(error);
     res.status(500).json({ message: error.message || 'Error occurred while sending test email.' });
-  });
+  }
 });
 
-app.post('/api/startSurvey', express.json(), requireAuth, (req, res) => {
+app.post('/api/startSurvey', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
 
@@ -856,13 +1018,18 @@ app.post('/api/startSurvey', express.json(), requireAuth, (req, res) => {
     return;
   }
 
-  // Call the function to add a new survey
-  startSurvey(surveyName)
-  .catch(error => console.error(error))
-  .then(() => {res.status(200).json({ message: 'Survey started successfully!' });});
+  try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+    await startSurvey(survey);
+    res.status(200).json({ message: 'Survey started successfully!' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Failed to start survey.' });
+  }
 });
 
-app.post('/api/updateEmails', express.json(), requireAuth, (req, res) => {
+app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
   const csvData = data.csvData;
@@ -891,9 +1058,15 @@ app.post('/api/updateEmails', express.json(), requireAuth, (req, res) => {
     }
   });
 
-  insertEmails(csvArray);
-
-  res.status(200).json({ message: 'Email data updated successfully.' }); 
+  try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+    await insertEmails(csvArray, survey);
+    res.status(200).json({ message: 'Email data updated successfully.' });
+  } catch (error) {
+    console.error('Error updating email templates:', error);
+    res.status(500).json({ message: 'Failed to update email data.' });
+  } 
 });
 // Modify the POST /api/updateTarget endpoint to handle the new fields
 app.post('/api/updateTarget', requireAuth, async (req, res) => {
@@ -959,8 +1132,11 @@ app.post('/api/updateTarget', requireAuth, async (req, res) => {
       return res.status(400).json({ message: 'No valid respondent data found in CSV.' });
     }
 
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+
     // Handle the database operations with potential deletion
-    await insertUsers(surveyTargets, deleteRow);
+    await insertUsers(surveyTargets, deleteRow, survey);
 
     res.status(200).json({ 
       message: 'Respondents updated successfully.',
@@ -986,13 +1162,15 @@ app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => 
   const client = await pool.connect();
 
   try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName: surveyId, surveyId: UUID_RE.test(surveyId) ? surveyId : null, allowedRoles: ANALYST_ROLES });
+    if (!survey) return;
     const query = `
       SELECT lang, text
       FROM EMAIL
-      WHERE survey_name = $1
+      WHERE ${legacySurveyPredicate()}
     `;
 
-    const result = await client.query(query, [surveyId]);
+    const result = await client.query(query, [survey.id, survey.name]);
 
     const notifications = result.rows.reduce((acc, row) => {
       acc[row.lang] = row.text;
@@ -1009,7 +1187,7 @@ app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => 
 });
 
 // Modify the POST /api/updateTargets endpoint to handle the new fields
-app.post('/api/updateTargets', express.json(), requireAuth, (req, res) => {
+app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => {
   const data = req.body;
   const csvData = data.csvData;
   const surveyName = data.surveyName;
@@ -1078,8 +1256,11 @@ app.post('/api/updateTargets', express.json(), requireAuth, (req, res) => {
       return;
     }
 
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+
     // Insert the users into the database
-    insertUsers(surveyTargets);
+    await insertUsers(surveyTargets, null, survey);
 
     res.status(200).json({ 
       message: 'Survey created successfully.',
@@ -1112,7 +1293,7 @@ function normalizeQuestionNames(json) {
   }
 }
 
-app.post('/api/updateQuestions', express.json(), requireAuth, (req, res) => {
+app.post('/api/updateQuestions', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyQuestions = data.questions;
   const surveyName = data.surveyName;
@@ -1121,16 +1302,19 @@ app.post('/api/updateQuestions', express.json(), requireAuth, (req, res) => {
   console.log('updateQuestions typeof:', typeof surveyQuestions);
   console.log('updateQuestions value:', JSON.stringify(surveyQuestions));
 
+  const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+  if (!survey) return;
+
   let surveyData;
   if (typeof surveyQuestions === 'string') {
     // CSV format
     surveyData = csvToJson(surveyQuestions);
     // csvToJson assigns positional names question_{i}
-    insertQuestions(surveyName, surveyData.title, surveyData.questions);
+    await insertQuestions(survey.name, surveyData.title, surveyData.questions, survey.id);
   } else if (typeof surveyQuestions === 'object' && surveyQuestions !== null) {
     // JSON format (SurveyJS)
     const normalized = normalizeQuestionNames(surveyQuestions);
-    insertQuestions(surveyName, '', normalized);
+    await insertQuestions(survey.name, '', normalized, survey.id);
   } else {
     return res.status(400).json({ message: 'Invalid questions format.' });
   }
@@ -1154,7 +1338,7 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
     const answerTimeStamp = new Date().toLocaleString();
     answers.timeStamp = answerTimeStamp;
 
-    await insertResponses(answers, userId, surveyName);
+    await insertResponses(answers, userId, surveyName, validation.respondent.survey_id);
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('Error submitting response:', error);
@@ -1173,18 +1357,19 @@ app.get('/api/admin/names', requireAuth, async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: ANALYST_ROLES });
+    if (!survey) return;
     const query = `
       SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
-      JOIN Survey s ON r.survey_name = s.name
-      WHERE s.name = $1
-      AND (r.name ILIKE $2 OR r.contact_info ILIKE $2)
+      WHERE ${legacySurveyPredicate('r')}
+      AND (r.name ILIKE $3 OR r.contact_info ILIKE $3)
       ORDER BY r.name
-      OFFSET $3
-      LIMIT $4;
+      OFFSET $4
+      LIMIT $5;
     `;
 
-    const result = await client.query(query, [surveyName, `%${filter}%`, skip, take]);
+    const result = await client.query(query, [survey.id, survey.name, `%${filter}%`, skip, take]);
     const filteredNames = result.rows.map(user => `${user.name} (${user.contact_info})`);
     const total = result.rows.length > 0 ? Number(result.rows[0].total_count) : 0;
 
@@ -1262,16 +1447,11 @@ app.get('/api/listQuestions', requireAuth, async (req, res) => {
   // NEW DB CODE
   const client = await pool.connect();
 
-  const query = `
-  SELECT questions, title
-  FROM Survey
-  WHERE name = $1;
-  `;
-
-  const values = [surveyName];
+  const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: READ_SURVEY_ROLES });
+  if (!survey) { client.release(); return; }
 
   // Query the database for json question data
-  client.query(query, values)
+  Promise.resolve({ rows: [survey] })
     .then(result => {
       const elements = result.rows[0]?.questions?.elements || [];
       const questions = elements.map((q, index) => {
@@ -1312,18 +1492,10 @@ app.get('/api/admin/questions', requireAuth, async (req, res) => {
   const client = await pool.connect();
 
   try {
-    const query = `
-      SELECT questions, title
-      FROM Survey
-      WHERE name = $1;
-    `;
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: READ_SURVEY_ROLES });
+    if (!survey) return;
 
-    const result = await client.query(query, [surveyName]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Survey not found.' });
-    }
-
-    res.status(200).json({ title: result.rows[0].title, questions: result.rows[0].questions });
+    res.status(200).json({ title: survey.title, questions: survey.questions });
   } catch (error) {
     console.error('Error fetching admin survey questions:', error);
     res.status(500).json({ message: 'Failed to fetch survey questions.' });
@@ -1374,8 +1546,11 @@ app.get('/api/results', requireAuth, async (req, res) => {
   const client = await pool.connect();
   
 
-  const query = 'SELECT name, can_respond, response FROM Respondent WHERE survey_name = $1';
-  const values = [surveyName];
+  const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: ANALYST_ROLES });
+  if (!survey) { client.release(); return; }
+
+  const query = `SELECT name, can_respond, response FROM Respondent WHERE ${legacySurveyPredicate()}`;
+  const values = [survey.id, survey.name];
   client.query(query, values)
     .then(response => {
         const responses = response.rows.reduce((combined, row) => {
@@ -1399,10 +1574,13 @@ app.get('/api/targets', requireAuth, async(req, res) => {
 
   const client = await pool.connect();
 
+  const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: ANALYST_ROLES });
+  if (!survey) { client.release(); return; }
+
   const query = `SELECT name, contact_info, respondent_id, can_respond, lang, response IS NULL AS response_status 
                FROM Respondent 
-               WHERE survey_name = $1`;
-  client.query(query, [surveyName])
+               WHERE ${legacySurveyPredicate()}`;
+  client.query(query, [survey.id, survey.name])
     .then(response => {
         const respondents = response.rows.map((row, index) => ({
             id: row.respondent_id,
@@ -1423,26 +1601,42 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
   // NEW DB CODE
   const client = await pool.connect();
 
-  const query = `
-  SELECT 
-    s.name,
-    s.creation_date,
-    COUNT(r.respondent_id) AS number_of_respondents,
-    jsonb_array_length(s.questions->'elements') AS number_of_questions
-FROM 
-    Survey s
-LEFT JOIN 
-    Respondent r ON s.name = r.survey_name
-GROUP BY 
-    s.name, s.creation_date, s.questions;
+  const query = isPlatformAdmin(req.user) ? `
+  SELECT s.id, s.name, s.organization_id, o.name AS organization_name,
+         'owner'::text AS role,
+         s.creation_date,
+         COUNT(r.respondent_id) AS number_of_respondents,
+         COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions
+  FROM Survey s
+  LEFT JOIN organizations o ON o.id = s.organization_id
+  LEFT JOIN Respondent r ON (r.survey_id = s.id OR (r.survey_id IS NULL AND r.survey_name = s.name))
+  WHERE s.archived_at IS NULL
+  GROUP BY s.id, s.name, s.organization_id, o.name, s.creation_date, s.questions
+  ORDER BY s.creation_date DESC NULLS LAST
+  ` : `
+  SELECT s.id, s.name, s.organization_id, o.name AS organization_name,
+         om.role,
+         s.creation_date,
+         COUNT(r.respondent_id) AS number_of_respondents,
+         COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions
+  FROM Survey s
+  JOIN organization_memberships om ON om.organization_id = s.organization_id AND om.user_id = $1
+  LEFT JOIN organizations o ON o.id = s.organization_id
+  LEFT JOIN Respondent r ON (r.survey_id = s.id OR (r.survey_id IS NULL AND r.survey_name = s.name))
+  WHERE s.archived_at IS NULL
+  GROUP BY s.id, s.name, s.organization_id, o.name, om.role, s.creation_date, s.questions
+  ORDER BY s.creation_date DESC NULLS LAST
   `;
 
-  client.query(query)
+  client.query(query, isPlatformAdmin(req.user) ? [] : [req.user.id])
     .then(result => {
-      const surveys = result.rows.map((row, index) => ({
-        id: index + 1,
+      const surveys = result.rows.map((row) => ({
+        id: row.id,
         name: row.name,
-        respondents: row.number_of_respondents - 1 + "",
+        organizationId: row.organization_id,
+        organizationName: row.organization_name,
+        role: row.role,
+        respondents: Math.max(0, Number(row.number_of_respondents || 0) - 1) + "",
         questions: row.number_of_questions + "",
         date: row.creation_date,
       }));
@@ -1466,28 +1660,23 @@ app.get('/api/surveyStatus', requireAuth, async (req, res) => {
   }
   const client = await pool.connect();
 
+  const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: READ_SURVEY_ROLES });
+  if (!survey) { client.release(); return; }
+
   // NEW DB CODE
   const query = `
-  SELECT 
-  s.name AS survey_name, 
-  COUNT(r.respondent_id) AS number_of_respondents, 
-  (s.questions IS NULL) AS is_questions_null
-FROM 
-  Survey s
-LEFT JOIN 
-  Respondent r ON s.name = r.survey_name
-WHERE 
-  s.name = $1
-GROUP BY 
-  s.name, s.questions;
+  SELECT COUNT(r.respondent_id) AS number_of_respondents
+  FROM Respondent r
+  WHERE ${legacySurveyPredicate('r')};
   `;
 
 
-  const values = [surveyName];
+  const values = [survey.id, survey.name];
 
   client.query(query, values)
     .then(result => {
-      const { number_of_respondents, is_questions_null } = result.rows[0];
+      const number_of_respondents = result.rows[0]?.number_of_respondents || 0;
+      const is_questions_null = survey.questions === null;
       // Process the returned values
       res.status(200).json( {
         userDataStatus: number_of_respondents >  1 ? true : false,
@@ -1529,14 +1718,15 @@ app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: ADMIN_ROLES });
+    if (!survey) return;
     await client.query('BEGIN');
-
-    // Delete related records first due to foreign key constraints
-    await client.query('DELETE FROM email WHERE survey_name = $1', [surveyName]);
-    await client.query('DELETE FROM respondent WHERE survey_name = $1', [surveyName]);
     
-    // Delete the survey
-    const result = await client.query('DELETE FROM survey WHERE name = $1 RETURNING name', [surveyName]);
+    // Archive survey; keep respondents and email templates for rollback/audit.
+    const result = await client.query(
+      'UPDATE survey SET archived_at = CURRENT_TIMESTAMP, archived_by_user_id = $1 WHERE id = $2 AND archived_at IS NULL RETURNING name',
+      [req.user.id, survey.id]
+    );
     
     await client.query('COMMIT');
 
@@ -1545,8 +1735,8 @@ app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
     }
 
     res.status(200).json({ 
-      message: 'Survey and all related data deleted successfully.',
-      deletedSurvey: result.rows[0].name
+      message: 'Survey archived successfully.',
+      archivedSurvey: result.rows[0].name
     });
 
   } catch (error) {
@@ -1576,9 +1766,11 @@ app.delete('/api/user', requireAuth, async (req, res) => {
   const client = await pool.connect();
 
   try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
     const result = await client.query(
-      'DELETE FROM respondent WHERE name = $1 AND survey_name = $2 RETURNING name, survey_name',
-      [userName, surveyName]
+      'DELETE FROM respondent WHERE name = $1 AND (survey_id = $2 OR (survey_id IS NULL AND survey_name = $3)) RETURNING name, survey_name',
+      [userName, survey.id, survey.name]
     );
 
     if (result.rowCount === 0) {
@@ -1617,16 +1809,9 @@ app.delete('/api/question', requireAuth, async (req, res) => {
 
   try {
     // First, get the current questions
-    const surveyResult = await client.query(
-      'SELECT questions FROM survey WHERE name = $1',
-      [surveyName]
-    );
-
-    if (surveyResult.rowCount === 0) {
-      return res.status(404).json({ message: 'Survey not found.' });
-    }
-
-    const questions = surveyResult.rows[0].questions;
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+    const questions = survey.questions;
     
     // Find and remove the question
     const questionIndex = questions.elements.findIndex(q => q.name === questionName);
@@ -1640,8 +1825,8 @@ app.delete('/api/question', requireAuth, async (req, res) => {
 
     // Update the survey with the modified questions
     const updateResult = await client.query(
-      'UPDATE survey SET questions = $1 WHERE name = $2 RETURNING name',
-      [questions, surveyName]
+      'UPDATE survey SET questions = $1 WHERE id = $2 RETURNING name',
+      [questions, survey.id]
     );
 
     res.status(200).json({
@@ -1690,4 +1875,13 @@ module.exports = {
   toSafeUser,
   columnExists,
   tableExists,
+  hasAnyRole,
+  isPlatformAdmin,
+  resolveSurveyForUser,
+  requireOrgAccess,
+  getDefaultOrganizationForUser,
+  READ_SURVEY_ROLES,
+  ANALYST_ROLES,
+  EDITOR_ROLES,
+  ADMIN_ROLES,
 };

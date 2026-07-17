@@ -9,4 +9,5 @@
     <include file="v1_0_create_initial_tables.sql" relativeToChangelogFile="true" />
     <include file="v1_1_add_sent_email_count.sql" relativeToChangelogFile="true" />
     <include file="v1_2_product_iam_foundation.sql" relativeToChangelogFile="true" />
+    <include file="v1_3_survey_archive.sql" relativeToChangelogFile="true" />
 </databaseChangeLog>

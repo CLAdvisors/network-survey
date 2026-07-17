@@ -397,6 +397,18 @@ Follow-up migration after successful PR 1/2, not now:
 - **Legacy backfill gaps:** New code must tolerate `survey_id IS NULL` during rollout, but tests should ensure new writes populate both old and new columns.
 - **Global survey name uniqueness:** Full tenant UX may expect same survey names across orgs, but current PK blocks this. Document as a later migration.
 
+## Known PR 2 follow-ups after final review
+
+PR 2 addresses the high-risk review findings from the member/account-management stack before merge: arbitrary `/api/testEmail` respondent-token leakage, reset-token `NODE_ENV` footgun, owner-management transaction recheck, slug collision-safe backfill, Settings owner-control visibility, and reminder survey identifier handling.
+
+Remaining non-blocking holes to track after PR 2 lands:
+
+- **Reminder/test-email semantics:** `/api/testEmail` now requires the recipient email to match an active respondent for the resolved survey before sending a live token. It still calls shared `sendMail()`, so a successful one-off reminder marks that respondent `email_sent = true`. Later split or rename test/preview/reminder email paths if product needs distinct status semantics.
+- **Platform-admin settings UX:** backend platform admins can manage org member APIs without organization membership, but the Settings UI currently renders organizations from the user's memberships. Add a platform-admin org picker/list before relying on platform admins for broad UI-based administration.
+- **Migration integration coverage:** `v1_4_product_iam_remaining.sql` now performs collision-aware slug backfill before the active org/slug unique index, but automated coverage is mostly static/regex plus Liquibase validation. Add an integration migration test with populated slug collisions before larger production activation.
+- **Invite/reset delivery:** invite creation and password reset foundations exist, tokens are hashed at rest, and reset raw-token return is explicit opt-in via `RETURN_DEV_TOKENS=true`. Full production email delivery, operator documentation, and UI polish remain follow-up work.
+- **Respondent-token lifecycle:** respondent links still use live UUID tokens. Later add hashing, expiry/revocation, and better preview/demo-token separation.
+
 ## Open questions
 
 1. Resolved: `viewer` can see question text plus survey metadata/status.

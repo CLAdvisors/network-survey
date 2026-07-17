@@ -26,6 +26,7 @@ const {
   ANALYST_ROLES,
   EDITOR_ROLES,
   ADMIN_ROLES,
+  hashToken,
 } = require('../server');
 
 test('dashboard/admin endpoints require authentication', async () => {
@@ -226,6 +227,251 @@ test('safe user serialization omits password hashes', () => {
     lastLoginAt: null,
   });
   assert.equal(safe.password, undefined);
+});
+
+test('remaining IAM migration adds audit, invite/reset, and non-destructive survey identifier foundation', () => {
+  const changelog = fs.readFileSync(path.join(__dirname, '../../db/changelogs/master-changelog.xml'), 'utf8');
+  const remaining = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_4_product_iam_remaining.sql'), 'utf8');
+
+  assert.match(changelog, /v1_4_product_iam_remaining\.sql/);
+  assert.match(remaining, /CREATE TABLE IF NOT EXISTS audit_events/i);
+  assert.match(remaining, /CREATE TABLE IF NOT EXISTS organization_invites/i);
+  assert.match(remaining, /CREATE TABLE IF NOT EXISTS password_reset_tokens/i);
+  assert.match(remaining, /ALTER TABLE Survey ADD COLUMN IF NOT EXISTS display_name/i);
+  assert.match(remaining, /CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_org_slug_active/i);
+  assert.match(remaining, /active_slug_population/i);
+  assert.match(remaining, /active_slug_duplicates/i);
+  assert.match(remaining, /slug = s\.slug \|\| '-' \|\| s\.id::text/i);
+  assert.doesNotMatch(remaining, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|ALTER\s+TABLE[\s\S]+DROP\s+COLUMN/i);
+});
+
+test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {
+  const originalQuery = pool.query;
+  const originalReturnDevTokens = process.env.RETURN_DEV_TOKENS;
+  process.env.RETURN_DEV_TOKENS = 'true';
+  t.after(() => {
+    pool.query = originalQuery;
+    if (originalReturnDevTokens === undefined) delete process.env.RETURN_DEV_TOKENS;
+    else process.env.RETURN_DEV_TOKENS = originalReturnDevTokens;
+  });
+
+  const calls = [];
+  pool.query = async (sql, values) => {
+    calls.push({ sql, values });
+    if (/SELECT id, username, email FROM users/.test(sql)) {
+      return { rows: [{ id: 9, username: 'reset-user', email: 'reset@example.com' }] };
+    }
+    if (/information_schema\.tables/.test(sql)) {
+      return { rows: [] };
+    }
+    return { rows: [], rowCount: 1 };
+  };
+
+  const res = await request(app)
+    .post('/api/password-reset/request')
+    .send({ username: 'reset-user' });
+
+  assert.equal(res.status, 200);
+  assert.equal(typeof res.body.token, 'string');
+  const insertCall = calls.find(call => /INSERT INTO password_reset_tokens/.test(call.sql));
+  assert.ok(insertCall);
+  assert.notEqual(insertCall.values[1], res.body.token);
+  assert.equal(insertCall.values[1], hashToken(res.body.token));
+});
+
+test('password reset request does not expose raw token based on NODE_ENV alone', async (t) => {
+  const originalQuery = pool.query;
+  const originalReturnDevTokens = process.env.RETURN_DEV_TOKENS;
+  delete process.env.RETURN_DEV_TOKENS;
+  t.after(() => {
+    pool.query = originalQuery;
+    if (originalReturnDevTokens === undefined) delete process.env.RETURN_DEV_TOKENS;
+    else process.env.RETURN_DEV_TOKENS = originalReturnDevTokens;
+  });
+
+  pool.query = async (sql) => {
+    if (/SELECT id, username, email FROM users/.test(sql)) {
+      return { rows: [{ id: 19, username: 'reset-user', email: 'reset@example.com' }] };
+    }
+    return { rows: [], rowCount: 1 };
+  };
+
+  const res = await request(app)
+    .post('/api/password-reset/request')
+    .send({ username: 'reset-user' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.token, undefined);
+  assert.equal(res.body.resetUrl, undefined);
+});
+
+test('member update API prevents admins from assigning owner role', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const hashedPassword = await bcrypt.hash('password123', 4);
+  pool.query = async (sql, values) => {
+    if (/SELECT \* FROM users WHERE username = \$1/.test(sql)) {
+      return { rows: [{ id: 10, username: 'admin-user', password: hashedPassword, status: 'active' }] };
+    }
+    if (/SELECT \* FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ id: 10, username: 'admin-user', status: 'active' }] };
+    }
+    if (/information_schema\.columns/.test(sql)) return { rows: [] };
+    if (/SELECT[\s\S]+sess[\s\S]+FROM[\s\S]+sessions/i.test(sql)) {
+      return { rows: [{ sess: { cookie: {}, userId: 10, username: 'admin-user' } }], rowCount: 1 };
+    }
+    if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
+    if (/FROM organization_memberships om/.test(sql)) return { rows: [] };
+    if (/FROM organization_memberships\s+WHERE organization_id = \$1 AND user_id = \$2/.test(sql)) {
+      return { rows: [{ role: 'admin', organization_id: values[0] }] };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+
+  const agent = request.agent(app);
+  const loginRes = await agent.post('/api/login').send({ username: 'admin-user', password: 'password123' });
+  assert.equal(loginRes.status, 200);
+
+  let updateAttempted = false;
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      if (sql === 'BEGIN' || sql === 'ROLLBACK' || sql === 'COMMIT') return { rows: [], rowCount: 0 };
+      if (/SELECT om\.role\s+FROM organization_memberships om/.test(sql)) {
+        return { rows: [{ role: 'admin' }] };
+      }
+      if (/SELECT om\.role, u\.status, u\.username/.test(sql)) {
+        return { rows: [{ role: 'editor', status: 'active', username: 'target-user' }] };
+      }
+      if (/UPDATE organization_memberships|UPDATE users/.test(sql)) updateAttempted = true;
+      return { rows: [], rowCount: 0 };
+    },
+    release() {}
+  });
+
+  const res = await agent
+    .patch('/api/orgs/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/members/11')
+    .send({ role: 'owner' });
+
+  assert.equal(res.status, 403);
+  assert.match(res.body.message, /Only owners can assign owner role/);
+  assert.equal(updateAttempted, false);
+});
+
+test('member management, invite, reset, and audit routes are present with required guardrails', () => {
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /app\.get\('\/api\/orgs\/:organizationId\/members'/);
+  assert.match(serverSource, /app\.patch\('\/api\/orgs\/:organizationId\/members\/:userId'/);
+  assert.match(serverSource, /You cannot disable your own account/);
+  assert.match(serverSource, /Cannot remove the last active owner/);
+  assert.match(serverSource, /Only owners can modify owners/);
+  assert.match(serverSource, /Only owners can assign owner role/);
+  assert.match(serverSource, /lockedActorMembership/);
+  assert.match(serverSource, /FOR UPDATE`/);
+  assert.match(serverSource, /lockRows: true/);
+  assert.match(serverSource, /app\.post\('\/api\/orgs\/:organizationId\/invites'/);
+  assert.match(serverSource, /app\.post\('\/api\/invites\/accept'/);
+  assert.match(serverSource, /app\.post\('\/api\/password-reset\/request'/);
+  assert.match(serverSource, /app\.post\('\/api\/password-reset\/complete'/);
+  assert.match(serverSource, /eventType: 'member\.updated'/);
+  assert.match(serverSource, /eventType: 'survey\.archived'/);
+});
+
+test('/api/testEmail rejects arbitrary recipients instead of falling back to another respondent token', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const hashedPassword = await bcrypt.hash('password123', 4);
+  pool.query = async (sql, values) => {
+    if (/SELECT \* FROM users WHERE username = \$1/.test(sql)) {
+      return { rows: [{ id: 31, username: 'editor-user', password: hashedPassword, status: 'active' }] };
+    }
+    if (/SELECT \* FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ id: 31, username: 'editor-user', status: 'active' }] };
+    }
+    if (/information_schema\.columns/.test(sql)) return { rows: [] };
+    if (/SELECT[\s\S]+sess[\s\S]+FROM[\s\S]+sessions/i.test(sql)) {
+      return { rows: [{ sess: { cookie: {}, userId: 31, username: 'editor-user' } }], rowCount: 1 };
+    }
+    if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
+    if (/LEFT JOIN organization_memberships/.test(sql)) {
+      return {
+        rows: [{
+          id: '11111111-1111-4111-8111-111111111111',
+          name: 'Survey A',
+          organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          role: 'editor',
+        }]
+      };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+
+  const sendTestQueries = [];
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      sendTestQueries.push({ sql, values });
+      if (/SELECT text FROM email/.test(sql)) return { rows: [{ text: 'Hello {{link}}' }] };
+      if (/SELECT uuid FROM Respondent/.test(sql)) {
+        assert.match(sql, /lower\(contact_info\) = lower\(\$3\)/);
+        assert.deepEqual(values, ['11111111-1111-4111-8111-111111111111', 'Survey A', 'attacker@example.com']);
+        return { rows: [] };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+    release() {}
+  });
+
+  const agent = request.agent(app);
+  const loginRes = await agent.post('/api/login').send({ username: 'editor-user', password: 'password123' });
+  assert.equal(loginRes.status, 200);
+
+  const res = await agent
+    .post('/api/testEmail')
+    .send({ surveyName: 'Survey A', language: 'English', email: 'attacker@example.com' });
+
+  assert.equal(res.status, 404);
+  assert.match(res.body.message, /Reminders can only be sent/);
+  assert.equal(sendTestQueries.some((call) => /SELECT uuid FROM Respondent/.test(call.sql)), true);
+});
+
+test('dashboard read-only tables hide edit controls and demo email avoids public demo token', () => {
+  const questionTable = fs.readFileSync(path.join(__dirname, '../../dashboard/src/components/QuestionTable.js'), 'utf8');
+  const respondentTable = fs.readFileSync(path.join(__dirname, '../../dashboard/src/components/RespondentTable.js'), 'utf8');
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+
+  assert.match(questionTable, /readOnly = false/);
+  assert.match(questionTable, /editable: !readOnly/);
+  assert.match(questionTable, /!readOnly &&/);
+  assert.match(respondentTable, /readOnly = false/);
+  assert.match(respondentTable, /disabled=\{readOnly\}/);
+  assert.match(respondentTable, /!readOnly &&/);
+  assert.match(respondentTable, /surveyName,/);
+  assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);
+  assert.doesNotMatch(serverSource, /sendMail\(email, 'demo'/);
+  assert.match(serverSource, /lower\(contact_info\) = lower\(\$3\)/);
+  assert.match(serverSource, /No active respondent token found/);
+});
+
+test('demo seed is local-guarded, idempotent, and uses real respondent tokens', () => {
+  const seed = fs.readFileSync(path.join(__dirname, '../../scripts/dev/seed-demo-account.js'), 'utf8');
+  const menu = fs.readFileSync(path.join(__dirname, '../../dashboard/src/components/SurveyTableMenuCell.js'), 'utf8');
+  assert.match(seed, /DEMO_SEED_ALLOW_NONLOCAL/);
+  assert.match(seed, /ON CONFLICT \(slug\) DO UPDATE/);
+  assert.match(seed, /ON CONFLICT \(username\) DO UPDATE/);
+  assert.match(seed, /ON CONFLICT \(name, survey_name\) DO UPDATE/);
+  assert.match(seed, /demo-alex-token/);
+  assert.doesNotMatch(seed, /userId=demo/);
+  assert.doesNotMatch(menu, /userId=demo/);
 });
 
 test('Phase 2/3 IAM migrations are included and avoid destructive operations', () => {

@@ -11,6 +11,7 @@ const Papa = require('papaparse');
 const dotenvFlow = require('dotenv-flow');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 
 dotenvFlow.config();
 
@@ -173,7 +174,6 @@ async function sendTestMail(email, survey, lang) {
   try {
     const query = `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
     const values = [survey.id, survey.name, lang];
-    console.log(values);
     const response = await client.query(query, values);
     
     if (!response.rows || response.rows.length === 0) {
@@ -185,7 +185,24 @@ async function sendTestMail(email, survey, lang) {
       throw new Error(`Email text is undefined for survey '${survey.name}'`);
     }
 
-    sendMail(email, 'demo', survey.name, text);
+    const respondentResult = await client.query(
+      `SELECT uuid FROM Respondent
+       WHERE ${legacySurveyPredicate()}
+         AND can_respond = true
+         AND uuid IS NOT NULL
+         AND lower(contact_info) = lower($3)
+       ORDER BY respondent_id
+       LIMIT 1`,
+      [survey.id, survey.name, email]
+    );
+    const respondentToken = respondentResult.rows[0]?.uuid;
+    if (!respondentToken) {
+      const error = new Error(`No active respondent token found for '${email}' on survey '${survey.name}'. Reminders can only be sent to that respondent's own email address.`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    await sendMail(email, respondentToken, survey.name, text);
   } finally {
     client.release();
   }
@@ -320,6 +337,8 @@ const READ_SURVEY_ROLES = ['owner', 'admin', 'editor', 'analyst', 'viewer'];
 const ANALYST_ROLES = ['owner', 'admin', 'editor', 'analyst'];
 const EDITOR_ROLES = ['owner', 'admin', 'editor'];
 const ADMIN_ROLES = ['owner', 'admin'];
+const ORG_ROLES = ['owner', 'admin', 'editor', 'analyst', 'viewer'];
+const USER_STATUSES = ['invited', 'active', 'disabled'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function hasAnyRole(role, allowedRoles) {
@@ -668,6 +687,27 @@ const requireAuth = async (req, res, next) => {
   }
 };
 
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function newRawToken() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+async function logAuditEvent({ organizationId = null, actorUserId = null, targetUserId = null, surveyId = null, eventType, metadata = {} }) {
+  try {
+    if (!await tableExists('audit_events')) return;
+    await pool.query(
+      `INSERT INTO audit_events (organization_id, actor_user_id, target_user_id, survey_id, event_type, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [organizationId, actorUserId, targetUserId, surveyId, eventType, JSON.stringify(metadata)]
+    );
+  } catch (error) {
+    console.warn('Audit event write failed:', error.message);
+  }
+}
+
 async function requireOrgAccess(req, res, organizationId, allowedRoles) {
   if (!organizationId) {
     res.status(400).json({ message: 'Organization ID is required.' });
@@ -723,6 +763,258 @@ async function getDefaultOrganizationForUser(req, res, requestedOrganizationId =
   }
   return memberships[0];
 }
+
+async function getActiveOwnerCount(organizationId, excludeUserId = null, queryable = pool, { lockRows = false } = {}) {
+  const values = [organizationId];
+  let excludeSql = '';
+  if (excludeUserId) {
+    values.push(excludeUserId);
+    excludeSql = ` AND u.id <> $${values.length}`;
+  }
+
+  if (lockRows) {
+    const result = await queryable.query(
+      `SELECT om.user_id
+       FROM organization_memberships om
+       JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1
+         AND om.role = 'owner'
+         AND COALESCE(u.status, 'active') = 'active'
+       ORDER BY om.user_id
+       FOR UPDATE OF om, u`,
+      [organizationId]
+    );
+    return result.rows.filter(row => Number(row.user_id) !== Number(excludeUserId)).length;
+  }
+
+  const result = await queryable.query(
+    `SELECT COUNT(*)::int AS count
+     FROM organization_memberships om
+     JOIN users u ON u.id = om.user_id
+     WHERE om.organization_id = $1
+       AND om.role = 'owner'
+       AND COALESCE(u.status, 'active') = 'active'${excludeSql}`,
+    values
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+app.get('/api/orgs/:organizationId/members', requireAuth, async (req, res) => {
+  const { organizationId } = req.params;
+  const membership = await requireOrgAccess(req, res, organizationId, ADMIN_ROLES);
+  if (!membership) return;
+
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.username, u.email, u.display_name AS "displayName",
+              COALESCE(u.status, 'active') AS status, om.role, om.created_at AS "memberSince"
+       FROM organization_memberships om
+       JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1
+       ORDER BY om.role DESC, u.username`,
+      [organizationId]
+    );
+    res.json({ members: result.rows, actorRole: membership.role });
+  } catch (error) {
+    console.error('List members failed:', error);
+    res.status(500).json({ message: 'Failed to list members.' });
+  }
+});
+
+app.patch('/api/orgs/:organizationId/members/:userId', express.json(), requireAuth, async (req, res) => {
+  const { organizationId, userId } = req.params;
+  const actorMembership = await requireOrgAccess(req, res, organizationId, ADMIN_ROLES);
+  if (!actorMembership) return;
+
+  const nextRole = req.body.role;
+  const nextStatus = req.body.status;
+  if (nextRole !== undefined && !ORG_ROLES.includes(nextRole)) {
+    return res.status(400).json({ message: 'Invalid role.' });
+  }
+  if (nextStatus !== undefined && !USER_STATUSES.includes(nextStatus)) {
+    return res.status(400).json({ message: 'Invalid status.' });
+  }
+
+  const targetUserId = Number(userId);
+  if (!Number.isInteger(targetUserId)) {
+    return res.status(400).json({ message: 'Invalid user id.' });
+  }
+  if (targetUserId === req.user.id && nextStatus === 'disabled') {
+    return res.status(400).json({ message: 'You cannot disable your own account.' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const actorResult = await client.query(
+      `SELECT om.role
+       FROM organization_memberships om
+       JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1 AND om.user_id = $2
+         AND COALESCE(u.status, 'active') = 'active'
+       FOR UPDATE`,
+      [organizationId, req.user.id]
+    );
+    const lockedActorMembership = actorResult.rows[0];
+    if (!actorMembership.platformAdmin && !hasAnyRole(lockedActorMembership?.role, ADMIN_ROLES)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Organization admin access is required.' });
+    }
+
+    const targetResult = await client.query(
+      `SELECT om.role, u.status, u.username
+       FROM organization_memberships om
+       JOIN users u ON u.id = om.user_id
+       WHERE om.organization_id = $1 AND om.user_id = $2
+       FOR UPDATE`,
+      [organizationId, targetUserId]
+    );
+    const target = targetResult.rows[0];
+    if (!target) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Member not found.' });
+    }
+
+    const actorCanManageOwners = lockedActorMembership?.role === 'owner' || actorMembership.platformAdmin;
+    if (target.role === 'owner' && !actorCanManageOwners) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Only owners can modify owners.' });
+    }
+    if (nextRole === 'owner' && !actorCanManageOwners) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Only owners can assign owner role.' });
+    }
+
+    const wouldRemoveActiveOwner = target.role === 'owner' && (nextRole && nextRole !== 'owner' || nextStatus === 'disabled');
+    if (wouldRemoveActiveOwner && await getActiveOwnerCount(organizationId, targetUserId, client, { lockRows: true }) < 1) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'Cannot remove the last active owner.' });
+    }
+
+    if (nextRole !== undefined) {
+      await client.query('UPDATE organization_memberships SET role = $1 WHERE organization_id = $2 AND user_id = $3', [nextRole, organizationId, targetUserId]);
+    }
+    if (nextStatus !== undefined) {
+      await client.query('UPDATE users SET status = $1 WHERE id = $2', [nextStatus, targetUserId]);
+    }
+    await client.query('COMMIT');
+
+    await logAuditEvent({
+      organizationId,
+      actorUserId: req.user.id,
+      targetUserId,
+      eventType: 'member.updated',
+      metadata: { previousRole: target.role, previousStatus: target.status, role: nextRole, status: nextStatus }
+    });
+    res.json({ success: true });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Update member failed:', error);
+    res.status(500).json({ message: 'Failed to update member.' });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/orgs/:organizationId/invites', express.json(), requireAuth, async (req, res) => {
+  const { organizationId } = req.params;
+  const actorMembership = await requireOrgAccess(req, res, organizationId, ADMIN_ROLES);
+  if (!actorMembership) return;
+  const { email, role = 'viewer' } = req.body;
+  if (!email || !ORG_ROLES.includes(role)) return res.status(400).json({ message: 'Valid email and role are required.' });
+  if (role === 'owner' && actorMembership.role !== 'owner' && !actorMembership.platformAdmin) return res.status(403).json({ message: 'Only owners can invite owners.' });
+
+  try {
+    const token = newRawToken();
+    const result = await pool.query(
+      `INSERT INTO organization_invites (organization_id, email, role, token_hash, expires_at, created_by_user_id)
+       VALUES ($1, $2, $3, $4, NOW() + interval '7 days', $5)
+       RETURNING id, email, role, expires_at AS "expiresAt"`,
+      [organizationId, email, role, hashToken(token), req.user.id]
+    );
+    await logAuditEvent({ organizationId, actorUserId: req.user.id, eventType: 'invite.created', metadata: { email, role, inviteId: result.rows[0].id } });
+    res.status(201).json({ invite: result.rows[0], token, acceptUrl: `${process.env.DASHBOARD_URL || ''}/accept-invite?token=${token}` });
+  } catch (error) {
+    console.error('Create invite failed:', error);
+    res.status(500).json({ message: 'Failed to create invite.' });
+  }
+});
+
+app.post('/api/invites/accept', express.json(), authRateLimiter, async (req, res) => {
+  const { token, username, password, displayName } = req.body;
+  if (!token || !username || !password || password.length < 6) return res.status(400).json({ message: 'Token, username, and a 6+ character password are required.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const inviteResult = await client.query(
+      `SELECT * FROM organization_invites WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > NOW() FOR UPDATE`,
+      [hashToken(token)]
+    );
+    const invite = inviteResult.rows[0];
+    if (!invite) { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Invite is invalid or expired.' }); }
+    const existingUser = await client.query('SELECT id, username, email FROM users WHERE username = $1 OR email = $2 LIMIT 1', [username, invite.email]);
+    if (existingUser.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'An account already exists for this username or invite email. Ask an admin to add the existing account directly.' });
+    }
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const userResult = await client.query(
+      `INSERT INTO users (username, password, email, display_name, status, created_by_user_id)
+       VALUES ($1, $2, $3, $4, 'active', $5)
+       RETURNING id, username, email, display_name, status, is_platform_admin, last_login_at`,
+      [username, hashedPassword, invite.email, displayName || username, invite.created_by_user_id]
+    );
+    const user = userResult.rows[0];
+    await client.query(
+      `INSERT INTO organization_memberships (organization_id, user_id, role, created_by_user_id)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+      [invite.organization_id, user.id, invite.role, invite.created_by_user_id]
+    );
+    await client.query('UPDATE organization_invites SET accepted_at = NOW(), accepted_by_user_id = $1 WHERE id = $2', [user.id, invite.id]);
+    await client.query('COMMIT');
+    await logAuditEvent({ organizationId: invite.organization_id, actorUserId: user.id, targetUserId: user.id, eventType: 'invite.accepted', metadata: { inviteId: invite.id } });
+    res.json({ success: true, user: toSafeUser(user) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Accept invite failed:', error);
+    res.status(500).json({ message: 'Failed to accept invite.' });
+  } finally { client.release(); }
+});
+
+app.post('/api/password-reset/request', express.json(), authRateLimiter, async (req, res) => {
+  const { username, email } = req.body;
+  try {
+    const result = await pool.query('SELECT id, username, email FROM users WHERE username = $1 OR email = $2 LIMIT 1', [username || null, email || null]);
+    const user = result.rows[0];
+    if (!user) return res.json({ success: true });
+    const token = newRawToken();
+    await pool.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + interval '1 hour')`, [user.id, hashToken(token)]);
+    await logAuditEvent({ actorUserId: user.id, targetUserId: user.id, eventType: 'password_reset.requested' });
+    const devTokenPayload = process.env.RETURN_DEV_TOKENS === 'true'
+      ? { token, resetUrl: `${process.env.DASHBOARD_URL || ''}/reset-password?token=${token}` }
+      : {};
+    res.json({ success: true, ...devTokenPayload });
+  } catch (error) { console.error('Password reset request failed:', error); res.status(500).json({ message: 'Failed to request password reset.' }); }
+});
+
+app.post('/api/password-reset/complete', express.json(), authRateLimiter, async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password || password.length < 6) return res.status(400).json({ message: 'Token and a 6+ character password are required.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const tokenResult = await client.query(`SELECT * FROM password_reset_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW() FOR UPDATE`, [hashToken(token)]);
+    const row = tokenResult.rows[0];
+    if (!row) { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Reset token is invalid or expired.' }); }
+    await client.query(`UPDATE users SET password = $1, password_changed_at = NOW(), status = CASE WHEN status = 'invited' THEN 'active' ELSE status END WHERE id = $2`, [await bcrypt.hash(password, 10), row.user_id]);
+    await client.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1', [row.id]);
+    await client.query('COMMIT');
+    await logAuditEvent({ actorUserId: row.user_id, targetUserId: row.user_id, eventType: 'password_reset.completed' });
+    res.json({ success: true });
+  } catch (error) { await client.query('ROLLBACK'); console.error('Password reset complete failed:', error); res.status(500).json({ message: 'Failed to reset password.' }); }
+  finally { client.release(); }
+});
 
 async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRoles = READ_SURVEY_ROLES } = {}) {
   if (!surveyId && surveyName && UUID_RE.test(surveyName)) {
@@ -1005,7 +1297,7 @@ app.post('/api/testEmail', express.json(), requireAuth, async (req, res) => {
     res.status(200).json({ message: 'Test email sent successfully!' });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: error.message || 'Error occurred while sending test email.' });
+    res.status(error.statusCode || 500).json({ message: error.message || 'Error occurred while sending test email.' });
   }
 });
 
@@ -1730,6 +2022,14 @@ app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
     
     await client.query('COMMIT');
 
+    await logAuditEvent({
+      organizationId: survey.organization_id,
+      actorUserId: req.user.id,
+      surveyId: survey.id,
+      eventType: 'survey.archived',
+      metadata: { surveyName: survey.name }
+    });
+
     if (result.rowCount === 0) {
       return res.status(404).json({ message: 'Survey not found.' });
     }
@@ -1880,8 +2180,13 @@ module.exports = {
   resolveSurveyForUser,
   requireOrgAccess,
   getDefaultOrganizationForUser,
+  hashToken,
+  logAuditEvent,
+  getActiveOwnerCount,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
   ADMIN_ROLES,
+  ORG_ROLES,
+  USER_STATUSES,
 };

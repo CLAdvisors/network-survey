@@ -7,7 +7,8 @@
         "dev:setup": "node scripts/dev-setup.js",
         "dev:api": "npm --prefix api run dev",
         "dev:dashboard": "npm --prefix dashboard run dev",
-        "dev:survey": "npm --prefix network-survey run dev"
+        "dev:survey": "npm --prefix network-survey run dev",
+        "seed:demo": "node scripts/dev/seed-demo-account.js"
     },
     "devDependencies": {
         "tree-kill": "^1.2.2"

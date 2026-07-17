@@ -28,7 +28,7 @@ const Dashboard = () => {
       // Update selected survey if it still exists
       if (selectSurvey) {
         const surveyStillExists = response.data.surveys.find(
-          survey => survey.name === selectSurvey.name
+          survey => (survey.id || survey.name) === (selectSurvey.id || selectSurvey.name)
         );
         if (!surveyStillExists) {
           setSelectSurvey(null);
@@ -52,7 +52,7 @@ const Dashboard = () => {
       try {
         // Fetch question data; viewers are allowed to see question text.
         const questionResponse = await api.get(
-          `/listQuestions?surveyName=${selectSurvey.name}`
+          `/listQuestions?surveyName=${selectSurvey.id || selectSurvey.name}`
         );
         setQuestionData(questionResponse.data.questions);
       } catch (err) {
@@ -68,7 +68,7 @@ const Dashboard = () => {
       try {
         // Fetch respondent data for analyst+ roles only because it includes PII.
         const respondentResponse = await api.get(
-          `/targets?surveyName=${selectSurvey.name}`
+          `/targets?surveyName=${selectSurvey.id || selectSurvey.name}`
         );
 
         // Remove dummy user with name 'None'
@@ -166,7 +166,7 @@ const Dashboard = () => {
       <CollapsibleSection title="Survey Questions">
         <QuestionTable 
           rows={questionData} 
-          surveyName={selectSurvey?.name}
+          surveyName={selectSurvey?.id || selectSurvey?.name}
           onQuestionsUpdate={handleQuestionsUpdate}
           readOnly={!canEditSurvey(selectSurvey)}
         />
@@ -174,7 +174,7 @@ const Dashboard = () => {
 
       {canEditSurvey(selectSurvey) && (
         <CollapsibleSection title="Email Notifications">
-          <EmailNotificationEditor surveyId={selectSurvey?.name} />
+          <EmailNotificationEditor surveyId={selectSurvey?.id || selectSurvey?.name} />
         </CollapsibleSection>
       )}
 
@@ -182,7 +182,7 @@ const Dashboard = () => {
         <CollapsibleSection title="Survey Respondents">
           <RespondentTable
             rows={respondentData}
-            surveyName={selectSurvey?.name}
+            surveyName={selectSurvey?.id || selectSurvey?.name}
             onRespondentsUpdate={handleRespondentsUpdate}
             readOnly={!canEditSurvey(selectSurvey)}
           />

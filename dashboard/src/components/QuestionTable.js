@@ -9,7 +9,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
 
-const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
+const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
@@ -85,10 +85,10 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'text', headerName: 'Question text', width: 500, editable: true },
+    { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly },
     { field: 'type', headerName: 'Question type', width: 150, editable: false },
     { field: 'required', headerName: 'Required', width: 100 },
-    { field: 'max', headerName: 'Max answers', width: 150,  editable: true  },
+    { field: 'max', headerName: 'Max answers', width: 150,  editable: !readOnly  },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -109,7 +109,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
         />
       ),
     }
-  ];
+  ].filter(column => !readOnly || column.field !== 'actions');
 
   const TEMPLATE_DATA = [
     'Title,Question name,Question title,Question type',
@@ -167,6 +167,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
   };
 
   const handleProcessRowUpdate = (newRow) => {
+    if (readOnly) return originalRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
@@ -318,24 +319,26 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
         <Typography variant="h7" color="primary" sx={{ fontWeight: 'bold' }}>
           Question Table
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <AddRowButton onClick={handleAddRow} />
-          <TableUploadButton
-            onUpload={handleUpload}
-            templateData={TEMPLATE_DATA}
-            tableName="Questions"
-          />
-          {hasChanges && (
-            <Button
-              variant="contained"
-              startIcon={<SaveIcon />}
-              onClick={handleSave}
-              size="small"
-            >
-              Save
-            </Button>
-          )}
-        </Box>
+        {!readOnly && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AddRowButton onClick={handleAddRow} />
+            <TableUploadButton
+              onUpload={handleUpload}
+              templateData={TEMPLATE_DATA}
+              tableName="Questions"
+            />
+            {hasChanges && (
+              <Button
+                variant="contained"
+                startIcon={<SaveIcon />}
+                onClick={handleSave}
+                size="small"
+              >
+                Save
+              </Button>
+            )}
+          </Box>
+        )}
       </Box>
 
       <DataGrid
@@ -346,7 +349,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate }) => {
         }}
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={handleProcessRowUpdate}
+        processRowUpdate={readOnly ? undefined : handleProcessRowUpdate}
         components={{
           Toolbar: GridToolbar,
         }}

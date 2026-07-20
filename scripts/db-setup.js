@@ -233,6 +233,31 @@ async function runLiquibaseUpdate() {
   });
 }
 
+async function setupTableExists(client, tableName) {
+  const result = await client.query(
+    `SELECT 1
+     FROM information_schema.tables
+     WHERE table_schema = current_schema()
+       AND table_name = $1
+     LIMIT 1`,
+    [tableName.toLowerCase()]
+  );
+  return result.rowCount > 0;
+}
+
+async function setupColumnExists(client, tableName, columnName) {
+  const result = await client.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = $1
+       AND column_name = $2
+     LIMIT 1`,
+    [tableName.toLowerCase(), columnName]
+  );
+  return result.rowCount > 0;
+}
+
 async function ensureLocalAdminUser(config) {
   const username = String(config.localAdminUsername || '').trim();
   const password = String(config.localAdminPassword || '').trim();
@@ -258,13 +283,60 @@ async function ensureLocalAdminUser(config) {
 
   await client.connect();
   try {
-    await client.query(
-      `INSERT INTO users (username, password)
-       VALUES ($1, $2)
+    await client.query('BEGIN');
+
+    const hasStatus = await setupColumnExists(client, 'users', 'status');
+    const hasPlatformAdmin = await setupColumnExists(client, 'users', 'is_platform_admin');
+    const insertColumns = ['username', 'password'];
+    const insertValues = [username, passwordHash];
+    const conflictUpdates = ['password = EXCLUDED.password'];
+
+    if (hasStatus) {
+      insertColumns.push('status');
+      insertValues.push('active');
+      conflictUpdates.push('status = EXCLUDED.status');
+    }
+
+    if (hasPlatformAdmin) {
+      insertColumns.push('is_platform_admin');
+      insertValues.push(true);
+      conflictUpdates.push('is_platform_admin = EXCLUDED.is_platform_admin');
+    }
+
+    const placeholders = insertValues.map((_, index) => `$${index + 1}`).join(', ');
+    const userResult = await client.query(
+      `INSERT INTO users (${insertColumns.join(', ')})
+       VALUES (${placeholders})
        ON CONFLICT (username)
-       DO UPDATE SET password = EXCLUDED.password`,
-      [username, passwordHash]
+       DO UPDATE SET ${conflictUpdates.join(', ')}
+       RETURNING id`,
+      insertValues
     );
+    const adminUserId = userResult.rows[0].id;
+
+    const hasOrganizations = await setupTableExists(client, 'organizations');
+    const hasMemberships = await setupTableExists(client, 'organization_memberships');
+    if (hasOrganizations && hasMemberships) {
+      const orgResult = await client.query(
+        `INSERT INTO organizations (name, slug)
+         VALUES ('Default / Imported', 'default-imported')
+         ON CONFLICT (slug) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+         RETURNING id`
+      );
+      const defaultOrganizationId = orgResult.rows[0].id;
+      await client.query(
+        `INSERT INTO organization_memberships (organization_id, user_id, role)
+         VALUES ($1, $2, 'owner')
+         ON CONFLICT (organization_id, user_id)
+         DO UPDATE SET role = 'owner'`,
+        [defaultOrganizationId, adminUserId]
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
   } finally {
     await client.end();
   }

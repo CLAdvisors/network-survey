@@ -76,6 +76,26 @@ const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//
 const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem.</p> 
 <p>Morbi sed erat non ex mollis pulvinar ut eu nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed gravida cursus pellentesque. Aliquam in lectus et ex ultricies sodales a.</p>`; 
 
+async function sendAccountEmail({ to, subject, html, text }) {
+  if (!resend) {
+    return { sent: false, message: 'Email delivery is not configured; deliver the returned link manually.' };
+  }
+
+  try {
+    await resend.emails.send({
+      from: 'CLA Survey <survey@cladvisors.com>',
+      to,
+      subject,
+      html,
+      text,
+    });
+    return { sent: true };
+  } catch (error) {
+    console.error(`Failed to send account email to ${to}:`, error.message);
+    return { sent: false, message: 'Email delivery failed; deliver the returned link manually.' };
+  }
+}
+
 async function sendMail(email, id, surveyName, text) {
   try {
     if (!resend) {
@@ -799,6 +819,26 @@ async function getActiveOwnerCount(organizationId, excludeUserId = null, queryab
   return Number(result.rows[0]?.count || 0);
 }
 
+app.get('/api/orgs', requireAuth, async (req, res) => {
+  if (!isPlatformAdmin(req.user)) {
+    return res.status(403).json({ message: 'Platform admin access is required.' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT o.id, o.name, o.slug, COUNT(om.user_id)::int AS "memberCount"
+       FROM organizations o
+       LEFT JOIN organization_memberships om ON om.organization_id = o.id
+       GROUP BY o.id, o.name, o.slug
+       ORDER BY o.name NULLS LAST, o.slug NULLS LAST, o.id`
+    );
+    res.json({ organizations: result.rows });
+  } catch (error) {
+    console.error('List organizations failed:', error);
+    res.status(500).json({ message: 'Failed to list organizations.' });
+  }
+});
+
 app.get('/api/orgs/:organizationId/members', requireAuth, async (req, res) => {
   const { organizationId } = req.params;
   const membership = await requireOrgAccess(req, res, organizationId, ADMIN_ROLES);
@@ -920,7 +960,7 @@ app.post('/api/orgs/:organizationId/invites', express.json(), requireAuth, async
   const { organizationId } = req.params;
   const actorMembership = await requireOrgAccess(req, res, organizationId, ADMIN_ROLES);
   if (!actorMembership) return;
-  const { email, role = 'viewer' } = req.body;
+  const { email, role = 'viewer', deliverEmail = false } = req.body;
   if (!email || !ORG_ROLES.includes(role)) return res.status(400).json({ message: 'Valid email and role are required.' });
   if (role === 'owner' && actorMembership.role !== 'owner' && !actorMembership.platformAdmin) return res.status(403).json({ message: 'Only owners can invite owners.' });
 
@@ -933,7 +973,18 @@ app.post('/api/orgs/:organizationId/invites', express.json(), requireAuth, async
       [organizationId, email, role, hashToken(token), req.user.id]
     );
     await logAuditEvent({ organizationId, actorUserId: req.user.id, eventType: 'invite.created', metadata: { email, role, inviteId: result.rows[0].id } });
-    res.status(201).json({ invite: result.rows[0], token, acceptUrl: `${process.env.DASHBOARD_URL || ''}/accept-invite?token=${token}` });
+
+    const acceptUrl = `${process.env.DASHBOARD_URL || ''}/accept-invite?token=${token}`;
+    const emailDelivery = deliverEmail
+      ? await sendAccountEmail({
+          to: email,
+          subject: 'You have been invited to CLA Network Survey',
+          text: `You have been invited to join CLA Network Survey. Accept your invite: ${acceptUrl}`,
+          html: `<p>You have been invited to join CLA Network Survey.</p><p><a href="${acceptUrl}">Accept your invite</a></p><p>This invite expires in 7 days.</p>`,
+        })
+      : { sent: false, message: 'Email delivery was not requested; deliver the returned link manually.' };
+
+    res.status(201).json({ invite: result.rows[0], token, acceptUrl, emailDelivery });
   } catch (error) {
     console.error('Create invite failed:', error);
     res.status(500).json({ message: 'Failed to create invite.' });

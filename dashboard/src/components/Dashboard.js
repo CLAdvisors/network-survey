@@ -1,6 +1,6 @@
 import React from "react";
 import SurveyTable from "./SurveyTable";
-import { Box, Button } from "@mui/material";
+import { Alert, Box, Button, Snackbar } from "@mui/material";
 import { useTheme } from "@emotion/react";
 import RespondentTable from "./RespondentTable";
 import AddIcon from "@mui/icons-material/Add";
@@ -18,6 +18,7 @@ const Dashboard = () => {
   const [questionData, setQuestionData] = React.useState(null);
   const [respondentData, setRespondentData] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
+  const [snackbar, setSnackbar] = React.useState(null);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
 
   const fetchSurveyData = async () => {
@@ -98,6 +99,10 @@ const Dashboard = () => {
       setCreateDialogOpen(false);
     } catch (err) {
       console.error("Failed to create survey:", err);
+      setSnackbar({
+        severity: 'error',
+        message: err.response?.data?.message || err.response?.data?.error || 'Failed to create survey. Please try again.',
+      });
     }
   };
 
@@ -133,6 +138,22 @@ const Dashboard = () => {
         backgroundColor: theme.palette.background.paper,
       }}
     >
+      <Snackbar
+        open={Boolean(snackbar)}
+        autoHideDuration={6000}
+        onClose={() => setSnackbar(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          severity={snackbar?.severity || 'info'}
+          variant="filled"
+          onClose={() => setSnackbar(null)}
+          sx={{ width: '100%' }}
+        >
+          {snackbar?.message}
+        </Alert>
+      </Snackbar>
+
       <CollapsibleSection 
         title="Surveys"
         actions={

@@ -22,12 +22,34 @@ const {
   hasAnyRole,
   resolveSurveyForUser,
   getDefaultOrganizationForUser,
+  getDashboardBaseUrl,
+  buildDashboardUrl,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
   ADMIN_ROLES,
   hashToken,
 } = require('../server');
+
+test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL', (t) => {
+  const originalDashboardUrl = process.env.DASHBOARD_URL;
+  const originalFrontendUrl = process.env.FRONTEND_URL;
+  t.after(() => {
+    if (originalDashboardUrl === undefined) delete process.env.DASHBOARD_URL;
+    else process.env.DASHBOARD_URL = originalDashboardUrl;
+    if (originalFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = originalFrontendUrl;
+  });
+
+  delete process.env.DASHBOARD_URL;
+  process.env.FRONTEND_URL = 'https://dashboard.example.com/';
+  assert.equal(getDashboardBaseUrl(), 'https://dashboard.example.com');
+  assert.equal(buildDashboardUrl('/accept-invite?token=abc'), 'https://dashboard.example.com/accept-invite?token=abc');
+
+  process.env.DASHBOARD_URL = 'https://admin.example.com/';
+  assert.equal(getDashboardBaseUrl(), 'https://admin.example.com');
+  assert.equal(buildDashboardUrl('reset-password?token=abc'), 'https://admin.example.com/reset-password?token=abc');
+});
 
 test('dashboard/admin endpoints require authentication', async () => {
   const endpoints = [
@@ -45,6 +67,7 @@ test('dashboard/admin endpoints require authentication', async () => {
     ['get', '/api/results?surveyName=S'],
     ['get', '/api/targets?surveyName=S'],
     ['get', '/api/surveyStatus?surveyName=S'],
+    ['get', '/api/orgs'],
   ];
 
   for (const [method, url, body] of endpoints) {
@@ -363,8 +386,53 @@ test('member update API prevents admins from assigning owner role', async (t) =>
   assert.equal(updateAttempted, false);
 });
 
+test('platform admin organization list endpoint requires platform admin and returns member counts', async (t) => {
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.query = originalQuery;
+  });
+
+  const hashedPassword = await bcrypt.hash('password123', 4);
+  pool.query = async (sql, values) => {
+    if (/SELECT \* FROM users WHERE username = \$1/.test(sql)) {
+      return { rows: [{ id: 77, username: 'platform-user', password: hashedPassword, status: 'active', is_platform_admin: true }] };
+    }
+    if (/SELECT \* FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ id: 77, username: 'platform-user', status: 'active', is_platform_admin: true }] };
+    }
+    if (/information_schema\.columns/.test(sql) || /information_schema\.tables/.test(sql)) return { rows: [] };
+    if (/SELECT[\s\S]+sess[\s\S]+FROM[\s\S]+sessions/i.test(sql)) {
+      return { rows: [{ sess: { cookie: {}, userId: 77, username: 'platform-user' } }], rowCount: 1 };
+    }
+    if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
+    if (/SELECT o\.id, o\.name, o\.slug, COUNT\(om\.user_id\)::int AS "memberCount"/.test(sql)) {
+      return { rows: [{ id: 'org-1', name: 'Default / Imported', slug: 'default-imported', memberCount: 2 }] };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+
+  const agent = request.agent(app);
+  const loginRes = await agent.post('/api/login').send({ username: 'platform-user', password: 'password123' });
+  assert.equal(loginRes.status, 200);
+
+  const res = await agent.get('/api/orgs');
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.organizations, [{ id: 'org-1', name: 'Default / Imported', slug: 'default-imported', memberCount: 2 }]);
+});
+
+test('local db setup bootstraps local admin IAM access after migrations', () => {
+  const setupSource = fs.readFileSync(path.join(__dirname, '../../scripts/db-setup.js'), 'utf8');
+  assert.match(setupSource, /is_platform_admin/);
+  assert.match(setupSource, /status = EXCLUDED\.status/);
+  assert.match(setupSource, /organization_memberships/);
+  assert.match(setupSource, /default-imported/);
+  assert.match(setupSource, /DO UPDATE SET role = 'owner'/);
+});
+
 test('member management, invite, reset, and audit routes are present with required guardrails', () => {
   const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /app\.get\('\/api\/orgs'/);
+  assert.match(serverSource, /Platform admin access is required/);
   assert.match(serverSource, /app\.get\('\/api\/orgs\/:organizationId\/members'/);
   assert.match(serverSource, /app\.patch\('\/api\/orgs\/:organizationId\/members\/:userId'/);
   assert.match(serverSource, /You cannot disable your own account/);

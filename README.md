@@ -36,7 +36,7 @@ Public dashboard self-signup is controlled by `ALLOW_PUBLIC_SIGNUP`. It defaults
 - `db:setup` reads DB credentials from `api/.env.local`
 - The script requires Liquibase CLI on your `PATH`
 - A generated Liquibase defaults file is created at `db/.liquibase.local.generated.properties` during setup
-- `db:setup` also ensures a bootstrap local admin account in `users` so login is available immediately
+- `db:setup` also ensures a bootstrap local admin account in `users` so login is available immediately; when IAM tables are present it marks the account active/platform-admin and owner of `default-imported`
 - Default bootstrap credentials are `admin` / `admin123`
 - Override bootstrap credentials with `LOCAL_ADMIN_USERNAME` and `LOCAL_ADMIN_PASSWORD` in `api/.env.local`
 - `db:setup` is local-only and refuses to run when `DB_HOST` is not local or `NODE_ENV` is non-local

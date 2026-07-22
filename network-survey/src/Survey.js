@@ -9,6 +9,7 @@ import {
 import Header from './Header';
 import SurveyComponent from './SurveyComponent';
 import { ReactComponent as Logo } from './logo.svg';
+import { BRAND_COLORS } from '@network-survey/frontend-shared';
 
 const Survey = () => {
   const theme = useTheme();
@@ -17,7 +18,7 @@ const Survey = () => {
   return (
     <Box sx={{ 
       minHeight: '100vh',
-      bgcolor: '#F9F9F9',
+      bgcolor: BRAND_COLORS.surveyBackground,
       pb: 4
     }}>
       <Header svgComponent={<Logo />} title={title} />
@@ -43,7 +44,7 @@ const Survey = () => {
               sx={{ 
                 fontWeight: 500,
                 mb: 1,
-                color: '#42B4AF'
+                color: BRAND_COLORS.primary
               }}
             >
               Survey Instructions
@@ -64,10 +65,10 @@ const Survey = () => {
             '& .sv-root-modern': {
               '--sv-header-background-color': 'transparent',
               '--sv-header-text-color': theme.palette.text.primary,
-              '--sv-primary-color': '#42B4AF',
-              '--sv-secondary-color': '#42B4AF',
-              '--sv-primary-hover-color': '#3B9F9B',
-              '--sv-secondary-hover-color': '#3B9F9B',
+              '--sv-primary-color': BRAND_COLORS.primary,
+              '--sv-secondary-color': BRAND_COLORS.primary,
+              '--sv-primary-hover-color': BRAND_COLORS.primaryHover,
+              '--sv-secondary-hover-color': BRAND_COLORS.primaryHover,
               '--sv-border-color': theme.palette.divider,
               '--sv-font-family': theme.typography.fontFamily,
               '--sv-page-edge-padding': '0px',
@@ -95,24 +96,24 @@ const Survey = () => {
               transition: 'all 0.2s ease',
               backgroundColor: theme.palette.background.paper,
               '&:focus-within': {
-                borderColor: '#42B4AF',
+                borderColor: BRAND_COLORS.primary,
                 boxShadow: `0 0 0 2px rgba(66, 180, 175, 0.15)`,
               }
             },
             // Tagbox Items
             '& .sv-tagbox__item': {
               borderRadius: 1,
-              backgroundColor: '#42B4AF !important',
+              backgroundColor: `${BRAND_COLORS.primary} !important`,
               color: '#FFFFFF',
               margin: '2px',
               padding: '4px 8px',
               '&:hover': {
-                backgroundColor: '#3B9F9B !important',
+                backgroundColor: `${BRAND_COLORS.primaryHover} !important`,
               }
             },
             // Complete Button
             '& .sv-btn': {
-              backgroundColor: '#42B4AF',
+              backgroundColor: BRAND_COLORS.primary,
               color: '#FFFFFF',
               borderRadius: 1,
               padding: '8px 24px',
@@ -120,7 +121,7 @@ const Survey = () => {
               fontWeight: 500,
               transition: 'all 0.2s ease',
               '&:hover': {
-                backgroundColor: '#3B9F9B',
+                backgroundColor: BRAND_COLORS.primaryHover,
               }
             },
             // Footer

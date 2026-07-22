@@ -1,5 +1,5 @@
 import React from 'react';
-import ReactDOM from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import App from './App';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import { AuthProvider } from './context/AuthContext';
@@ -41,13 +41,14 @@ const theme = createTheme({
       },
   });
 
-ReactDOM.render(
+const root = createRoot(document.getElementById('root'));
+
+root.render(
     <ThemeProvider theme={theme}>
          <AuthProvider>
         <React.StrictMode>
             <App />
-        </React.StrictMode>,
+        </React.StrictMode>
         </AuthProvider>
-    </ThemeProvider>,
-  document.getElementById('root')
+    </ThemeProvider>
 );

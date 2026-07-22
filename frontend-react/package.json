@@ -1,0 +1,15 @@
+{
+  "name": "@network-survey/frontend-react",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.jsx",
+  "module": "./src/index.jsx",
+  "exports": {
+    ".": "./src/index.jsx"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0",
+    "react-beautiful-dnd": "^13.1.1"
+  }
+}

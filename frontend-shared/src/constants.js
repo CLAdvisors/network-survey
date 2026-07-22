@@ -1,4 +1,4 @@
-const BRAND_COLORS = {
+export const BRAND_COLORS = {
   primary: '#42B4AF',
   primaryDashboard: '#42B3AF',
   primaryHover: '#3B9F9B',
@@ -8,13 +8,13 @@ const BRAND_COLORS = {
   surveyBackground: '#F9F9F9'
 };
 
-const BRAND = {
+export const BRAND = {
   dashboardTitle: 'CLA Survey Dashboard',
   websiteUrl: 'https://contemporaryleadership.com/',
   faviconUrl: 'https://contemporaryleadership.com/wp-content/uploads/2021/09/favicon.svg'
 };
 
-const LANGUAGES = [
+export const LANGUAGES = [
   { code: 'en', label: 'English' },
   { code: 'es', label: 'Spanish' },
   { code: 'fr', label: 'French' },
@@ -29,13 +29,5 @@ const LANGUAGES = [
   { code: 'ko', label: 'Korean' }
 ];
 
-const TAGBOX_PLACEHOLDER = 'Start typing to search for people';
-const TAGBOX_PAGE_SIZE = 25;
-
-module.exports = {
-  BRAND,
-  BRAND_COLORS,
-  LANGUAGES,
-  TAGBOX_PLACEHOLDER,
-  TAGBOX_PAGE_SIZE
-};
+export const TAGBOX_PLACEHOLDER = 'Start typing to search for people';
+export const TAGBOX_PAGE_SIZE = 25;

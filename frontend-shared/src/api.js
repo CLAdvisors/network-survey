@@ -1,9 +1,13 @@
-function getApiBaseUrl(env) {
-  const source = env || (typeof process !== 'undefined' ? process.env : {});
-  return `${source.REACT_APP_API_PROTOCOL}://${source.REACT_APP_API_HOST}:${source.REACT_APP_API_PORT}/api`;
+export function getApiBaseUrl(env) {
+  const source = env || {};
+  const protocol = source.VITE_API_PROTOCOL || source.REACT_APP_API_PROTOCOL;
+  const host = source.VITE_API_HOST || source.REACT_APP_API_HOST;
+  const port = source.VITE_API_PORT || source.REACT_APP_API_PORT;
+
+  return `${protocol}://${host}:${port}/api`;
 }
 
-function buildApiUrl(pathname, queryParams, env) {
+export function buildApiUrl(pathname, queryParams, env) {
   const sanitizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
   const url = new URL(`${getApiBaseUrl(env)}${sanitizedPath}`);
 
@@ -20,7 +24,7 @@ function buildApiUrl(pathname, queryParams, env) {
   return url.toString();
 }
 
-function createAxiosApi(axios, options) {
+export function createAxiosApi(axios, options) {
   const settings = options || {};
   const api = axios.create({
     baseURL: getApiBaseUrl(settings.env),
@@ -41,9 +45,3 @@ function createAxiosApi(axios, options) {
 
   return api;
 }
-
-module.exports = {
-  getApiBaseUrl,
-  buildApiUrl,
-  createAxiosApi
-};

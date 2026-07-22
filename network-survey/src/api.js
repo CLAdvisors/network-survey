@@ -1,5 +1,5 @@
 import { buildApiUrl as buildSharedApiUrl } from '@network-survey/frontend-shared';
 
 export function buildApiUrl(pathname, queryParams) {
-  return buildSharedApiUrl(pathname, queryParams, process.env);
+  return buildSharedApiUrl(pathname, queryParams, import.meta.env);
 }

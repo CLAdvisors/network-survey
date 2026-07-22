@@ -1,4 +1,12 @@
 {
+    "private": true,
+    "workspaces": [
+        "api",
+        "dashboard",
+        "frontend-react",
+        "frontend-shared",
+        "network-survey"
+    ],
     "scripts": {
         "dev": "node scripts/local-dev.js",
         "dev:stop": "node scripts/stop-local-dev.js",

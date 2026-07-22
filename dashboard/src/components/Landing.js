@@ -10,6 +10,7 @@ import {
   useTheme,
 } from '@mui/material';
 import NetworkBackground from './NetworkBackground';
+import { BRAND } from '@network-survey/frontend-shared';
 
 const Landing = () => {
   const navigate = useNavigate();
@@ -83,7 +84,7 @@ const Landing = () => {
               }}
             >
               <img
-                src="https://contemporaryleadership.com/wp-content/uploads/2021/09/favicon.svg"
+                src={BRAND.faviconUrl}
                 alt="logo"
                 style={{ 
                   height: isMobile ? '36px' : '64px',

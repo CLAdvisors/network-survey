@@ -13,6 +13,7 @@ import {
 import { useTheme } from '@mui/material/styles';
 import NetworkBackground from './NetworkBackground';
 import api from '../api/axios';
+import { BRAND } from '@network-survey/frontend-shared';
 
 const SignUp = () => {
   const [username, setUsername] = useState('');
@@ -108,7 +109,7 @@ const SignUp = () => {
             }}
           >
             <img
-              src="https://contemporaryleadership.com/wp-content/uploads/2021/09/favicon.svg"
+              src={BRAND.faviconUrl}
               alt="logo"
               style={{ height: '48px', marginRight: '16px' }}
             />

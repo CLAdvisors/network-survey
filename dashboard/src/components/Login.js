@@ -10,13 +10,19 @@ import {
   CircularProgress,
   Alert,
   Link,
+  InputAdornment,
+  IconButton,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import NetworkBackground from './NetworkBackground';
+import { BRAND } from '@network-survey/frontend-shared';
 
 const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
@@ -86,7 +92,7 @@ const Login = () => {
             }}
           >
             <img
-              src="https://contemporaryleadership.com/wp-content/uploads/2021/09/favicon.svg"
+              src={BRAND.faviconUrl}
               alt="logo"
               style={{ height: '48px', marginRight: '16px' }}
             />
@@ -120,12 +126,27 @@ const Login = () => {
             <TextField
               fullWidth
               label="Password"
-              type="password"
+              type={showPassword ? 'text' : 'password'}
               variant="outlined"
               margin="normal"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={isLoading}
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowPassword((current) => !current)}
+                      onMouseDown={(e) => e.preventDefault()}
+                      edge="end"
+                      disabled={isLoading}
+                    >
+                      {showPassword ? <VisibilityOff /> : <Visibility />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
             />
             <Button
               type="submit"

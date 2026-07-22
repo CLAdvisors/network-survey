@@ -283,6 +283,16 @@ async function executeQuery(query, values = []) {
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 
+function getDashboardBaseUrl() {
+  return (process.env.DASHBOARD_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+}
+
+function buildDashboardUrl(path) {
+  const baseUrl = getDashboardBaseUrl();
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${baseUrl}${normalizedPath}`;
+}
+
 app.use(express.json());
 
 app.use(cors({
@@ -974,7 +984,7 @@ app.post('/api/orgs/:organizationId/invites', express.json(), requireAuth, async
     );
     await logAuditEvent({ organizationId, actorUserId: req.user.id, eventType: 'invite.created', metadata: { email, role, inviteId: result.rows[0].id } });
 
-    const acceptUrl = `${process.env.DASHBOARD_URL || ''}/accept-invite?token=${token}`;
+    const acceptUrl = buildDashboardUrl(`/accept-invite?token=${token}`);
     const emailDelivery = deliverEmail
       ? await sendAccountEmail({
           to: email,
@@ -1043,7 +1053,7 @@ app.post('/api/password-reset/request', express.json(), authRateLimiter, async (
     await pool.query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + interval '1 hour')`, [user.id, hashToken(token)]);
     await logAuditEvent({ actorUserId: user.id, targetUserId: user.id, eventType: 'password_reset.requested' });
     const devTokenPayload = process.env.RETURN_DEV_TOKENS === 'true'
-      ? { token, resetUrl: `${process.env.DASHBOARD_URL || ''}/reset-password?token=${token}` }
+      ? { token, resetUrl: buildDashboardUrl(`/reset-password?token=${token}`) }
       : {};
     res.json({ success: true, ...devTokenPayload });
   } catch (error) { console.error('Password reset request failed:', error); res.status(500).json({ message: 'Failed to request password reset.' }); }
@@ -2234,6 +2244,8 @@ module.exports = {
   hashToken,
   logAuditEvent,
   getActiveOwnerCount,
+  getDashboardBaseUrl,
+  buildDashboardUrl,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,

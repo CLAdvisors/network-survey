@@ -22,12 +22,34 @@ const {
   hasAnyRole,
   resolveSurveyForUser,
   getDefaultOrganizationForUser,
+  getDashboardBaseUrl,
+  buildDashboardUrl,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
   ADMIN_ROLES,
   hashToken,
 } = require('../server');
+
+test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL', (t) => {
+  const originalDashboardUrl = process.env.DASHBOARD_URL;
+  const originalFrontendUrl = process.env.FRONTEND_URL;
+  t.after(() => {
+    if (originalDashboardUrl === undefined) delete process.env.DASHBOARD_URL;
+    else process.env.DASHBOARD_URL = originalDashboardUrl;
+    if (originalFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = originalFrontendUrl;
+  });
+
+  delete process.env.DASHBOARD_URL;
+  process.env.FRONTEND_URL = 'https://dashboard.example.com/';
+  assert.equal(getDashboardBaseUrl(), 'https://dashboard.example.com');
+  assert.equal(buildDashboardUrl('/accept-invite?token=abc'), 'https://dashboard.example.com/accept-invite?token=abc');
+
+  process.env.DASHBOARD_URL = 'https://admin.example.com/';
+  assert.equal(getDashboardBaseUrl(), 'https://admin.example.com');
+  assert.equal(buildDashboardUrl('reset-password?token=abc'), 'https://admin.example.com/reset-password?token=abc');
+});
 
 test('dashboard/admin endpoints require authentication', async () => {
   const endpoints = [

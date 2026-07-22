@@ -1,6 +1,7 @@
 import React from 'react';
 import './Header.css';
 import {BrowserView, MobileView} from 'react-device-detect';
+import { BRAND, BRAND_COLORS } from '@network-survey/frontend-shared';
 
 const Header = ({ svgComponent: SvgComponent, title }) => {
 
@@ -15,7 +16,7 @@ const Header = ({ svgComponent: SvgComponent, title }) => {
       <BrowserView>
           <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
             <div className="header-svg">
-              <a href='https://contemporaryleadership.com/' target="_blank" rel="noreferrer">
+              <a href={BRAND.websiteUrl} target="_blank" rel="noreferrer">
                 {SvgComponent}
               </a>
             </div>
@@ -23,7 +24,7 @@ const Header = ({ svgComponent: SvgComponent, title }) => {
       </BrowserView>
       <MobileView>
         <h1 style={{ 
-          color: '#42B4AF',
+          color: BRAND_COLORS.primary,
           fontSize: '1.25rem',
           fontWeight: 600,
           margin: 0

@@ -17,6 +17,7 @@ import { Box, CircularProgress, Snackbar, Alert } from '@mui/material';
 import { NetworkProvider } from './context/NetworkContext';
 import SurveyEditor from './components/SurveyEditor'; // Import the SurveyEditor component
 import EditIcon from '@mui/icons-material/Edit'; // Import an icon for the editor
+import { BRAND } from '@network-survey/frontend-shared';
 
 const NAVIGATION = [
   { segment: '', title: 'Dashboard', icon: <DashboardIcon style={{ color: 'primary.main' }} /> },
@@ -65,10 +66,10 @@ const AppContent = () => {
       router: router,
       theme: theme,
       branding: {
-        title: 'CLA Survey Dashboard',
+        title: BRAND.dashboardTitle,
         logo: (
           <img
-            src="https://contemporaryleadership.com/wp-content/uploads/2021/09/favicon.svg"
+            src={BRAND.faviconUrl}
             alt="logo"
             style={{ height: '32px', marginRight: '10px' }}
           />

@@ -10,6 +10,13 @@
   },
   "peerDependencies": {
     "react": "^18.2.0",
-    "react-beautiful-dnd": "^13.1.1"
+    "react-dom": "^18.2.0",
+    "react-beautiful-dnd": "^13.1.1",
+    "@emotion/react": "^11.13.5",
+    "@emotion/styled": "^11.13.5",
+    "@mui/material": "^6.1.10"
+  },
+  "dependencies": {
+    "@network-survey/frontend-shared": "file:../frontend-shared"
   }
 }

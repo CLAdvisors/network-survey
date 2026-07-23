@@ -49,7 +49,10 @@ curl -fsS -X POST "$BASE/api/register" \
 
 echo "==> Grant smoke user org membership"
 node <<'NODE'
-const { Pool } = require('./api/node_modules/pg');
+const { createRequire } = require('module');
+const path = require('path');
+const apiRequire = createRequire(path.resolve(process.cwd(), 'api/package.json'));
+const { Pool } = apiRequire('pg');
 const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || 'postgres',

@@ -23,8 +23,8 @@
     "react-device-detect": "^2.2.3",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.28.0",
-    "survey-core": "latest",
-    "survey-react-ui": "latest",
+    "survey-core": "2.5.35",
+    "survey-react-ui": "2.5.35",
     "web-vitals": "^2.1.4"
   },
   "scripts": {

@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import reportWebVitals from './reportWebVitals';
+import { AppThemeProvider } from '@network-survey/frontend-react';
 
 import Survey from './Survey';
 
@@ -13,9 +14,11 @@ import Survey from './Survey';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
-  <React.StrictMode>
-    <Survey />
-  </React.StrictMode>
+  <AppThemeProvider>
+    <React.StrictMode>
+      <Survey />
+    </React.StrictMode>
+  </AppThemeProvider>
   
 );
 

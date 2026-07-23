@@ -1,54 +1,17 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
+import { AppThemeProvider } from '@network-survey/frontend-react';
 import { AuthProvider } from './context/AuthContext';
-import { BRAND_COLORS } from '@network-survey/frontend-shared';
-
-const theme = createTheme({
-    palette: {
-      primary: {
-        main: BRAND_COLORS.primaryDashboard, // Updated green color for primary palette
-      },
-      text: {
-        primary: '#333', // Darker text for better contrast
-      },
-      background: {
-        default: '#f9f9f9', // Optional: Light background color
-      },
-    },
-    typography: {
-      h6: {
-        fontWeight: 'bold', // Title weight adjusted to be bolder than bold
-        color: BRAND_COLORS.primaryDashboard, // Green shade for titles
-      },
-    },
-    components: {
-        MuiCssBaseline: {
-          styleOverrides: {
-            'html, body': {
-              margin: 0,
-              padding: 0,
-              overflow: 'hidden',
-              height: '100%'
-            },
-            '#root': {
-              height: '100%',
-              overflow: 'hidden'
-            }
-          },
-        },
-      },
-  });
 
 const root = createRoot(document.getElementById('root'));
 
 root.render(
-    <ThemeProvider theme={theme}>
-         <AuthProvider>
-        <React.StrictMode>
-            <App />
-        </React.StrictMode>
+    <AppThemeProvider>
+        <AuthProvider>
+            <React.StrictMode>
+                <App />
+            </React.StrictMode>
         </AuthProvider>
-    </ThemeProvider>
+    </AppThemeProvider>
 );

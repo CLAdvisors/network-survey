@@ -5,12 +5,14 @@ import Settings from './Settings';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 
-jest.mock('../api/axios', () => ({
-  get: jest.fn(),
-  post: jest.fn(),
-  patch: jest.fn(),
+vi.mock('../api/axios', () => ({
+  default: {
+    get: vi.fn(),
+    post: vi.fn(),
+    patch: vi.fn(),
+  },
 }));
-jest.mock('../context/AuthContext', () => ({ useAuth: jest.fn() }));
+vi.mock('../context/AuthContext', () => ({ useAuth: vi.fn() }));
 
 const baseUser = { id: 1, username: 'admin-user', email: 'admin@example.com', displayName: 'Admin User', isPlatformAdmin: false };
 const adminMembership = { organizationId: 'org-1', organizationName: 'Acme Org', role: 'admin' };
@@ -21,7 +23,7 @@ const defaultMembers = [
 ];
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  vi.clearAllMocks();
   api.get.mockResolvedValue({ data: { actorRole: 'admin', members: defaultMembers } });
 });
 

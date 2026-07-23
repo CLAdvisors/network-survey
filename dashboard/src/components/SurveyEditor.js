@@ -8,7 +8,7 @@ import api from '../api/axios';
 import { Serializer, Question, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
-import DraggableRankingQuestion from './DraggableRankingQuestion';
+import { DraggableRankingQuestion } from '@network-survey/frontend-react';
 import ReactDOM from 'react-dom/client';
 
 // Define and register custom question class for draggableranking

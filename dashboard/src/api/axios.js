@@ -2,7 +2,7 @@ import axios from 'axios';
 import { createAxiosApi } from '@network-survey/frontend-shared';
 
 const api = createAxiosApi(axios, {
-  env: process.env,
+  env: import.meta.env,
   withCredentials: true, // Important! This sends cookies
   onForbidden: (error) => {
     if (typeof window !== 'undefined') {

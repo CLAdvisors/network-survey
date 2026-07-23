@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import Header from './Header';
 import SurveyComponent from './SurveyComponent';
-import { ReactComponent as Logo } from './logo.svg';
+import Logo from './logo.svg?react';
 import { BRAND_COLORS } from '@network-survey/frontend-shared';
 
 const Survey = () => {

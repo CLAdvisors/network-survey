@@ -1,4 +1,2 @@
-module.exports = {
-  ...require('./constants'),
-  ...require('./api')
-};
+export * from './constants.js';
+export * from './api.js';

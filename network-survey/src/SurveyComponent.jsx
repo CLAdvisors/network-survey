@@ -3,10 +3,10 @@ import ReactDOM from "react-dom/client";
 import { Model, Serializer, Question } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { Alert, useTheme } from '@mui/material';
-import "survey-core/defaultV2.min.css";
+import "survey-core/survey-core.min.css";
 import "./Survey.css";
 import { buildApiUrl } from "./api";
-import DraggableRankingQuestion from "./DraggableRankingQuestion";
+import { DraggableRankingQuestion } from "@network-survey/frontend-react";
 
 const draggableQuestionRoots = new WeakMap();
 

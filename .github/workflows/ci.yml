@@ -83,7 +83,7 @@ jobs:
         working-directory: ${{ matrix.app }}
 
       - name: Test
-        run: npm test -- --watchAll=false --passWithNoTests
+        run: npm test
         working-directory: ${{ matrix.app }}
 
       - name: Build

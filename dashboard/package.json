@@ -8,6 +8,7 @@
     "@mui/icons-material": "^6.1.10",
     "@mui/material": "^6.1.10",
     "@mui/x-data-grid": "^7.23.1",
+    "@network-survey/frontend-react": "file:../frontend-react",
     "@network-survey/frontend-shared": "file:../frontend-shared",
     "@testing-library/jest-dom": "^5.16.5",
     "@testing-library/react": "^13.4.0",
@@ -15,7 +16,7 @@
     "@toolpad/core": "^0.10.0",
     "ag-grid-community": "^29.3.5",
     "ag-grid-react": "^29.3.5",
-    "axios": "^1.7.9",
+    "axios": "1.7.9",
     "d3": "^7.8.5",
     "dotenv": "^16.3.1",
     "emailjs": "^4.0.2",
@@ -26,18 +27,23 @@
     "react-markdown": "^8.0.7",
     "react-quill": "^2.0.0",
     "react-router-dom": "^6.30.0",
-    "react-scripts": "5.0.1",
     "react-tabs": "^6.0.2",
     "survey-creator-react": "^2.0.4",
-    "web-vitals": "^2.1.4",
-    "webpack": "^5.82.0"
+    "web-vitals": "^2.1.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^20.0.3",
+    "vite": "^5.4.11",
+    "vite-plugin-svgr": "^4.3.0",
+    "vitest": "^2.1.8"
   },
   "scripts": {
-    "dev": "react-scripts start",
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "dev": "vite --host 0.0.0.0",
+    "start": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run"
   },
   "eslintConfig": {
     "extends": [

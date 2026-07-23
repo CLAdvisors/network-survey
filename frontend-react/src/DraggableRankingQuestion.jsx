@@ -1,6 +1,17 @@
 import React from "react";
 import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
 
+const colors = {
+  primary: "var(--survey-primary, #42B4AF)",
+  primaryLight: "var(--survey-primary-light, #e0f7fa)",
+  primaryBorder: "var(--survey-primary-border, #b2ebf2)",
+  surface: "var(--survey-surface, #fafafa)",
+  disabled: "var(--survey-disabled-text, #bdbdbd)",
+  error: "var(--survey-error, #d32f2f)",
+  muted: "var(--survey-muted-text, #666)",
+  errorSurface: "var(--survey-error-surface, #fff5f5)",
+};
+
 const extractValue = (input) => {
   if (input && typeof input === "object") {
     if (Object.prototype.hasOwnProperty.call(input, "value")) {
@@ -76,8 +87,8 @@ function Item({ item, provided, snapshot }) {
         padding: 8,
         margin: "0 0 8px 0",
         width: "100%",
-        background: snapshot.isDragging ? "#e0f7fa" : "#fafafa",
-        border: "1px solid #b2ebf2",
+        background: snapshot.isDragging ? colors.primaryLight : colors.surface,
+        border: `1px solid ${colors.primaryBorder}`,
         borderRadius: 4,
         minWidth: 80,
         textAlign: "center",
@@ -210,16 +221,16 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                 style={{
                   minHeight: 60,
                   border: snapshot.isDraggingOver
-                    ? "2px solid #42B4AF"
+                    ? `2px solid ${colors.primary}`
                     : isLimitReached
-                    ? "1px dashed #e57373"
-                    : "1px dashed #b2ebf2",
+                    ? `1px dashed ${colors.error}`
+                    : `1px dashed ${colors.primaryBorder}`,
                   padding: 8,
                   borderRadius: 4,
                   background: snapshot.isDraggingOver
-                    ? "#e0f7fa33"
+                    ? colors.primaryLight
                     : isLimitReached
-                    ? "#fff5f5"
+                    ? colors.errorSurface
                     : undefined,
                   display: "flex",
                   flexDirection: "column",
@@ -227,7 +238,7 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                 }}
               >
                 {ranked.length === 0 && (
-                  <span style={{ color: "#bdbdbd" }}>Drag options here to rank</span>
+                  <span style={{ color: colors.disabled }}>Drag options here to rank</span>
                 )}
                 {ranked.map((item, index) => (
                   <Draggable key={item.key} draggableId={item.key} index={index}>
@@ -245,7 +256,7 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
               style={{
                 marginTop: 4,
                 fontSize: "0.8rem",
-                color: isLimitReached ? "#d32f2f" : "#666"
+                color: isLimitReached ? colors.error : colors.muted
               }}
             >
               Selected {Math.min(ranked.length, maxSelected)} of {maxSelected}
@@ -261,10 +272,10 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                 {...provided.droppableProps}
                 style={{
                   minHeight: 60,
-                  border: snapshot.isDraggingOver ? "2px solid #42B4AF" : "1px dashed #b2ebf2",
+                  border: snapshot.isDraggingOver ? `2px solid ${colors.primary}` : `1px dashed ${colors.primaryBorder}`,
                   padding: 8,
                   borderRadius: 4,
-                  background: snapshot.isDraggingOver ? "#e0f7fa33" : undefined,
+                  background: snapshot.isDraggingOver ? colors.primaryLight : undefined,
                   display: "flex",
                   flexWrap: "wrap"
                 }}

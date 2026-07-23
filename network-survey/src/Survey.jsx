@@ -1,141 +1,77 @@
 import React, { useState } from 'react';
-import {
-  Box,
-  Container,
-  Typography,
-  Paper,
-  useTheme
-} from '@mui/material';
+import { Box, Container, Typography, useTheme } from '@mui/material';
+import { alpha } from '@mui/material/styles';
+import { AppPage, Surface } from '@network-survey/frontend-react';
 import Header from './Header';
 import SurveyComponent from './SurveyComponent';
 import Logo from './logo.svg?react';
-import { BRAND_COLORS } from '@network-survey/frontend-shared';
 
 const Survey = () => {
   const theme = useTheme();
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState('');
 
   return (
-    <Box sx={{ 
-      minHeight: '100vh',
-      bgcolor: BRAND_COLORS.surveyBackground,
-      pb: 4
-    }}>
+    <AppPage sx={{ pb: 4 }}>
       <Header svgComponent={<Logo />} title={title} />
-      
-      <Container maxWidth="lg" sx={{ mt: 3}}>
-        <Paper
-          elevation={1}
-          sx={{
-            borderRadius: 1,
-            overflow: 'hidden',
-            bgcolor: 'background.paper',
-            border: `1px solid ${theme.palette.divider}`
-          }}
-        >
-          {/* Instructions Section */}
-          <Box sx={{ 
-            p: 3,
-            borderBottom: `1px solid ${theme.palette.divider}`,
-          }}>
-            <Typography 
-              variant="subtitle1" 
-              component="h2"
-              sx={{ 
-                fontWeight: 500,
-                mb: 1,
-                color: BRAND_COLORS.primary
-              }}
-            >
+
+      <Container maxWidth="lg" sx={{ mt: 3 }}>
+        <Surface sx={{ overflow: 'hidden' }}>
+          <Box sx={{ p: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
+            <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500, mb: 1, color: 'primary.main' }}>
               Survey Instructions
             </Typography>
-            <Typography 
-              variant="body2" 
-              color="text.secondary"
-              sx={{ lineHeight: 1.5 }}
-            >
-              For each question below, indicate the people you interact with at work. 
-              The survey will take 10-15 minutes to complete; please plan to finish in one session.
+            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
+              For each question below, indicate the people you interact with at work.
+              {' '}The survey will take 10-15 minutes to complete; please plan to finish in one session.
             </Typography>
           </Box>
 
-          {/* Survey Content */}
-          <Box sx={{ 
-            p: 3,
-            '& .sv-root-modern': {
-              '--sv-header-background-color': 'transparent',
-              '--sv-header-text-color': theme.palette.text.primary,
-              '--sv-primary-color': BRAND_COLORS.primary,
-              '--sv-secondary-color': BRAND_COLORS.primary,
-              '--sv-primary-hover-color': BRAND_COLORS.primaryHover,
-              '--sv-secondary-hover-color': BRAND_COLORS.primaryHover,
-              '--sv-border-color': theme.palette.divider,
-              '--sv-font-family': theme.typography.fontFamily,
-              '--sv-page-edge-padding': '0px',
-              '--sv-question-spacing': '32px',
-            },
-            // Question Container
-            '& .sv-question': {
-              background: 'transparent',
-              padding: '16px 0',
-              marginBottom: 2,
-            },
-            // Question Title
-            '& .sv-question__title': {
-              fontWeight: 500,
-              color: theme.palette.text.primary,
-              marginBottom: 2,
-              '& .sv-question__required-text': {
-                color: theme.palette.error.main,
-              }
-            },
-            // Tagbox Styling
-            '& .sv-tagbox': {
-              border: `1px solid ${theme.palette.divider}`,
-              borderRadius: 1,
-              transition: 'all 0.2s ease',
-              backgroundColor: theme.palette.background.paper,
-              '&:focus-within': {
-                borderColor: BRAND_COLORS.primary,
-                boxShadow: `0 0 0 2px rgba(66, 180, 175, 0.15)`,
-              }
-            },
-            // Tagbox Items
-            '& .sv-tagbox__item': {
-              borderRadius: 1,
-              backgroundColor: `${BRAND_COLORS.primary} !important`,
-              color: '#FFFFFF',
-              margin: '2px',
-              padding: '4px 8px',
-              '&:hover': {
-                backgroundColor: `${BRAND_COLORS.primaryHover} !important`,
-              }
-            },
-            // Complete Button
-            '& .sv-btn': {
-              backgroundColor: BRAND_COLORS.primary,
-              color: '#FFFFFF',
-              borderRadius: 1,
-              padding: '8px 24px',
-              textTransform: 'none',
-              fontWeight: 500,
-              transition: 'all 0.2s ease',
-              '&:hover': {
-                backgroundColor: BRAND_COLORS.primaryHover,
-              }
-            },
-            // Footer
-            '& .sv-footer': {
-              padding: '16px 0 0 0',
-              marginTop: 4,
-              borderTop: `1px solid ${theme.palette.divider}`,
-            }
-          }}>
+          <Box
+            className="survey-content"
+            sx={{
+              p: 3,
+              '--survey-primary': theme.palette.primary.main,
+              '--survey-primary-hover': theme.palette.primary.dark,
+              '--survey-primary-light': alpha(theme.palette.primary.main, 0.1),
+              '--survey-primary-border': alpha(theme.palette.primary.main, 0.4),
+              '--survey-surface': theme.palette.background.paper,
+              '--survey-text': theme.palette.text.primary,
+              '--survey-muted-text': theme.palette.text.secondary,
+              '--survey-disabled-text': theme.palette.text.disabled,
+              '--survey-border': theme.palette.divider,
+              '--survey-error': theme.palette.error.main,
+              '--survey-error-surface': alpha(theme.palette.error.main, 0.04),
+              '--sjs-font-family': theme.typography.fontFamily,
+              '--sjs-general-backcolor': theme.palette.background.paper,
+              '--sjs-general-backcolor-dim': 'transparent',
+              '--sjs-general-backcolor-dim-light': theme.palette.background.paper,
+              '--sjs-general-forecolor': theme.palette.text.primary,
+              '--sjs-general-forecolor-light': theme.palette.text.secondary,
+              '--sjs-primary-backcolor': theme.palette.primary.main,
+              '--sjs-primary-backcolor-dark': theme.palette.primary.dark,
+              '--sjs-primary-backcolor-light': alpha(theme.palette.primary.main, 0.1),
+              '--sjs-primary-forecolor': theme.palette.primary.contrastText,
+              '--sjs-primary-forecolor-light': theme.palette.primary.main,
+              '--sjs-secondary-backcolor': theme.palette.primary.main,
+              '--sjs-secondary-backcolor-light': alpha(theme.palette.primary.main, 0.1),
+              '--sjs-border-default': theme.palette.divider,
+              '--sjs-border-light': theme.palette.divider,
+              '--sjs-corner-radius': `${theme.shape.borderRadius}px`,
+              '--sjs-question-background': 'transparent',
+              '--sjs-questionpanel-backcolor': 'transparent',
+              '--sjs-header-backcolor': 'transparent',
+              '--sjs-font-questiontitle-color': theme.palette.text.primary,
+              '--sjs-font-questiontitle-weight': 500,
+              '--sjs-font-questiondescription-color': theme.palette.text.secondary,
+              '--sjs-special-red': theme.palette.error.main,
+              '--sjs-special-red-light': alpha(theme.palette.error.main, 0.1),
+            }}
+          >
             <SurveyComponent setTitle={setTitle} />
           </Box>
-        </Paper>
+        </Surface>
       </Container>
-    </Box>
+    </AppPage>
   );
 };
 

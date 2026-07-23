@@ -220,13 +220,13 @@ jobs:
 
       - name: Publish dashboard
         run: |
-          aws s3 sync dashboard/build "s3://${{ steps.env.outputs.DASHBOARD_BUCKET }}" --delete
+          aws s3 sync dashboard/dist "s3://${{ steps.env.outputs.DASHBOARD_BUCKET }}" --delete
           aws cloudfront create-invalidation \
             --distribution-id "${{ steps.env.outputs.DASHBOARD_DIST }}" --paths "/*"
 
       - name: Publish survey app
         run: |
-          aws s3 sync network-survey/build "s3://${{ steps.env.outputs.SURVEY_BUCKET }}" --delete
+          aws s3 sync network-survey/dist "s3://${{ steps.env.outputs.SURVEY_BUCKET }}" --delete
           aws cloudfront create-invalidation \
             --distribution-id "${{ steps.env.outputs.SURVEY_DIST }}" --paths "/*"
 
@@ -237,8 +237,10 @@ jobs:
           curl -fsS -o /dev/null "https://${{ steps.env.outputs.DASHBOARD_HOST }}/"
           curl -fsS -o /dev/null "https://${{ steps.env.outputs.SURVEY_HOST }}/"
 
-          DASHBOARD_ASSET=$(node -e "const m=require('./dashboard/build/asset-manifest.json'); const f=Object.values(m.files).find(x=>x.includes('/static/js/')&&x.endsWith('.js')); if(!f) process.exit(1); console.log(f)")
-          SURVEY_ASSET=$(node -e "const m=require('./network-survey/build/asset-manifest.json'); const f=Object.values(m.files).find(x=>x.includes('/static/js/')&&x.endsWith('.js')); if(!f) process.exit(1); console.log(f)")
+          DASHBOARD_ASSET=$(find dashboard/dist/assets -maxdepth 1 -type f -name '*.js' -printf '/assets/%f\n' | head -n 1)
+          SURVEY_ASSET=$(find network-survey/dist/assets -maxdepth 1 -type f -name '*.js' -printf '/assets/%f\n' | head -n 1)
+          test -n "$DASHBOARD_ASSET"
+          test -n "$SURVEY_ASSET"
           curl -fsS -o /dev/null "https://${{ steps.env.outputs.DASHBOARD_HOST }}$DASHBOARD_ASSET"
           curl -fsS -o /dev/null "https://${{ steps.env.outputs.SURVEY_HOST }}$SURVEY_ASSET"
 

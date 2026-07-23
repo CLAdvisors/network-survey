@@ -9,7 +9,9 @@ const { Pool } = require('pg');
 const dotenvFlow = require('dotenv-flow');
 
 const apiDir = path.join(__dirname, '../../api');
-const bcrypt = require(path.join(apiDir, 'node_modules/bcrypt'));
+// Resolve through npm workspaces so this works whether dependencies are hoisted
+// to the repository root or installed under api/.
+const bcrypt = require('bcrypt');
 dotenvFlow.config({ path: apiDir });
 
 const host = process.env.DB_HOST || 'localhost';

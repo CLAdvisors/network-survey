@@ -28,6 +28,9 @@ export default defineConfig({
     strictPort: true
   },
   resolve: {
+    // Resolve peer dependencies from the consuming workspace rather than the
+    // real path of file: workspace packages.
+    preserveSymlinks: true,
     dedupe: ['react', 'react-dom']
   },
   optimizeDeps: {

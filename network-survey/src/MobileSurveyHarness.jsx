@@ -108,24 +108,28 @@ function makeModel() {
 }
 
 function HarnessSurvey() {
-  const [model] = useState(makeModel);
-  const rootsRef = useRef([]);
-
-  useEffect(() => {
-    const afterRender = (_, options) => {
+  const rootsRef = useRef(new Set());
+  const [model] = useState(() => {
+    const instance = makeModel();
+    // Register before SurveyJs mounts: SurveyJS fires this event from its
+    // question mount lifecycle, before a parent useEffect would run.
+    instance.onAfterRenderQuestion.add((_, options) => {
       // Match production's hook-owned class rather than relying on SurveyJS row markup.
       options.htmlElement?.classList.add('respondent-survey-question');
       if (options.question?.getType() !== 'draggableranking') return;
       const content = options.htmlElement?.querySelector('.sd-question__content') || options.htmlElement;
       if (!content) return;
       const previous = draggableRoots.get(options.question);
-      if (previous) previous.unmount();
+      if (previous) {
+        previous.unmount();
+        rootsRef.current.delete(previous);
+      }
       const host = document.createElement('div');
       host.className = 'draggable-ranking-host';
       content.replaceChildren(host);
       const root = ReactDOM.createRoot(host);
       draggableRoots.set(options.question, root);
-      rootsRef.current.push(root);
+      rootsRef.current.add(root);
       root.render(
         <DraggableRankingQuestion
           question={options.question}
@@ -133,14 +137,14 @@ function HarnessSurvey() {
           onChange={(value) => { options.question.value = value; }}
         />
       );
-    };
-    model.onAfterRenderQuestion.add(afterRender);
-    return () => {
-      model.onAfterRenderQuestion.remove(afterRender);
-      rootsRef.current.forEach((root) => root.unmount());
-      rootsRef.current = [];
-      model.dispose();
-    };
+    });
+    return instance;
+  });
+
+  useEffect(() => () => {
+    rootsRef.current.forEach((root) => root.unmount());
+    rootsRef.current.clear();
+    model.dispose();
   }, [model]);
 
   return <SurveyJs model={model} />;

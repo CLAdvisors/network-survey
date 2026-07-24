@@ -18,14 +18,6 @@
   padding: var(--respondent-shell-padding, 24px);
 }
 
-.survey-content .sd-body.sd-body--static {
-  padding: var(--respondent-survey-body-padding, calc(6 * var(--sjs-base-unit, 8px)) calc(5 * var(--sjs-base-unit, 8px)) var(--sjs-base-unit, 8px));
-}
-
-.survey-content .sd-page {
-  padding-inline: var(--respondent-survey-page-gutter, calc(5 * var(--sjs-base-unit, 8px)));
-}
-
 .survey-content .sd-body__page {
   padding-top: 10px;
 }
@@ -38,7 +30,7 @@
 .survey-content .respondent-survey-question {
   background: var(--respondent-question-background, var(--survey-surface, var(--sjs-general-backcolor, #fff)));
   border: var(--respondent-question-border, 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6)));
-  border-bottom: var(--respondent-question-bottom-border, 0);
+  border-bottom: var(--respondent-question-bottom-border, 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6)));
   border-radius: var(--respondent-question-radius, var(--sjs-questionpanel-cornerRadius, var(--sjs-corner-radius, 4px)));
   box-shadow: var(--respondent-question-shadow, 0 1px 2px rgb(0 0 0 / 8%));
   padding: var(--respondent-question-padding, var(--sd-base-padding));
@@ -86,8 +78,6 @@
   .survey-content {
     --respondent-shell-padding: 12px;
     --respondent-survey-gutter: 0;
-    --respondent-survey-body-padding: 16px 0 8px;
-    --respondent-survey-page-gutter: 0;
     --respondent-question-background: transparent;
     --respondent-question-border: 0;
     --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
@@ -109,11 +99,19 @@
     --respondent-tag-remove-opacity: 1;
   }
 
+  .survey-content .sd-body.sd-body--static {
+    padding: 16px 0 8px;
+  }
+
+  .survey-content .sd-page {
+    padding-inline: 0;
+  }
+
   .survey-instructions {
     --respondent-shell-padding: 16px;
   }
 
-  .survey-content .sd-page__row:last-child > .respondent-survey-question {
+  .survey-content .sd-page__row:last-child .respondent-survey-question {
     border-bottom: 0;
   }
 }
@@ -146,8 +144,6 @@
   .respondent-survey-frame .survey-content {
     --respondent-shell-padding: 12px;
     --respondent-survey-gutter: 0;
-    --respondent-survey-body-padding: 16px 0 8px;
-    --respondent-survey-page-gutter: 0;
     --respondent-question-background: transparent;
     --respondent-question-border: 0;
     --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
@@ -169,11 +165,19 @@
     --respondent-tag-remove-opacity: 1;
   }
 
+  .respondent-survey-frame .survey-content .sd-body.sd-body--static {
+    padding: 16px 0 8px;
+  }
+
+  .respondent-survey-frame .survey-content .sd-page {
+    padding-inline: 0;
+  }
+
   .respondent-survey-frame .survey-instructions {
     --respondent-shell-padding: 16px;
   }
 
-  .respondent-survey-frame .survey-content .sd-page__row:last-child > .respondent-survey-question {
+  .respondent-survey-frame .survey-content .sd-page__row:last-child .respondent-survey-question {
     border-bottom: 0;
   }
 }
@@ -189,8 +193,6 @@
 .respondent-survey-frame--phone .survey-content {
   --respondent-shell-padding: 12px;
   --respondent-survey-gutter: 0;
-  --respondent-survey-body-padding: 16px 0 8px;
-  --respondent-survey-page-gutter: 0;
   --respondent-question-background: transparent;
   --respondent-question-border: 0;
   --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
@@ -212,10 +214,18 @@
   --respondent-tag-remove-opacity: 1;
 }
 
+.respondent-survey-frame--phone .survey-content .sd-body.sd-body--static {
+  padding: 16px 0 8px;
+}
+
+.respondent-survey-frame--phone .survey-content .sd-page {
+  padding-inline: 0;
+}
+
 .respondent-survey-frame--phone .survey-instructions {
   --respondent-shell-padding: 16px;
 }
 
-.respondent-survey-frame--phone .survey-content .sd-page__row:last-child > .respondent-survey-question {
+.respondent-survey-frame--phone .survey-content .sd-page__row:last-child .respondent-survey-question {
   border-bottom: 0;
 }

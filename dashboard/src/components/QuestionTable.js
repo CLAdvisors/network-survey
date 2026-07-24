@@ -87,7 +87,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
     { field: 'id', headerName: 'ID', width: 90 },
     { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly },
     { field: 'type', headerName: 'Question type', width: 150, editable: false },
-    { field: 'required', headerName: 'Required', width: 100 },
+    { field: 'required', headerName: 'Required', width: 100, type: 'boolean', editable: !readOnly },
     { field: 'max', headerName: 'Max answers', width: 150,  editable: !readOnly  },
     {
       field: 'actions',
@@ -112,10 +112,10 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
   ].filter(column => !readOnly || column.field !== 'actions');
 
   const TEMPLATE_DATA = [
-    'Title,Question name,Question title,Question type',
-    ',question_1,Who do you go to when you need help with a problem on your job?,tagbox',
-    ',question_2,Who do you collaborate with most frequently on projects or tasks?,tagbox',
-    ',question_3,Whats your favorite thing about your job?,tagbox',
+    'Title,Question name,Question title,Question type,Max answers,Required',
+    ',question_1,Who do you go to when you need help with a problem on your job?,tagbox,,true',
+    ',question_2,Who do you collaborate with most frequently on projects or tasks?,tagbox,,true',
+    ',question_3,Whats your favorite thing about your job?,tagbox,,true',
   ];
 
   const parseCSV = (csvContent) => {
@@ -134,9 +134,12 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
       
       if (text) {
         questions.push({
+          name: values[1]?.trim() || undefined,
           text: text,
           type: values[3]?.trim() || 'tagbox',
-          required: true
+          max: values[4]?.trim() || null,
+          // Legacy CSV files did not have this column and were always required.
+          required: values[5] === undefined || values[5].trim().toLowerCase() === 'true'
         });
       }
     }
@@ -146,7 +149,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
 
   const formatRowsToCSV = (rows) => {
     // Create CSV header
-    const csvRows = ['Title,Question name,Question title,Question type,Max answers'];
+    const csvRows = ['Title,Question name,Question title,Question type,Max answers,Required'];
     
     // Sort rows by ID to maintain order
     const sortedRows = [...rows].sort((a, b) => a.id - b.id);
@@ -158,7 +161,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         row.name ? row.name : `question_${index + 1}`,
         `"${row.text}"`, // Wrap text in quotes to handle commas
         row.type,
-        row.max || ''
+        row.max || '',
+        row.required === true ? 'true' : 'false'
       ].join(',');
       csvRows.push(csvRow);
     });
@@ -173,23 +177,52 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
     
     const hasUnsavedChanges = updatedRows.some((row) => {
       const original = originalRows.find(origRow => origRow.id === row.id);
-      return !original || original.text !== row.text || original.type !== row.type || original.max !== row.max;
+      return !original || original.text !== row.text || original.type !== row.type || original.max !== row.max || original.required !== row.required;
     });
     
     setHasChanges(hasUnsavedChanges);
     return newRow;
   };
 
+  const buildSurveySchema = async (rowsToSave) => {
+    // The table is a projection of the SurveyJS schema. Patch the full schema instead
+    // of serializing CSV, which used to silently discard requiredness and other fields.
+    const response = await api.get('/admin/questions', { params: { surveyName } });
+    const current = response.data?.questions || {};
+    const sourceElements = Array.isArray(current.elements) ? current.elements : [];
+    const sourceByName = new Map(sourceElements.map((element) => [element.name, element]));
+    return {
+      ...current,
+      elements: rowsToSave.map((row, index) => {
+        const existing = sourceByName.get(row.name) || {};
+        const max = Number(row.max);
+        const element = {
+          ...existing,
+          type: row.type || existing.type || 'tagbox',
+          name: row.name || `question_${index + 1}`,
+          title: row.text || '',
+          isRequired: row.required === true,
+        };
+        if (Number.isFinite(max) && max > 0) {
+          element.maxSelectedChoices = Math.floor(max);
+          if (element.type === 'tagbox') element.claMaxSelections = Math.floor(max);
+        } else {
+          delete element.maxSelectedChoices;
+          if (element.type === 'tagbox') element.claMaxSelections = 0;
+        }
+        return element;
+      })
+    };
+  };
+
+  const saveRows = async (rowsToSave) => {
+    const questions = await buildSurveySchema(rowsToSave);
+    return api.post('/updateQuestions', { questions, surveyName });
+  };
+
   const handleSave = async () => {
     try {
-      // Convert current table state to CSV format
-      const csvData = formatRowsToCSV(tableRows);
-      console.log(csvData)
-      // Send update request
-      const response = await api.post('/updateQuestions', {
-        questions: csvData,
-        surveyName: surveyName
-      });
+      const response = await saveRows(tableRows);
 
       if (response.status === 200) {
         // Refresh questions data
@@ -239,14 +272,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
       // Combine existing questions with new ones, maintaining order
       const combinedQuestions = [...tableRows, ...newRows];
       
-      // Convert combined questions back to CSV
-      const combinedCsvData = formatRowsToCSV(combinedQuestions);
-
-      // Send update request with combined data
-      const response = await api.post('/updateQuestions', {
-        questions: combinedCsvData,
-        surveyName
-      });
+      // Persist a patched SurveyJS schema so existing type-specific configuration survives.
+      const response = await saveRows(combinedQuestions);
 
       if (response.status === 200) {
         const questionResponse = await api.get(`/listQuestions?surveyName=${surveyName}`);

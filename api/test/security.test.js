@@ -29,7 +29,41 @@ const {
   EDITOR_ROLES,
   ADMIN_ROLES,
   hashToken,
+  parseRequiredCsvValue,
+  validateSurveyDefinition,
+  validateRequiredAnswers,
+  normalizeQuestionNames,
 } = require('../server');
+
+test('question schema requiredness is explicit, typed, and validates submitted answers', () => {
+  assert.equal(parseRequiredCsvValue(undefined), true, 'legacy CSV remains required');
+  assert.equal(parseRequiredCsvValue('false'), false);
+  assert.equal(parseRequiredCsvValue('TRUE'), true);
+
+  const schema = validateSurveyDefinition({
+    elements: [
+      { type: 'tagbox', name: 'legacy', title: 'Legacy optional' },
+      { type: 'draggableranking', name: 'required', title: 'Rank', isRequired: true },
+    ]
+  });
+  assert.equal(schema.elements[0].isRequired, false);
+  assert.equal(schema.elements[1].isRequired, true);
+  assert.deepEqual(validateRequiredAnswers(schema, { legacy: [] }), ['Invalid response: required']);
+  assert.deepEqual(validateRequiredAnswers(schema, { required: ['a'] }), []);
+  assert.deepEqual(validateRequiredAnswers(schema, { required: {} }), ['Invalid response: required']);
+  assert.deepEqual(validateRequiredAnswers(schema, { legacy: {} , required: ['a'] }), ['Invalid response: legacy']);
+  const conditionalSchema = validateSurveyDefinition({ elements: [
+    { type: 'boolean', name: 'show' },
+    { type: 'text', name: 'conditional', isRequired: true, visibleIf: '{show} = true' },
+  ] });
+  assert.deepEqual(validateRequiredAnswers(conditionalSchema, { show: false }), []);
+  assert.deepEqual(validateRequiredAnswers(conditionalSchema, { show: true }), ['Invalid response: conditional']);
+  assert.deepEqual(
+    normalizeQuestionNames(conditionalSchema).elements[1].visibleIf,
+    '{question_1} = true'
+  );
+  assert.throws(() => validateSurveyDefinition({ elements: [{ type: 'tagbox', isRequired: 'false' }] }), /required/);
+});
 
 test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL', (t) => {
   const originalDashboardUrl = process.env.DASHBOARD_URL;

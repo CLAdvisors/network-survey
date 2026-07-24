@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { Box, Button, Chip, Paper, Stack, Typography } from '@mui/material';
 import { Model, Question, Serializer } from 'survey-core';
 import { Survey as SurveyJs } from 'survey-react-ui';
-import { DraggableRankingQuestion } from '@network-survey/frontend-react';
+import RespondentDraggableRankingQuestion from './RespondentDraggableRankingQuestion';
 import { BRAND_COLORS } from '@network-survey/frontend-shared';
 import Header from './Header';
 import Logo from './logo.svg?react';
@@ -131,7 +131,7 @@ function HarnessSurvey() {
       draggableRoots.set(options.question, root);
       rootsRef.current.add(root);
       root.render(
-        <DraggableRankingQuestion
+        <RespondentDraggableRankingQuestion
           question={options.question}
           value={options.question.value || []}
           onChange={(value) => { options.question.value = value; }}

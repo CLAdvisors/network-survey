@@ -14,10 +14,11 @@ locals {
   # environment needs its own session cookie name
   session_cookie_name = "sessionId-${local.environment}"
 
-  ssm_parameter_prefix          = "/network-survey/${local.environment}"
-  db_password_parameter_name    = "${local.ssm_parameter_prefix}/db/password"
-  session_secret_parameter_name = "${local.ssm_parameter_prefix}/api/session-secret"
-  resend_api_key_parameter_name = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  ssm_parameter_prefix                    = "/network-survey/${local.environment}"
+  db_password_parameter_name              = "${local.ssm_parameter_prefix}/db/password"
+  session_secret_parameter_name           = "${local.ssm_parameter_prefix}/api/session-secret"
+  resend_api_key_parameter_name           = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  bootstrap_admin_password_parameter_name = "${local.ssm_parameter_prefix}/api/bootstrap-admin-password"
 
   common_tags = {
     Project     = "network-survey"

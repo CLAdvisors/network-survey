@@ -30,9 +30,10 @@ output "artifacts_bucket_name" {
 
 output "runtime_secret_parameter_names" {
   value = {
-    db_password    = local.db_password_parameter_name
-    session_secret = local.session_secret_parameter_name
-    resend_api_key = local.resend_api_key_parameter_name
+    db_password              = local.db_password_parameter_name
+    session_secret           = local.session_secret_parameter_name
+    resend_api_key           = local.resend_api_key_parameter_name
+    bootstrap_admin_password = local.bootstrap_admin_password_parameter_name
   }
   description = "SSM Parameter Store names that must exist as SecureString values before deploys run"
 }

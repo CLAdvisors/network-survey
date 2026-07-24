@@ -32,12 +32,29 @@ API runtime secrets are stored in SSM Parameter Store SecureString values, e.g.:
 /network-survey/staging/db/password
 /network-survey/staging/api/session-secret
 /network-survey/staging/api/resend-api-key
+/network-survey/staging/api/bootstrap-admin-password
 /network-survey/prod/db/password
 /network-survey/prod/api/session-secret
 /network-survey/prod/api/resend-api-key
 ```
 
 Never commit secret values or local `*.local.tfvars` files.
+
+### Staging dashboard bootstrap administrator
+
+The staging stack configures the dashboard username `admin`. Before the first
+staging deploy after this change, an authorized AWS operator must create the
+`/network-survey/staging/api/bootstrap-admin-password` SSM SecureString with a
+unique password of at least 12 characters. Do not put that value in Terraform,
+GitHub variables, deployment logs, or repository files.
+
+After Terraform applies the instance permission/config change, the next staging
+API deploy retrieves that SecureString transiently on the API instance and
+ensures this account is active, a platform administrator, and an owner of the
+`default-imported` organization. The password is used only when the username is
+first created; later deploys retain its existing password while re-ensuring its
+access. Rotate/reset the account through an approved operator recovery process,
+not by editing tracked configuration.
 
 ## Current apply commands
 

@@ -41,6 +41,7 @@ Public dashboard self-signup is controlled by `ALLOW_PUBLIC_SIGNUP`. It defaults
 - Override bootstrap credentials with `LOCAL_ADMIN_USERNAME` and `LOCAL_ADMIN_PASSWORD` in `api/.env.local`
 - `db:setup` is local-only and refuses to run when `DB_HOST` is not local or `NODE_ENV` is non-local
 - For staging/production, migrations run automatically on the EC2 instance during deploys (see `.github/workflows/deploy.yml` and `scripts/deploy/remote-deploy.sh`) — the databases are not reachable from outside the VPC
+- Staging deploys also ensure the configured bootstrap dashboard administrator exists; setup requirements and recovery behavior are documented in [`terraform/README.md`](terraform/README.md#staging-dashboard-bootstrap-administrator)
 - For intentional non-local one-off execution, pass `--allow-nonlocal` (or set `ALLOW_NON_LOCAL_DB_SETUP=true` in `api/.env.local`)
 
 ## CI/CD

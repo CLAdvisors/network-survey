@@ -12,10 +12,19 @@ const dotenvFlow = require('dotenv-flow');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
+const { Model, Serializer, Question } = require('survey-core');
 
 dotenvFlow.config();
 
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
+
+// Keep server-side validation in step with the respondent's custom SurveyJS type.
+if (!Serializer.findClass('draggableranking')) {
+  class QuestionDraggableRankingModel extends Question {
+    getType() { return 'draggableranking'; }
+  }
+  Serializer.addClass('draggableranking', [], () => new QuestionDraggableRankingModel(''), 'question');
+}
 
 // Create a new instance of the Pool.
 // DB_SSL enables TLS (RDS enforces it); DB_SSL_CA points at the RDS CA bundle
@@ -1241,6 +1250,7 @@ async function insertQuestions(name, title, json, surveyId = null) {
     console.log('Survey modified successfully!');
   } catch (error) {
     console.error('Error occurred:', error);
+    throw error;
   } finally {
     await client.release();
   }
@@ -1268,6 +1278,82 @@ async function insertResponses(responses, userId, surveyName, surveyId = null) {
   }  
 }
 
+function parseRequiredCsvValue(value) {
+  // Old imports had no Required column and historically meant "required".
+  if (value === undefined || value === null || String(value).trim() === '') return true;
+  return String(value).trim().toLowerCase() === 'true';
+}
+
+function validateSurveyDefinition(json) {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) {
+    throw new Error('Questions must be a SurveyJS schema object.');
+  }
+  if (!Array.isArray(json.elements)) {
+    throw new Error('Questions schema must contain an elements array.');
+  }
+  if (json.elements.length > 200) {
+    throw new Error('A survey may contain at most 200 questions.');
+  }
+
+  return {
+    ...json,
+    elements: json.elements.map((element, index) => {
+      if (!element || typeof element !== 'object' || Array.isArray(element)) {
+        throw new Error(`Question ${index + 1} must be an object.`);
+      }
+      if (typeof element.type !== 'string' || !/^[a-z][a-z0-9-]{0,99}$/i.test(element.type)) {
+        throw new Error(`Question ${index + 1} has an invalid type.`);
+      }
+      if (element.title !== undefined && (typeof element.title !== 'string' || element.title.length > 4000)) {
+        throw new Error(`Question ${index + 1} has an invalid title.`);
+      }
+      if (element.isRequired !== undefined && typeof element.isRequired !== 'boolean') {
+        throw new Error(`Question ${index + 1} required must be true or false.`);
+      }
+      // Materialize SurveyJS's false default, making the persisted contract explicit.
+      return { ...element, isRequired: element.isRequired === true };
+    })
+  };
+}
+
+function validateRequiredAnswers(schema, answers) {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+    return ['Answers must be an object.'];
+  }
+  const elements = Array.isArray(schema?.elements) ? schema.elements : [];
+  const allowedNames = new Set(elements.map((element) => element?.name).filter(Boolean));
+  const errors = [];
+  Object.keys(answers).forEach((name) => {
+    if (name !== 'timeStamp' && !allowedNames.has(name)) errors.push(`Unknown question: ${name}`);
+  });
+
+  // SurveyJS evaluates visibleIf/enableIf with the submitted values, so server
+  // validation has the same conditional-required semantics as the respondent UI.
+  const model = new Model(schema);
+  model.data = answers;
+  model.validate();
+  model.getAllQuestions().forEach((question) => {
+    if (question.errors?.length) errors.push(`Invalid response: ${question.name}`);
+  });
+
+  // SurveyJS validates requiredness, while these checks constrain every supplied
+  // value before it reaches results rendering. Unknown/custom types are limited
+  // to scalar values unless explicitly added here with a documented shape.
+  const arrayValueTypes = new Set(['checkbox', 'tagbox', 'ranking', 'draggableranking', 'file', 'matrixdynamic']);
+  const objectValueTypes = new Set(['matrix', 'matrixdropdown', 'multipletext']);
+  elements.forEach((element) => {
+    if (!element?.name || answers[element.name] === undefined) return;
+    const value = answers[element.name];
+    const isScalar = value === null || ['string', 'number', 'boolean'].includes(typeof value);
+    const isPlainObject = value !== null && typeof value === 'object' && !Array.isArray(value);
+    const wrongShape = (arrayValueTypes.has(element.type) && !Array.isArray(value)) ||
+      (objectValueTypes.has(element.type) && !isPlainObject) ||
+      (!arrayValueTypes.has(element.type) && !objectValueTypes.has(element.type) && !isScalar);
+    if (wrongShape) errors.push(`Invalid response: ${element.name}`);
+  });
+  return [...new Set(errors)];
+}
+
 function csvToJson(csvString, title) {
     let json = {
         "elements": [],
@@ -1292,7 +1378,7 @@ function csvToJson(csvString, title) {
             "type": item['Question type'],
             "name": item['Question name'],
             "title": item['Question title'],
-            "isRequired": true,
+            "isRequired": parseRequiredCsvValue(item['Required']),
             "choicesLazyLoadEnabled": true,
             "choicesLazyLoadPageSize": 25,
             "maxSelectedChoices": item['Max answers'] ? parseInt(item['Max answers']) : null,
@@ -1630,20 +1716,33 @@ app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => 
 });
 
 // PUT API endpoint for uploading a json file of questions
-// Helper: normalize question names to positional pattern: question_{index+1}
-function normalizeQuestionNames(json) {
-  try {
-    if (!json || typeof json !== 'object') return { elements: [] };
-    const elements = Array.isArray(json.elements) ? json.elements : [];
-    const safe = elements.map((el, idx) => ({
-      ...el,
-      name: `question_${idx + 1}`
-    }));
-    return { elements: safe };
-  } catch (e) {
-    console.error('normalizeQuestionNames failed:', e);
-    return { elements: Array.isArray(json?.elements) ? json.elements : [] };
+function rewriteSurveyExpressions(value, nameMap, propertyName = '') {
+  if (typeof value === 'string') {
+    // Only rewrite expression-bearing properties; titles and choice labels are data.
+    if (!/(If$|Expression$|^expression$)/.test(propertyName)) return value;
+    // Replace complete SurveyJS references in one pass. Sequential replacements
+    // corrupt expressions when an old name is also another question's new
+    // canonical name (for example, alpha -> question_1 and question_1 -> question_2).
+    return value.replace(/\{([^{}]+)\}/g, (match, name) => (
+      nameMap.has(name) ? `{${nameMap.get(name)}}` : match
+    ));
   }
+  if (Array.isArray(value)) return value.map((item) => rewriteSurveyExpressions(item, nameMap, propertyName));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteSurveyExpressions(item, nameMap, key)]));
+}
+
+// Canonicalize positional names and update SurveyJS expression references atomically.
+function normalizeQuestionNames(json) {
+  const validated = validateSurveyDefinition(json);
+  const nameMap = new Map(validated.elements.map((element, index) => [element.name, `question_${index + 1}`]));
+  return {
+    ...rewriteSurveyExpressions(validated, nameMap),
+    elements: validated.elements.map((element, index) => ({
+      ...rewriteSurveyExpressions(element, nameMap),
+      name: `question_${index + 1}`
+    }))
+  };
 }
 
 app.post('/api/updateQuestions', express.json(), requireAuth, async (req, res) => {
@@ -1651,28 +1750,27 @@ app.post('/api/updateQuestions', express.json(), requireAuth, async (req, res) =
   const surveyQuestions = data.questions;
   const surveyName = data.surveyName;
 
-  // Debug logging
-  console.log('updateQuestions typeof:', typeof surveyQuestions);
-  console.log('updateQuestions value:', JSON.stringify(surveyQuestions));
-
   const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
   if (!survey) return;
 
-  let surveyData;
-  if (typeof surveyQuestions === 'string') {
-    // CSV format
-    surveyData = csvToJson(surveyQuestions);
-    // csvToJson assigns positional names question_{i}
-    await insertQuestions(survey.name, surveyData.title, surveyData.questions, survey.id);
-  } else if (typeof surveyQuestions === 'object' && surveyQuestions !== null) {
-    // JSON format (SurveyJS)
-    const normalized = normalizeQuestionNames(surveyQuestions);
-    await insertQuestions(survey.name, '', normalized, survey.id);
-  } else {
-    return res.status(400).json({ message: 'Invalid questions format.' });
-  }
+  try {
+    let savedQuestions;
+    if (typeof surveyQuestions === 'string') {
+      // Compatibility import: absent Required remains required, matching legacy CSV behavior.
+      const surveyData = csvToJson(surveyQuestions);
+      savedQuestions = normalizeQuestionNames(surveyData.questions);
+      await insertQuestions(survey.name, surveyData.title, savedQuestions, survey.id);
+    } else if (typeof surveyQuestions === 'object' && surveyQuestions !== null) {
+      savedQuestions = normalizeQuestionNames(surveyQuestions);
+      await insertQuestions(survey.name, '', savedQuestions, survey.id);
+    } else {
+      return res.status(400).json({ message: 'Invalid questions format.' });
+    }
 
-  res.status(200).json({ message: 'Questions created successfully.' });
+    res.status(200).json({ message: 'Questions created successfully.', questions: savedQuestions });
+  } catch (error) {
+    res.status(400).json({ message: error.message || 'Invalid questions schema.' });
+  }
 });
 
 // PUT API endpoint for answer submission
@@ -1688,6 +1786,19 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
     }
 
     const answers = JSON.parse(data.answers);
+    const schemaResult = await pool.query(
+      validation.respondent.survey_id
+        ? 'SELECT questions FROM Survey WHERE id = $1'
+        : 'SELECT questions FROM Survey WHERE name = $1',
+      [validation.respondent.survey_id || surveyName]
+    );
+    if (schemaResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Survey not found.' });
+    }
+    const answerErrors = validateRequiredAnswers(schemaResult.rows[0].questions, answers);
+    if (answerErrors.length > 0) {
+      return res.status(400).json({ message: 'Invalid survey responses.', errors: answerErrors });
+    }
     const answerTimeStamp = new Date().toLocaleString();
     answers.timeStamp = answerTimeStamp;
 
@@ -2252,4 +2363,8 @@ module.exports = {
   ADMIN_ROLES,
   ORG_ROLES,
   USER_STATUSES,
+  parseRequiredCsvValue,
+  validateSurveyDefinition,
+  validateRequiredAnswers,
+  normalizeQuestionNames,
 };

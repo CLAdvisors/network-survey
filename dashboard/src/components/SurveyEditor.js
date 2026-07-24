@@ -64,7 +64,7 @@ const configureTagboxPropertyMetadata = (() => {
       });
     }
 
-    const allowedProperties = new Set(['title', 'claMaxSelections']);
+    const allowedProperties = new Set(['title', 'isRequired', 'claMaxSelections']);
     Serializer.getProperties('tagbox').forEach((prop) => {
       const isAllowed = allowedProperties.has(prop.name);
       prop.visible = isAllowed;
@@ -101,14 +101,6 @@ const ensureTagboxQuestionBehavior = (question) => {
     return safe;
   };
 
-  if (!question._claRequiredSyncing && question.isRequired !== true) {
-    question._claRequiredSyncing = true;
-    try {
-      question.isRequired = true;
-    } finally {
-      question._claRequiredSyncing = false;
-    }
-  }
 
   question.choices = Array.isArray(question.choices) ? question.choices : [];
   question.choicesLazyLoadEnabled = true;
@@ -140,26 +132,7 @@ const ensureTagboxQuestionBehavior = (question) => {
     question.onPropertyChanged.add(handler);
     question._claMaxSelectionWatcher = handler;
   }
-  if (question.onPropertyChanged && !question._claRequiredWatcher) {
-    const requiredWatcher = (_, options) => {
-      if (!options?.name) {
-        return;
-      }
-      if (options.name === 'isRequired' && options.newValue !== true) {
-        if (question._claRequiredSyncing) {
-          return;
-        }
-        question._claRequiredSyncing = true;
-        try {
-          question.isRequired = true;
-        } finally {
-          question._claRequiredSyncing = false;
-        }
-      }
-    };
-    question.onPropertyChanged.add(requiredWatcher);
-    question._claRequiredWatcher = requiredWatcher;
-  }
+
 };
 
 const normalizeTagboxElements = (elements) => {
@@ -190,7 +163,6 @@ const normalizeTagboxElements = (elements) => {
       if (!normalized.optionsCaption) {
         normalized.optionsCaption = 'Type to search';
       }
-      normalized.isRequired = true;
       const rawLimit = Number(normalized.claMaxSelections ?? normalized.maxSelectedChoices ?? 0);
       const safeLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.max(1, Math.floor(rawLimit)) : 0;
       if (safeLimit > 0) {

@@ -102,6 +102,9 @@ function SurveyComponent({setTitle}) {
 
       // Custom rendering for draggableranking
       newSurvey.onAfterRenderQuestion.add((survey, options) => {
+        // Stable hook-owned class: CSS never has to infer question boundaries from rows.
+        options.htmlElement?.classList.add("respondent-survey-question");
+
         if (options.question.getType() !== "draggableranking") {
           return;
         }

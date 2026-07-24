@@ -14,9 +14,21 @@ const Survey = () => {
     <AppPage sx={{ pb: 4 }}>
       <Header svgComponent={<Logo />} title={title} />
 
-      <Container maxWidth="lg" sx={{ mt: 3 }}>
-        <Surface sx={{ overflow: 'hidden' }}>
-          <Box sx={{ p: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
+      <Container
+        maxWidth="lg"
+        disableGutters
+        sx={{ mt: { xs: 0, sm: 3 }, px: { xs: 0, sm: 2, md: 3 } }}
+      >
+        <Surface
+          className="respondent-survey-surface"
+          sx={{
+            overflow: 'hidden',
+            borderRadius: { xs: 0, sm: 1 },
+            borderInline: { xs: 0, sm: '1px solid' },
+            boxShadow: { xs: 'none', sm: undefined },
+          }}
+        >
+          <Box className="survey-instructions" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
             <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500, mb: 1, color: 'primary.main' }}>
               Survey Instructions
             </Typography>
@@ -29,7 +41,6 @@ const Survey = () => {
           <Box
             className="survey-content"
             sx={{
-              p: 3,
               '--survey-primary': theme.palette.primary.main,
               '--survey-primary-hover': theme.palette.primary.dark,
               '--survey-primary-light': alpha(theme.palette.primary.main, 0.1),

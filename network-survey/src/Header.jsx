@@ -4,7 +4,7 @@ import { BrowserView, MobileView } from 'react-device-detect';
 import { appShadows } from '@network-survey/frontend-react';
 import { BRAND } from '@network-survey/frontend-shared';
 
-const Header = ({ svgComponent: SvgComponent, title }) => (
+const Header = ({ svgComponent: SvgComponent, title, forceMobile = false }) => (
   <Box
     component="header"
     sx={{
@@ -20,20 +20,28 @@ const Header = ({ svgComponent: SvgComponent, title }) => (
       boxShadow: appShadows.surface,
     }}
   >
-    <BrowserView>
-      <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-        <Box sx={{ minWidth: 150, maxWidth: 280, ml: { sm: 3 }, pr: 1 }}>
-          <a href={BRAND.websiteUrl} target="_blank" rel="noreferrer">
-            {SvgComponent}
-          </a>
-        </Box>
-      </Box>
-    </BrowserView>
-    <MobileView>
+    {forceMobile ? (
       <Typography component="h1" variant="h6" sx={{ m: 0 }}>
         {title}
       </Typography>
-    </MobileView>
+    ) : (
+      <>
+        <BrowserView>
+          <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+            <Box sx={{ minWidth: 150, maxWidth: 280, ml: { sm: 3 }, pr: 1 }}>
+              <a href={BRAND.websiteUrl} target="_blank" rel="noreferrer">
+                {SvgComponent}
+              </a>
+            </Box>
+          </Box>
+        </BrowserView>
+        <MobileView>
+          <Typography component="h1" variant="h6" sx={{ m: 0 }}>
+            {title}
+          </Typography>
+        </MobileView>
+      </>
+    )}
   </Box>
 );
 

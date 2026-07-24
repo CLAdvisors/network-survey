@@ -8,6 +8,7 @@ import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
+import { parseQuestionsCsv } from '../utils/questionsCsv';
 
 const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }) => {
   const theme = useTheme();
@@ -118,57 +119,6 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
     ',question_3,Whats your favorite thing about your job?,tagbox,,true',
   ];
 
-  const parseCSV = (csvContent) => {
-    // Split by newline, handling both \n and \r\n
-    const lines = csvContent.split(/\r?\n/).filter(line => line.trim());
-    // const headers = lines[0].split(',');
-    
-    // Skip header row and parse data rows
-    const questions = [];
-    for (let i = 1; i < lines.length; i++) {
-      if (!lines[i].trim()) continue; // Skip empty lines
-      
-      // Split line by comma, but preserve commas within quotes
-      const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-      const text = values[2] ? values[2].replace(/^"|"$/g, '') : ''; // Remove quotes if present
-      
-      if (text) {
-        questions.push({
-          name: values[1]?.trim() || undefined,
-          text: text,
-          type: values[3]?.trim() || 'tagbox',
-          max: values[4]?.trim() || null,
-          // Legacy CSV files did not have this column and were always required.
-          required: values[5] === undefined || values[5].trim().toLowerCase() === 'true'
-        });
-      }
-    }
-    
-    return questions;
-  };
-
-  const formatRowsToCSV = (rows) => {
-    // Create CSV header
-    const csvRows = ['Title,Question name,Question title,Question type,Max answers,Required'];
-    
-    // Sort rows by ID to maintain order
-    const sortedRows = [...rows].sort((a, b) => a.id - b.id);
-    
-    // Add each question row
-    sortedRows.forEach((row, index) => {
-      const csvRow = [
-        index === 0 ? 'Survey Title' : '', // Title only on first row
-        row.name ? row.name : `question_${index + 1}`,
-        `"${row.text}"`, // Wrap text in quotes to handle commas
-        row.type,
-        row.max || '',
-        row.required === true ? 'true' : 'false'
-      ].join(',');
-      csvRows.push(csvRow);
-    });
-
-    return csvRows.join('\n');
-  };
 
   const handleProcessRowUpdate = (newRow) => {
     if (readOnly) return originalRows.find(row => row.id === newRow.id) || newRow;
@@ -261,7 +211,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
   const handleUpload = async (csvContent) => {
     try {
       // Parse the new CSV content
-      const newQuestions = parseCSV(csvContent);
+      const newQuestions = parseQuestionsCsv(csvContent);
       console.log('New questions:', newQuestions);
       // Create new rows with sequential IDs after existing questions
       const newRows = newQuestions.map((q, index) => ({

@@ -3,7 +3,7 @@ import { SurveyCreator, SurveyCreatorComponent } from 'survey-creator-react';
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 // Base SurveyJS styles (theme is applied via cssType)
-import { Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
+import { Alert, Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import api from '../api/axios';
 import { Serializer, Question, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
@@ -177,25 +177,6 @@ const normalizeTagboxElements = (elements) => {
   });
 };
 
-const extractElementsFromSurveyJson = (json) => {
-  if (!json || typeof json !== 'object') {
-    return [];
-  }
-  if (Array.isArray(json.pages)) {
-    const aggregated = [];
-    json.pages.forEach((page) => {
-      if (Array.isArray(page?.elements)) {
-        aggregated.push(...page.elements);
-      }
-    });
-    return aggregated;
-  }
-  if (Array.isArray(json.elements)) {
-    return json.elements;
-  }
-  return [];
-};
-
 const cleanupDraggableQuestionRoot = (question) => {
   if (!question) return;
   const root = draggableQuestionRoots.get(question);
@@ -231,6 +212,7 @@ const SurveyEditor = () => {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewSurveyModel, setPreviewSurveyModel] = useState(null);
   const [previewError, setPreviewError] = useState(null);
@@ -446,8 +428,12 @@ const SurveyEditor = () => {
   const buildNormalizedSurveySchema = useCallback(() => {
     try {
       const rawJson = creator && creator.JSON ? JSON.parse(JSON.stringify(creator.JSON)) : {};
-      const elements = normalizeTagboxElements(extractElementsFromSurveyJson(rawJson));
-      return { elements };
+      // Keep the full definition intact. In particular, do not flatten pages or
+      // nested elements: the API rejects unsupported nested definitions on save.
+      return {
+        ...rawJson,
+        elements: normalizeTagboxElements(rawJson.elements || [])
+      };
     } catch (error) {
       return { elements: [] };
     }
@@ -509,20 +495,13 @@ const SurveyEditor = () => {
       try {
         // Use the full survey JSON endpoint
         const response = await api.get(`/admin/questions?surveyName=${selectedSurvey}`);
-        let json = response.data.questions || {};
-        // Flatten any pages into a single elements array
-        let elements = [];
-        if (Array.isArray(json.pages)) {
-          json.pages.forEach(page => {
-            if (Array.isArray(page.elements)) {
-              elements.push(...page.elements);
-            }
-          });
-        } else if (Array.isArray(json.elements)) {
-          elements = json.elements;
-        }
-        const preparedElements = normalizeTagboxElements(elements);
-        creator.JSON = { elements: preparedElements };
+        const json = response.data.questions || {};
+        // Do not flatten persisted pages or nested elements. They must remain
+        // visible to the save validation instead of being silently accepted.
+        creator.JSON = {
+          ...json,
+          elements: normalizeTagboxElements(json.elements || [])
+        };
         if (creator.survey) {
           configureSurveyModel(creator.survey, 'designer');
         }
@@ -535,19 +514,23 @@ const SurveyEditor = () => {
     loadSurvey();
   }, [selectedSurvey, creator, configureSurveyModel]);
 
-  // Save handler (always use current JSON from creator, flatten pages if present)
+  // Save handler preserves nested structures so the API can reject them explicitly.
   const handleSaveSurvey = async () => {
     if (!selectedSurvey) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const questions = buildNormalizedSurveySchema();
-      const withNames = { elements: ensurePositionalQuestionNames(questions.elements) };
+      const withNames = {
+        ...questions,
+        elements: ensurePositionalQuestionNames(questions.elements)
+      };
       await api.post('/updateQuestions', {
         surveyName: selectedSurvey,
         questions: withNames
       });
     } catch (err) {
-      // Optionally show error
+      setSaveError(err.response?.data?.message || 'Unable to save survey. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -637,6 +620,7 @@ const SurveyEditor = () => {
           Demo Survey
         </Button>
       </Box>
+      {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
       <Box
         sx={{
           padding: '20px',

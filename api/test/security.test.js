@@ -30,15 +30,24 @@ const {
   ADMIN_ROLES,
   hashToken,
   parseRequiredCsvValue,
+  csvToJson,
   validateSurveyDefinition,
   validateRequiredAnswers,
   normalizeQuestionNames,
 } = require('../server');
 
 test('question schema requiredness is explicit, typed, and validates submitted answers', () => {
-  assert.equal(parseRequiredCsvValue(undefined), true, 'legacy CSV remains required');
+  assert.equal(parseRequiredCsvValue(undefined), true, 'an absent Required column remains legacy-required');
+  assert.equal(parseRequiredCsvValue(''), false, 'a blank present Required value is optional');
   assert.equal(parseRequiredCsvValue('false'), false);
   assert.equal(parseRequiredCsvValue('TRUE'), true);
+  const csvQuestionRequiredness = (requiredHeaderAndValue) => csvToJson(
+    `Title,Question name,Question title,Question type,Max answers${requiredHeaderAndValue.header}\nSurvey,q1,Question,text,${requiredHeaderAndValue.value}`
+  ).questions.elements[0].isRequired;
+  assert.equal(csvQuestionRequiredness({ header: '', value: '' }), true, 'absent Required column');
+  assert.equal(csvQuestionRequiredness({ header: ',Required', value: ',' }), false, 'blank Required value');
+  assert.equal(csvQuestionRequiredness({ header: ',Required', value: ',true' }), true);
+  assert.equal(csvQuestionRequiredness({ header: ',Required', value: ',false' }), false);
 
   const schema = validateSurveyDefinition({
     elements: [
@@ -93,6 +102,59 @@ test('question schema requiredness is explicit, typed, and validates submitted a
     'references outside the schema must remain unchanged'
   );
   assert.throws(() => validateSurveyDefinition({ elements: [{ type: 'tagbox', isRequired: 'false' }] }), /required/);
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{ type: 'panel', elements: [{ type: 'text' }] }] }),
+    /Nested SurveyJS questions, panels, and pages are not supported/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [], pages: [] }),
+    /Move every question into the survey's top-level elements array/
+  );
+});
+
+test('authenticated question update rejects nested definitions before persistence', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const hashedPassword = await bcrypt.hash('password123', 4);
+  pool.query = async (sql) => {
+    if (/SELECT \* FROM users WHERE username = \$1/.test(sql)) {
+      return { rows: [{ id: 87, username: 'nested-editor', password: hashedPassword, status: 'active' }] };
+    }
+    if (/SELECT \* FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ id: 87, username: 'nested-editor', status: 'active' }] };
+    }
+    // Do not cache a false capability value before the dedicated login test.
+    if (/information_schema\.columns/.test(sql)) throw new Error('test metadata unavailable');
+    if (/SELECT[\s\S]+sess[\s\S]+FROM[\s\S]+sessions/i.test(sql)) {
+      return { rows: [{ sess: { cookie: {}, userId: 87, username: 'nested-editor' } }], rowCount: 1 };
+    }
+    if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
+    if (/LEFT JOIN organization_memberships/.test(sql)) {
+      return { rows: [{ id: 'survey-id', name: 'Survey A', role: 'editor' }] };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  let persisted = false;
+  pool.connect = async () => ({
+    query: async () => { persisted = true; return { rows: [], rowCount: 0 }; },
+    release() {}
+  });
+
+  const agent = request.agent(app);
+  assert.equal((await agent.post('/api/login').send({ username: 'nested-editor', password: 'password123' })).status, 200);
+  const response = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [{ type: 'panel', name: 'panel1', elements: [{ type: 'text', name: 'child' }] }] }
+  });
+
+  assert.equal(response.status, 400);
+  assert.match(response.body.message, /Nested SurveyJS questions, panels, and pages are not supported/);
+  assert.equal(persisted, false);
 });
 
 test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL', (t) => {

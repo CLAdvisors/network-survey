@@ -1279,10 +1279,13 @@ async function insertResponses(responses, userId, surveyName, surveyId = null) {
 }
 
 function parseRequiredCsvValue(value) {
-  // Old imports had no Required column and historically meant "required".
-  if (value === undefined || value === null || String(value).trim() === '') return true;
-  return String(value).trim().toLowerCase() === 'true';
+  // A missing Required column is a legacy import and remains required. Once the
+  // column exists, only the explicit value "true" is required; blank is false.
+  if (value === undefined) return true;
+  return String(value ?? '').trim().toLowerCase() === 'true';
 }
+
+const NESTED_QUESTIONS_UNSUPPORTED_MESSAGE = 'Nested SurveyJS questions, panels, and pages are not supported. Move every question into the survey\'s top-level elements array and remove panels/pages before saving.';
 
 function validateSurveyDefinition(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
@@ -1290,6 +1293,9 @@ function validateSurveyDefinition(json) {
   }
   if (!Array.isArray(json.elements)) {
     throw new Error('Questions schema must contain an elements array.');
+  }
+  if (Array.isArray(json.pages) || json.pages !== undefined) {
+    throw new Error(NESTED_QUESTIONS_UNSUPPORTED_MESSAGE);
   }
   if (json.elements.length > 200) {
     throw new Error('A survey may contain at most 200 questions.');
@@ -1303,6 +1309,10 @@ function validateSurveyDefinition(json) {
       }
       if (typeof element.type !== 'string' || !/^[a-z][a-z0-9-]{0,99}$/i.test(element.type)) {
         throw new Error(`Question ${index + 1} has an invalid type.`);
+      }
+      if (element.type === 'panel' || element.type === 'paneldynamic' ||
+          element.elements !== undefined || element.templateElements !== undefined) {
+        throw new Error(NESTED_QUESTIONS_UNSUPPORTED_MESSAGE);
       }
       if (element.title !== undefined && (typeof element.title !== 'string' || element.title.length > 4000)) {
         throw new Error(`Question ${index + 1} has an invalid title.`);
@@ -2364,6 +2374,8 @@ module.exports = {
   ORG_ROLES,
   USER_STATUSES,
   parseRequiredCsvValue,
+  csvToJson,
+  NESTED_QUESTIONS_UNSUPPORTED_MESSAGE,
   validateSurveyDefinition,
   validateRequiredAnswers,
   normalizeQuestionNames,

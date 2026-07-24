@@ -62,6 +62,36 @@ test('question schema requiredness is explicit, typed, and validates submitted a
     normalizeQuestionNames(conditionalSchema).elements[1].visibleIf,
     '{question_1} = true'
   );
+  const collisionSchema = {
+    elements: [
+      { type: 'text', name: 'alpha' },
+      { type: 'text', name: 'question_1', visibleIf: "{alpha} = 'yes'" },
+    ],
+  };
+  assert.equal(
+    normalizeQuestionNames(collisionSchema).elements[1].visibleIf,
+    "{question_1} = 'yes'",
+    'a replacement must not be rewritten again when it matches another old name'
+  );
+  const canonicalReferenceSchema = {
+    elements: [
+      { type: 'text', name: 'question_1' },
+      { type: 'text', name: 'question_2', visibleIf: "{question_1} = 'yes'" },
+    ],
+  };
+  assert.equal(
+    normalizeQuestionNames(canonicalReferenceSchema).elements[1].visibleIf,
+    "{question_1} = 'yes'",
+    'an already-canonical reference must remain unchanged'
+  );
+  const unknownReferenceSchema = {
+    elements: [{ type: 'text', name: 'alpha', visibleIf: "{not_a_question} = 'yes'" }],
+  };
+  assert.equal(
+    normalizeQuestionNames(unknownReferenceSchema).elements[0].visibleIf,
+    "{not_a_question} = 'yes'",
+    'references outside the schema must remain unchanged'
+  );
   assert.throws(() => validateSurveyDefinition({ elements: [{ type: 'tagbox', isRequired: 'false' }] }), /required/);
 });
 

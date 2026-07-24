@@ -1720,10 +1720,12 @@ function rewriteSurveyExpressions(value, nameMap, propertyName = '') {
   if (typeof value === 'string') {
     // Only rewrite expression-bearing properties; titles and choice labels are data.
     if (!/(If$|Expression$|^expression$)/.test(propertyName)) return value;
-    return [...nameMap.entries()].reduce(
-      (expression, [oldName, newName]) => expression.replaceAll(`{${oldName}}`, `{${newName}}`),
-      value
-    );
+    // Replace complete SurveyJS references in one pass. Sequential replacements
+    // corrupt expressions when an old name is also another question's new
+    // canonical name (for example, alpha -> question_1 and question_1 -> question_2).
+    return value.replace(/\{([^{}]+)\}/g, (match, name) => (
+      nameMap.has(name) ? `{${nameMap.get(name)}}` : match
+    ));
   }
   if (Array.isArray(value)) return value.map((item) => rewriteSurveyExpressions(item, nameMap, propertyName));
   if (!value || typeof value !== 'object') return value;

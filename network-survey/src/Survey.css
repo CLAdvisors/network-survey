@@ -36,6 +36,19 @@
   padding: var(--respondent-question-padding, var(--sd-base-padding));
 }
 
+/* Keep ranking options within the host when shared inline dimensions include padding. */
+.draggable-ranking-host,
+.draggable-ranking-host [data-rbd-droppable-id],
+.draggable-ranking-host [data-rbd-draggable-id] {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.draggable-ranking-host [data-rbd-draggable-id] {
+  overflow-wrap: anywhere;
+}
+
 /* Keep tags usable without changing other SurveyJS input layouts. */
 .survey-content .respondent-survey-question .sd-tagbox__value {
   width: var(--respondent-tag-value-width, auto);

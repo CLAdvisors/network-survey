@@ -1,10 +1,246 @@
-/* Minimal SurveyJS V2 layout bridge; visual tokens are set on .survey-content. */
+/* SurveyJS V2 layout bridge; visual tokens are set on .survey-content. */
 .survey-content .sd-root-modern,
 .survey-content .sd-body,
 .survey-content .sd-container-modern {
   background: transparent;
 }
 
+/* Align SurveyJS's static layout with the respondent shell. */
+.modern-survey-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding-inline: var(--respondent-survey-gutter, 24px);
+  background: transparent;
+}
+
+.survey-instructions,
+.survey-content {
+  padding: var(--respondent-shell-padding, 24px);
+}
+
 .survey-content .sd-body__page {
   padding-top: 10px;
+}
+
+/*
+ * This class is applied by SurveyJS's onAfterRenderQuestion hook. It limits
+ * respondent card styling to rendered questions, never nested SurveyJS rows
+ * or controls.
+ */
+.survey-content .respondent-survey-question {
+  background: var(--respondent-question-background, var(--survey-surface, var(--sjs-general-backcolor, #fff)));
+  border: var(--respondent-question-border, 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6)));
+  border-bottom: var(--respondent-question-bottom-border, 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6)));
+  border-radius: var(--respondent-question-radius, var(--sjs-questionpanel-cornerRadius, var(--sjs-corner-radius, 4px)));
+  box-shadow: var(--respondent-question-shadow, 0 1px 2px rgb(0 0 0 / 8%));
+  padding: var(--respondent-question-padding, var(--sd-base-padding));
+}
+
+/* Keep ranking options within the host when shared inline dimensions include padding. */
+.draggable-ranking-host,
+.draggable-ranking-host [data-rbd-droppable-id],
+.draggable-ranking-host [data-rbd-draggable-id] {
+  box-sizing: border-box;
+  /* SurveyJS rows inherit nowrap; custom ranking labels must be allowed to wrap. */
+  white-space: normal;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.draggable-ranking-host [data-rbd-draggable-id] {
+  overflow-wrap: anywhere;
+}
+
+/* Keep tags usable without changing other SurveyJS input layouts. */
+.survey-content .respondent-survey-question .sd-tagbox__value {
+  width: var(--respondent-tag-value-width, auto);
+  gap: 4px;
+}
+
+.survey-content .respondent-survey-question .sd-input.sd-tagbox {
+  min-height: var(--respondent-tagbox-min-height, auto);
+}
+
+.survey-content .respondent-survey-question .sv-tagbox__item {
+  flex: var(--respondent-tag-flex, 0 1 auto);
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--respondent-tag-min-height, auto);
+  padding-inline-end: var(--respondent-tag-end-padding, calc(1.5 * var(--sjs-base-unit, 8px)));
+}
+
+.survey-content .respondent-survey-question .sv-tagbox__item-text {
+  flex: var(--respondent-tag-text-flex, 0 1 auto);
+  min-width: 0;
+  overflow: var(--respondent-tag-text-overflow, visible);
+  text-align: var(--respondent-tag-text-align, center);
+}
+
+.survey-content .respondent-survey-question .sv-tagbox__item-text span {
+  white-space: nowrap;
+  text-overflow: var(--respondent-tag-text-ellipsis, clip);
+}
+
+.survey-content .respondent-survey-question .sd-tagbox-item_clean-button {
+  width: var(--respondent-tag-remove-size, auto);
+  min-height: var(--respondent-tag-remove-size, auto);
+  padding: var(--respondent-tag-remove-padding, 0 0 0 calc(4 * var(--sjs-base-unit, 8px)));
+  inset-inline-end: var(--respondent-tag-remove-inset, calc(1.5 * var(--sjs-base-unit, 8px)));
+  opacity: var(--respondent-tag-remove-opacity, 0);
+}
+
+@media (max-width: 599.95px) {
+  .survey-content {
+    --respondent-shell-padding: 12px;
+    --respondent-survey-gutter: 0;
+    --respondent-question-background: transparent;
+    --respondent-question-border: 0;
+    --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
+    --respondent-question-radius: 0;
+    --respondent-question-shadow: none;
+    --respondent-question-padding: 0 0 20px;
+    --respondent-tagbox-min-height: 48px;
+    --respondent-tag-value-width: 100%;
+    --respondent-tag-flex: 0 0 100%;
+    --respondent-tag-min-height: 44px;
+    --respondent-tag-end-padding: 44px;
+    --respondent-tag-text-flex: 1 1 auto;
+    --respondent-tag-text-overflow: hidden;
+    --respondent-tag-text-align: start;
+    --respondent-tag-text-ellipsis: ellipsis;
+    --respondent-tag-remove-size: 44px;
+    --respondent-tag-remove-padding: 0;
+    --respondent-tag-remove-inset: 0;
+    --respondent-tag-remove-opacity: 1;
+  }
+
+  .survey-content .sd-body.sd-body--static {
+    padding: 16px 0 8px;
+  }
+
+  .survey-content .sd-page {
+    padding-inline: 0;
+  }
+
+  .survey-instructions {
+    --respondent-shell-padding: 16px;
+  }
+
+  .survey-content .sd-page__row:last-child .respondent-survey-question {
+    border-bottom: 0;
+  }
+}
+
+/* Framed review sizes do not change the browser viewport. Container queries
+ * make their SurveyJS layout follow the selected frame at 320px and 375px. */
+.respondent-survey-frame {
+  container-type: inline-size;
+}
+
+.respondent-survey-frame .harness-survey-layout {
+  padding: var(--respondent-harness-padding, 12px);
+}
+
+.respondent-survey-frame .harness-survey-surface {
+  /* Missing variables intentionally leave the desktop/tablet Paper styling intact. */
+  border-inline: var(--respondent-harness-surface-border);
+  border-radius: var(--respondent-harness-surface-radius);
+  box-shadow: var(--respondent-harness-surface-shadow);
+}
+
+@container (max-width: 599.95px) {
+  .respondent-survey-frame {
+    --respondent-harness-padding: 8px;
+    --respondent-harness-surface-border: 0;
+    --respondent-harness-surface-radius: 0;
+    --respondent-harness-surface-shadow: none;
+  }
+
+  .respondent-survey-frame .survey-content {
+    --respondent-shell-padding: 12px;
+    --respondent-survey-gutter: 0;
+    --respondent-question-background: transparent;
+    --respondent-question-border: 0;
+    --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
+    --respondent-question-radius: 0;
+    --respondent-question-shadow: none;
+    --respondent-question-padding: 0 0 20px;
+    --respondent-tagbox-min-height: 48px;
+    --respondent-tag-value-width: 100%;
+    --respondent-tag-flex: 0 0 100%;
+    --respondent-tag-min-height: 44px;
+    --respondent-tag-end-padding: 44px;
+    --respondent-tag-text-flex: 1 1 auto;
+    --respondent-tag-text-overflow: hidden;
+    --respondent-tag-text-align: start;
+    --respondent-tag-text-ellipsis: ellipsis;
+    --respondent-tag-remove-size: 44px;
+    --respondent-tag-remove-padding: 0;
+    --respondent-tag-remove-inset: 0;
+    --respondent-tag-remove-opacity: 1;
+  }
+
+  .respondent-survey-frame .survey-content .sd-body.sd-body--static {
+    padding: 16px 0 8px;
+  }
+
+  .respondent-survey-frame .survey-content .sd-page {
+    padding-inline: 0;
+  }
+
+  .respondent-survey-frame .survey-instructions {
+    --respondent-shell-padding: 16px;
+  }
+
+  .respondent-survey-frame .survey-content .sd-page__row:last-child .respondent-survey-question {
+    border-bottom: 0;
+  }
+}
+
+/* Explicit fallback for embedded browsers that do not evaluate container queries. */
+.respondent-survey-frame--phone {
+  --respondent-harness-padding: 8px;
+  --respondent-harness-surface-border: 0;
+  --respondent-harness-surface-radius: 0;
+  --respondent-harness-surface-shadow: none;
+}
+
+.respondent-survey-frame--phone .survey-content {
+  --respondent-shell-padding: 12px;
+  --respondent-survey-gutter: 0;
+  --respondent-question-background: transparent;
+  --respondent-question-border: 0;
+  --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
+  --respondent-question-radius: 0;
+  --respondent-question-shadow: none;
+  --respondent-question-padding: 0 0 20px;
+  --respondent-tagbox-min-height: 48px;
+  --respondent-tag-value-width: 100%;
+  --respondent-tag-flex: 0 0 100%;
+  --respondent-tag-min-height: 44px;
+  --respondent-tag-end-padding: 44px;
+  --respondent-tag-text-flex: 1 1 auto;
+  --respondent-tag-text-overflow: hidden;
+  --respondent-tag-text-align: start;
+  --respondent-tag-text-ellipsis: ellipsis;
+  --respondent-tag-remove-size: 44px;
+  --respondent-tag-remove-padding: 0;
+  --respondent-tag-remove-inset: 0;
+  --respondent-tag-remove-opacity: 1;
+}
+
+.respondent-survey-frame--phone .survey-content .sd-body.sd-body--static {
+  padding: 16px 0 8px;
+}
+
+.respondent-survey-frame--phone .survey-content .sd-page {
+  padding-inline: 0;
+}
+
+.respondent-survey-frame--phone .survey-instructions {
+  --respondent-shell-padding: 16px;
+}
+
+.respondent-survey-frame--phone .survey-content .sd-page__row:last-child .respondent-survey-question {
+  border-bottom: 0;
 }

@@ -6,7 +6,7 @@ import { Alert, useTheme } from '@mui/material';
 import "survey-core/survey-core.min.css";
 import "./Survey.css";
 import { buildApiUrl } from "./api";
-import { DraggableRankingQuestion } from "@network-survey/frontend-react";
+import RespondentDraggableRankingQuestion from "./RespondentDraggableRankingQuestion";
 
 const draggableQuestionRoots = new WeakMap();
 
@@ -102,6 +102,9 @@ function SurveyComponent({setTitle}) {
 
       // Custom rendering for draggableranking
       newSurvey.onAfterRenderQuestion.add((survey, options) => {
+        // Stable hook-owned class: CSS never has to infer question boundaries from rows.
+        options.htmlElement?.classList.add("respondent-survey-question");
+
         if (options.question.getType() !== "draggableranking") {
           return;
         }
@@ -128,7 +131,7 @@ function SurveyComponent({setTitle}) {
         const root = ReactDOM.createRoot(container);
         draggableQuestionRoots.set(options.question, root);
         root.render(
-          <DraggableRankingQuestion
+          <RespondentDraggableRankingQuestion
             question={options.question}
             value={options.question.value || []}
             onChange={(val) => (options.question.value = val)}

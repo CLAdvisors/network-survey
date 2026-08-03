@@ -33,6 +33,9 @@ function SurveyComponent({setTitle}) {
     const [json, setJson] = React.useState(null);
     const [survey, setSurvey] = React.useState(null);
     const [hasResponse, setHasResponse] = React.useState(false);
+    const [submissionError, setSubmissionError] = React.useState(null);
+    const submissionInProgressRef = React.useRef(false);
+    const submissionAcceptedRef = React.useRef(false);
     const searchParams = new URLSearchParams(window.location.search);
     const userId = searchParams.get("userId"); 
     const surveyName = searchParams.get("surveyName"); 
@@ -71,16 +74,33 @@ function SurveyComponent({setTitle}) {
       // Set modern theme
       Model.cssType = "defaultV2";
       
-      // Survey event handlers
-      newSurvey.onComplete.add((sender, options) => {
-        // Hide the "already completed" banner after a (re)submission to avoid confusion on the completion screen
-        setHasResponse(false);
-
+      // Submit before completing. This keeps respondents on the form if the API
+      // rejects a stale or malformed response instead of showing a false success.
+      newSurvey.onCompleting.add((sender, options) => {
         if (userId === 'demo') return;
+        if (submissionAcceptedRef.current) {
+          submissionAcceptedRef.current = false;
+          return;
+        }
+        options.allowComplete = false;
+        if (submissionInProgressRef.current) return;
+
+        submissionInProgressRef.current = true;
+        setSubmissionError(null);
         const data = JSON.stringify(sender.data, null, 3);
         const url = buildApiUrl('/user');
-        // Fire-and-forget; if needed we could await and handle errors, but UI should reflect resubmission immediately
-        postRequest(url, { userId, surveyName, answers: data }).catch((e) => console.error('Submit failed:', e));
+        postRequest(url, { userId, surveyName, answers: data })
+          .then(() => {
+            setHasResponse(false);
+            submissionAcceptedRef.current = true;
+            sender.doComplete();
+          })
+          .catch((error) => {
+            setSubmissionError(error.message || 'Your response could not be submitted. Please try again.');
+          })
+          .finally(() => {
+            submissionInProgressRef.current = false;
+          });
       });
 
       newSurvey.onChoicesLazyLoad.add((_, options) => {
@@ -184,6 +204,11 @@ function SurveyComponent({setTitle}) {
 
     return (
       <div className="modern-survey-container">
+        {submissionError && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {submissionError}
+          </Alert>
+        )}
         {hasResponse && (
           <Alert
             severity="info"

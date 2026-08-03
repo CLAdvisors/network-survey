@@ -24,7 +24,8 @@
     "papaparse": "^5.4.1",
     "pg": "^8.13.1",
     "resend": "^0.16.0",
-    "sqlite3": "^5.1.6"
+    "sqlite3": "^5.1.6",
+    "survey-core": "2.5.35"
   },
   "devDependencies": {
     "nodemon": "^2.0.22",

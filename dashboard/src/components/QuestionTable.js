@@ -9,6 +9,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
 import { parseQuestionsCsv } from '../utils/questionsCsv';
+import { buildQuestionTableSchema } from '../utils/questionTableSchema';
 
 const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }) => {
   const theme = useTheme();
@@ -134,39 +135,11 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
     return newRow;
   };
 
-  const buildSurveySchema = async (rowsToSave) => {
-    // The table is a projection of the SurveyJS schema. Patch the full schema instead
-    // of serializing CSV, which used to silently discard requiredness and other fields.
-    const response = await api.get('/admin/questions', { params: { surveyName } });
-    const current = response.data?.questions || {};
-    const sourceElements = Array.isArray(current.elements) ? current.elements : [];
-    const sourceByName = new Map(sourceElements.map((element) => [element.name, element]));
-    return {
-      ...current,
-      elements: rowsToSave.map((row, index) => {
-        const existing = sourceByName.get(row.name) || {};
-        const max = Number(row.max);
-        const element = {
-          ...existing,
-          type: row.type || existing.type || 'tagbox',
-          name: row.name || `question_${index + 1}`,
-          title: row.text || '',
-          isRequired: row.required === true,
-        };
-        if (Number.isFinite(max) && max > 0) {
-          element.maxSelectedChoices = Math.floor(max);
-          if (element.type === 'tagbox') element.claMaxSelections = Math.floor(max);
-        } else {
-          delete element.maxSelectedChoices;
-          if (element.type === 'tagbox') element.claMaxSelections = 0;
-        }
-        return element;
-      })
-    };
-  };
-
   const saveRows = async (rowsToSave) => {
-    const questions = await buildSurveySchema(rowsToSave);
+    // The table is a projection of the SurveyJS schema. Patch the full schema instead
+    // of serializing CSV, which would discard type-specific fields and expressions.
+    const response = await api.get('/admin/questions', { params: { surveyName } });
+    const questions = buildQuestionTableSchema(response.data?.questions, rowsToSave);
     return api.post('/updateQuestions', { questions, surveyName });
   };
 
@@ -222,7 +195,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
       // Combine existing questions with new ones, maintaining order
       const combinedQuestions = [...tableRows, ...newRows];
       
-      // Persist a patched SurveyJS schema so existing type-specific configuration survives.
+      // Persist a patched SurveyJS schema. Imported duplicate names receive fresh
+      // identities, while the API remains responsible for final positional names.
       const response = await saveRows(combinedQuestions);
 
       if (response.status === 200) {

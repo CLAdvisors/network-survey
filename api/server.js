@@ -1287,9 +1287,124 @@ function parseRequiredCsvValue(value) {
 
 const NESTED_QUESTIONS_UNSUPPORTED_MESSAGE = 'Nested SurveyJS questions, panels, and pages are not supported. Move every question into the survey\'s top-level elements array and remove panels/pages before saving.';
 
+// This is the complete answer-bearing SurveyJS contract supported by response
+// storage/results today. New types must define both their value shape and
+// required-answer semantics here before schemas may persist them.
+const SUPPORTED_QUESTION_TYPES = new Set([
+  'text', 'comment', 'boolean', 'rating',
+  'radiogroup', 'dropdown', 'checkbox', 'tagbox',
+  'ranking', 'draggableranking', 'imagepicker', 'file',
+  'matrix', 'matrixdropdown', 'matrixdynamic', 'multipletext'
+]);
+const SAFE_NESTED_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}$/;
+const UNSAFE_NESTED_NAMES = new Set(['__proto__', 'prototype', 'constructor']);
+const SUPPORTED_MATRIX_CELL_TYPES = new Set([
+  'default', 'dropdown', 'checkbox', 'radiogroup', 'tagbox', 'text',
+  'comment', 'boolean', 'expression', 'rating', 'slider'
+]);
+
+function isPrimitiveDefinitionValue(value) {
+  return typeof value === 'string' || typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value));
+}
+
+function validateItemDefinitions(items, label, { requireObjects = false } = {}) {
+  if (!Array.isArray(items)) throw new Error(`${label} must be an array.`);
+  items.forEach((item, index) => {
+    if (isPrimitiveDefinitionValue(item) && !requireObjects) return;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`${label} item ${index + 1} is malformed.`);
+    }
+    const hasValue = Object.prototype.hasOwnProperty.call(item, 'value');
+    if (hasValue && !isPrimitiveDefinitionValue(item.value)) {
+      throw new Error(`${label} item ${index + 1} value must be primitive.`);
+    }
+    const hasPrimitiveText = Object.prototype.hasOwnProperty.call(item, 'text') &&
+      isPrimitiveDefinitionValue(item.text);
+    if (!hasValue && !hasPrimitiveText) {
+      throw new Error(`${label} item ${index + 1} must define a primitive value or text.`);
+    }
+  });
+}
+
+function validateNestedName(name, label, names) {
+  if (typeof name !== 'string' || !SAFE_NESTED_NAME_RE.test(name) || UNSAFE_NESTED_NAMES.has(name)) {
+    throw new Error(`${label} must have a nonempty safe name.`);
+  }
+  if (names.has(name)) throw new Error(`${label} names must be unique: ${name}.`);
+  names.add(name);
+}
+
+function unsupportedChoicesByUrlMessage(label) {
+  return `${label} defines unsupported property choicesByUrl. Remove choicesByUrl and provide local choices; server-side URL choice resolution is not supported.`;
+}
+
+function unsupportedChoicesLazyLoadMessage(label, type) {
+  return `${label} defines unsupported property choicesLazyLoadEnabled for type ${type}. Remove choicesLazyLoadEnabled; lazy loading is supported only for tagbox questions.`;
+}
+
+function unsupportedAllowAddNewTagMessage(label) {
+  return `${label} defines unsupported property allowAddNewTag=true. Set allowAddNewTag to false or remove it; respondent-created tagbox choices are not supported.`;
+}
+
+function validateColumnDefinitions(columns, questionLabel, parent) {
+  if (!Array.isArray(columns)) throw new Error(`${questionLabel} columns must be an array.`);
+  const names = new Set();
+  columns.forEach((column, index) => {
+    const label = `${questionLabel} column ${index + 1}`;
+    if (!column || typeof column !== 'object' || Array.isArray(column)) {
+      throw new Error(`${label} must be an object.`);
+    }
+    if (Object.prototype.hasOwnProperty.call(column, 'choicesByUrl')) {
+      throw new Error(unsupportedChoicesByUrlMessage(label));
+    }
+    validateNestedName(column.name, label, names);
+    if (column.cellType !== undefined &&
+        (typeof column.cellType !== 'string' || !SUPPORTED_MATRIX_CELL_TYPES.has(column.cellType))) {
+      throw new Error(`${label} has unsupported cell type: ${column.cellType}.`);
+    }
+    for (const property of ['choices', 'rateValues']) {
+      if (column[property] !== undefined) validateItemDefinitions(column[property], `${label} ${property}`);
+    }
+    const cellType = !column.cellType || column.cellType === 'default'
+      ? (parent.cellType || 'dropdown')
+      : column.cellType;
+    if (['default', 'dropdown', 'radiogroup', 'checkbox', 'tagbox'].includes(cellType)) {
+      const choices = column.choices || parent.choices;
+      if (!Array.isArray(choices) || choices.length === 0) {
+        throw new Error(`${label} must define choices for cell type ${cellType}.`);
+      }
+    }
+    if (column.isRequired !== undefined && typeof column.isRequired !== 'boolean') {
+      throw new Error(`${label} required must be true or false.`);
+    }
+  });
+}
+
+function validateMultipleTextItems(items, questionLabel) {
+  if (!Array.isArray(items)) throw new Error(`${questionLabel} items must be an array.`);
+  const names = new Set();
+  items.forEach((item, index) => {
+    const label = `${questionLabel} item ${index + 1}`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`${label} must be an object.`);
+    }
+    validateNestedName(item.name, label, names);
+    if (item.isRequired !== undefined && typeof item.isRequired !== 'boolean') {
+      throw new Error(`${label} required must be true or false.`);
+    }
+  });
+}
+
+const SURVEYJS_RESERVED_EXPRESSION_ROOTS = new Set(['item', 'row', 'panel', 'composite', 'survey']);
+
 function validateSurveyDefinition(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     throw new Error('Questions must be a SurveyJS schema object.');
+  }
+  if (json.claNextQuestionNumber !== undefined &&
+      (!Number.isSafeInteger(json.claNextQuestionNumber) || json.claNextQuestionNumber < 1)) {
+    throw new Error('claNextQuestionNumber must be a positive safe integer.');
   }
   if (!Array.isArray(json.elements)) {
     throw new Error('Questions schema must contain an elements array.');
@@ -1301,6 +1416,7 @@ function validateSurveyDefinition(json) {
     throw new Error('A survey may contain at most 200 questions.');
   }
 
+  const questionNames = new Set();
   return {
     ...json,
     elements: json.elements.map((element, index) => {
@@ -1314,11 +1430,78 @@ function validateSurveyDefinition(json) {
           element.elements !== undefined || element.templateElements !== undefined) {
         throw new Error(NESTED_QUESTIONS_UNSUPPORTED_MESSAGE);
       }
+      if (!SUPPORTED_QUESTION_TYPES.has(element.type)) {
+        throw new Error(`Question ${index + 1} has unsupported type: ${element.type}.`);
+      }
+      if (Object.prototype.hasOwnProperty.call(element, 'valueName')) {
+        throw new Error(`Question ${index + 1} defines unsupported property valueName. Remove valueName so answers are stored under the question name.`);
+      }
+      if (Object.prototype.hasOwnProperty.call(element, 'choicesByUrl')) {
+        throw new Error(unsupportedChoicesByUrlMessage(`Question ${index + 1}`));
+      }
+      if (element.type !== 'tagbox' &&
+          Object.prototype.hasOwnProperty.call(element, 'choicesLazyLoadEnabled')) {
+        throw new Error(unsupportedChoicesLazyLoadMessage(`Question ${index + 1}`, element.type));
+      }
+      if (element.type === 'tagbox' && element.allowAddNewTag === true) {
+        throw new Error(unsupportedAllowAddNewTagMessage(`Question ${index + 1}`));
+      }
+      if (typeof element.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(element.name)) {
+        throw new Error(`Question ${index + 1} must have a nonempty safe name.`);
+      }
+      if (SURVEYJS_RESERVED_EXPRESSION_ROOTS.has(element.name.toLowerCase())) {
+        throw new Error(`Question ${index + 1} name "${element.name}" conflicts with the reserved SurveyJS expression variable "${element.name.toLowerCase()}". Choose a different question name.`);
+      }
+      if (questionNames.has(element.name)) {
+        throw new Error(`Question names must be unique: ${element.name}.`);
+      }
+      questionNames.add(element.name);
       if (element.title !== undefined && (typeof element.title !== 'string' || element.title.length > 4000)) {
         throw new Error(`Question ${index + 1} has an invalid title.`);
       }
       if (element.isRequired !== undefined && typeof element.isRequired !== 'boolean') {
         throw new Error(`Question ${index + 1} required must be true or false.`);
+      }
+
+      const questionLabel = `Question ${index + 1}`;
+      for (const property of ['choices', 'rateValues']) {
+        if (element[property] !== undefined) {
+          validateItemDefinitions(element[property], `${questionLabel} ${property}`);
+        }
+      }
+      for (const property of ['otherItemValue', 'noneItemValue', 'refuseItemValue', 'dontKnowItemValue']) {
+        if (element[property] !== undefined && !isPrimitiveDefinitionValue(element[property])) {
+          throw new Error(`${questionLabel} ${property} must be a primitive value.`);
+        }
+      }
+      if (element.type === 'matrix') {
+        validateItemDefinitions(element.rows, `${questionLabel} rows`);
+        validateItemDefinitions(element.columns, `${questionLabel} columns`);
+      } else if (element.type === 'matrixdropdown' || element.type === 'matrixdynamic') {
+        if (element.cellType !== undefined &&
+            (typeof element.cellType !== 'string' || !SUPPORTED_MATRIX_CELL_TYPES.has(element.cellType))) {
+          throw new Error(`${questionLabel} has unsupported matrix cell type: ${element.cellType}.`);
+        }
+        if (element.type === 'matrixdropdown') {
+          validateItemDefinitions(element.rows, `${questionLabel} rows`);
+        }
+        validateColumnDefinitions(element.columns, questionLabel, element);
+      }
+      if (element.type === 'matrixdynamic') {
+        if (element.minRowCount !== undefined &&
+            (!Number.isInteger(element.minRowCount) || element.minRowCount < 0)) {
+          throw new Error(`${questionLabel} minRowCount must be a nonnegative integer.`);
+        }
+        if (element.maxRowCount !== undefined &&
+            (!Number.isInteger(element.maxRowCount) || element.maxRowCount < 1)) {
+          throw new Error(`${questionLabel} maxRowCount must be a positive integer.`);
+        }
+        if (element.minRowCount !== undefined && element.maxRowCount !== undefined &&
+            element.minRowCount > element.maxRowCount) {
+          throw new Error(`${questionLabel} minRowCount cannot exceed maxRowCount.`);
+        }
+      } else if (element.type === 'multipletext') {
+        validateMultipleTextItems(element.items, questionLabel);
       }
       // Materialize SurveyJS's false default, making the persisted contract explicit.
       return { ...element, isRequired: element.isRequired === true };
@@ -1326,40 +1509,326 @@ function validateSurveyDefinition(json) {
   };
 }
 
-function validateRequiredAnswers(schema, answers) {
+function isEmptyAnswer(value) {
+  if (value === undefined || value === null || value === '') return true;
+  if (Array.isArray(value)) return value.length === 0 || value.every(isEmptyAnswer);
+  if (typeof value === 'object') {
+    const nestedValues = Object.values(value);
+    return nestedValues.length === 0 || nestedValues.every(isEmptyAnswer);
+  }
+  return false;
+}
+
+function configuredItemValues(items) {
+  if (!Array.isArray(items)) return null;
+  return items.map((item) => (
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? (item.value !== undefined ? item.value : item.text)
+      : item
+  ));
+}
+
+function configuredChoiceValues(element) {
+  let values = configuredItemValues(element.choices);
+  const specialItems = [
+    ['showOtherItem', 'otherItemValue', 'other'],
+    ['showNoneItem', 'noneItemValue', 'none'],
+    ['showRefuseItem', 'refuseItemValue', 'refused'],
+    ['showDontKnowItem', 'dontKnowItemValue', 'dontknow'],
+  ];
+  specialItems.forEach(([showProperty, valueProperty, defaultValue]) => {
+    if (element[showProperty] === true) {
+      values ||= [];
+      values.push(element[valueProperty] ?? defaultValue);
+    }
+  });
+  return values;
+}
+
+function hasDuplicateValues(values) {
+  return new Set(values).size !== values.length;
+}
+
+const FREE_FORM_OTHER_TYPES = new Set(['radiogroup', 'dropdown', 'checkbox', 'tagbox']);
+
+function allowsFreeFormOther(schema, element) {
+  if (!FREE_FORM_OTHER_TYPES.has(element.type) || element.showOtherItem !== true) return false;
+  if (element.storeOthersAsComment === true) return false;
+  return element.storeOthersAsComment === false || schema.storeOthersAsComment === false;
+}
+
+function isValidFreeFormOther(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 4000;
+}
+
+function validateChoiceValues(values, configuredChoices, allowFreeFormOther) {
+  if (values.length === 0) return true;
+  if (!Array.isArray(configuredChoices)) return false;
+  const unknown = values.filter((value) => !configuredChoices.includes(value));
+  return unknown.length === 0 ||
+    (allowFreeFormOther && unknown.length === 1 && isValidFreeFormOther(unknown[0]));
+}
+
+function validateTextValue(configuration, value) {
+  return configuration.inputType === 'number'
+    ? typeof value === 'number' && Number.isFinite(value)
+    : typeof value === 'string';
+}
+
+function validateBooleanValue(configuration, value) {
+  const valueTrue = configuration.valueTrue ?? true;
+  const valueFalse = configuration.valueFalse ?? false;
+  return value === valueTrue || value === valueFalse;
+}
+
+function validateRatingValue(configuration, value, modelQuestion) {
+  // SurveyJS may generate values from a combination of rateCount, rateMin,
+  // rateMax, rateStep, and rateType. Use the same rendered model values for
+  // top-level ratings rather than trying to duplicate that generation logic.
+  if (Array.isArray(modelQuestion?.visibleRateValues)) {
+    return modelQuestion.visibleRateValues.some((item) => item.value === value);
+  }
+  const rateValues = configuredItemValues(configuration.rateValues);
+  if (rateValues) return rateValues.includes(value);
+  const min = Number.isFinite(configuration.rateMin) ? configuration.rateMin : 1;
+  const max = Number.isFinite(configuration.rateMax) ? configuration.rateMax : 5;
+  const step = Number.isFinite(configuration.rateStep) && configuration.rateStep > 0
+    ? configuration.rateStep
+    : 1;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) return false;
+  const stepsFromMin = (value - min) / step;
+  return Math.abs(stepsFromMin - Math.round(stepsFromMin)) < 1e-9;
+}
+
+function validateSelectionCount(configuration, value, includeClaMaxSelections = false) {
+  if (!Array.isArray(value)) return false;
+  const min = Number.isFinite(configuration.minSelectedChoices) && configuration.minSelectedChoices > 0
+    ? configuration.minSelectedChoices
+    : 0;
+  const configuredMaxima = [configuration.maxSelectedChoices];
+  if (includeClaMaxSelections) configuredMaxima.push(configuration.claMaxSelections);
+  const maxima = configuredMaxima.filter((limit) => Number.isFinite(limit) && limit > 0);
+  const max = maxima.length > 0 ? Math.min(...maxima) : Infinity;
+  return value.length >= min && value.length <= max;
+}
+
+function modelChoiceValues(question, element) {
+  const modelChoiceItems = Array.isArray(question?.enabledChoices)
+    ? question.enabledChoices
+    : (Array.isArray(question?.visibleChoices) ? question.visibleChoices : null);
+  const specialValues = configuredChoiceValues({ ...element, choices: undefined }) || [];
+  if (modelChoiceItems) {
+    return [...new Set([...modelChoiceItems.map((choice) => choice.value), ...specialValues])];
+  }
+  return configuredChoiceValues(element);
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isScalar(value) {
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
+}
+
+function validateMatrixCell(column, parent, value) {
+  const type = !column.cellType || column.cellType === 'default'
+    ? (parent.cellType || 'dropdown')
+    : column.cellType;
+  const choiceSource = Array.isArray(column.choices) ? column : parent;
+  const choices = configuredChoiceValues(choiceSource);
+  if (type === 'checkbox' || type === 'tagbox') {
+    return validateSelectionCount(column, value, type === 'tagbox') && !hasDuplicateValues(value) &&
+      value.every((item) => isScalar(item) && Array.isArray(choices) && choices.includes(item));
+  }
+  if (type === 'text') return validateTextValue(column, value);
+  if (type === 'comment') return typeof value === 'string';
+  if (type === 'boolean') return validateBooleanValue(column, value);
+  if (type === 'rating') return validateRatingValue(column, value);
+  if (type === 'slider') return typeof value === 'number' && Number.isFinite(value);
+  if (type === 'expression') return isScalar(value);
+  if (choices) return isScalar(value) && choices.includes(value);
+  return isScalar(value);
+}
+
+function validateStructuredAnswer(element, value) {
+  if (element.type === 'matrix') {
+    if (!isPlainObject(value)) return false;
+    const rows = configuredItemValues(element.rows);
+    const columns = configuredItemValues(element.columns);
+    if (!rows || !columns) return false;
+    const rowKeys = new Set(rows.map(String));
+    return Object.entries(value).every(([row, choice]) => rowKeys.has(row) && isScalar(choice) && columns.includes(choice));
+  }
+
+  if (element.type === 'matrixdropdown') {
+    if (!isPlainObject(value) || !Array.isArray(element.rows) || !Array.isArray(element.columns)) return false;
+    const rowKeys = new Set(configuredItemValues(element.rows).map(String));
+    const columns = new Map(element.columns.map((column) => [String(column?.name), column]));
+    return Object.entries(value).every(([row, cells]) => rowKeys.has(row) && isPlainObject(cells) &&
+      Object.entries(cells).every(([columnName, cell]) => {
+        const column = columns.get(columnName);
+        return Boolean(column) && validateMatrixCell(column, element, cell);
+      }));
+  }
+
+  if (element.type === 'matrixdynamic') {
+    if (!Array.isArray(value) || !Array.isArray(element.columns)) return false;
+    if (element.minRowCount !== undefined && value.length < element.minRowCount) return false;
+    if (element.maxRowCount !== undefined && value.length > element.maxRowCount) return false;
+    const columns = new Map(element.columns.map((column) => [String(column?.name), column]));
+    return value.every((row) => isPlainObject(row) && Object.entries(row).every(([columnName, cell]) => {
+      const column = columns.get(columnName);
+      return Boolean(column) && validateMatrixCell(column, element, cell);
+    }));
+  }
+
+  if (element.type === 'multipletext') {
+    if (!isPlainObject(value) || !Array.isArray(element.items)) return false;
+    const items = new Map(element.items.map((item) => [String(item?.name), item]));
+    return Object.entries(value).every(([itemName, itemValue]) => {
+      const item = items.get(itemName);
+      return Boolean(item) && validateTextValue(item, itemValue);
+    });
+  }
+
+  if (element.type === 'file') {
+    if (!Array.isArray(value)) return false;
+    const allowedKeys = new Set(['name', 'type', 'content', 'size', 'lastModified']);
+    return value.every((file) => isPlainObject(file) && typeof file.name === 'string' && file.name.length > 0 &&
+      Object.keys(file).every((key) => allowedKeys.has(key)) &&
+      (file.type === undefined || typeof file.type === 'string') &&
+      (file.content === undefined || typeof file.content === 'string') &&
+      (file.size === undefined || (typeof file.size === 'number' && Number.isFinite(file.size) && file.size >= 0)) &&
+      (file.lastModified === undefined || (typeof file.lastModified === 'number' && Number.isFinite(file.lastModified))));
+  }
+
+  return null;
+}
+
+function validateRequiredAnswers(schema, answers, options = {}) {
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
     return ['Answers must be an object.'];
   }
   const elements = Array.isArray(schema?.elements) ? schema.elements : [];
   const allowedNames = new Set(elements.map((element) => element?.name).filter(Boolean));
+  const otherCommentTypes = new Set([
+    'radiogroup', 'dropdown', 'checkbox', 'tagbox', 'ranking', 'imagepicker'
+  ]);
+  const commentNames = new Set(elements
+    .filter((element) => element?.name && (element.showCommentArea === true ||
+      (element.showOtherItem === true && otherCommentTypes.has(element.type) &&
+        !allowsFreeFormOther(schema, element))))
+    .map((element) => `${element.name}-Comment`));
   const errors = [];
-  Object.keys(answers).forEach((name) => {
-    if (name !== 'timeStamp' && !allowedNames.has(name)) errors.push(`Unknown question: ${name}`);
+  const addInvalid = (name) => errors.push(`Invalid response: ${name}`);
+  Object.entries(answers).forEach(([name, value]) => {
+    if (name === 'timeStamp') return;
+    if (commentNames.has(name)) {
+      if (typeof value !== 'string' || value.length > 4000) addInvalid(name);
+    } else if (!allowedNames.has(name)) {
+      errors.push(`Unknown question: ${name}`);
+    }
   });
 
-  // SurveyJS evaluates visibleIf/enableIf with the submitted values, so server
-  // validation has the same conditional-required semantics as the respondent UI.
+  // Reject URL-backed choices in legacy persisted schemas before constructing a
+  // SurveyJS model, so response validation never attempts URL choice resolution.
+  elements.forEach((element, index) => {
+    if (Object.prototype.hasOwnProperty.call(element || {}, 'choicesByUrl')) {
+      errors.push(unsupportedChoicesByUrlMessage(`Question ${index + 1}`));
+    }
+    if (element?.type !== 'tagbox' &&
+        Object.prototype.hasOwnProperty.call(element || {}, 'choicesLazyLoadEnabled')) {
+      errors.push(unsupportedChoicesLazyLoadMessage(`Question ${index + 1}`, element.type || '(missing)'));
+    }
+    if (element?.type === 'tagbox' && element.allowAddNewTag === true) {
+      errors.push(unsupportedAllowAddNewTagMessage(`Question ${index + 1}`));
+    }
+    if (Array.isArray(element?.columns)) {
+      element.columns.forEach((column, columnIndex) => {
+        if (Object.prototype.hasOwnProperty.call(column || {}, 'choicesByUrl')) {
+          errors.push(unsupportedChoicesByUrlMessage(`Question ${index + 1} column ${columnIndex + 1}`));
+        }
+      });
+    }
+  });
+  if (errors.some((error) => error.includes('unsupported property'))) {
+    return [...new Set(errors)];
+  }
+
+  // Let SurveyJS compute visibleIf against submitted data. Validation below still
+  // iterates the schema, rather than only model questions, so a custom question
+  // omitted by SurveyJS cannot bypass explicit requiredness checks.
   const model = new Model(schema);
   model.data = answers;
   model.validate();
   model.getAllQuestions().forEach((question) => {
-    if (question.errors?.length) errors.push(`Invalid response: ${question.name}`);
+    // Parent question.errors omits required multipletext items and matrix cells.
+    // getAllErrors includes those nested editor errors.
+    if (question.getAllErrors().length > 0) addInvalid(question.name);
   });
 
-  // SurveyJS validates requiredness, while these checks constrain every supplied
-  // value before it reaches results rendering. Unknown/custom types are limited
-  // to scalar values unless explicitly added here with a documented shape.
-  const arrayValueTypes = new Set(['checkbox', 'tagbox', 'ranking', 'draggableranking', 'file', 'matrixdynamic']);
-  const objectValueTypes = new Set(['matrix', 'matrixdropdown', 'multipletext']);
-  elements.forEach((element) => {
-    if (!element?.name || answers[element.name] === undefined) return;
+  const arrayTypes = new Set(['checkbox', 'tagbox', 'ranking', 'draggableranking', 'file', 'matrixdynamic']);
+  const objectTypes = new Set(['matrix', 'matrixdropdown', 'multipletext']);
+  const singleChoiceTypes = new Set(['radiogroup', 'dropdown']);
+  const multiChoiceTypes = new Set(['checkbox', 'ranking', 'draggableranking']);
+
+  elements.forEach((element, index) => {
+    if (!element?.name) return;
+    if (!SUPPORTED_QUESTION_TYPES.has(element.type)) {
+      errors.push(`Unsupported question type: ${element.type || '(missing)'}`);
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(element, 'valueName')) {
+      errors.push(`Unsupported question property: valueName (question ${index + 1}, ${element.name}). Remove valueName so answers use the question name.`);
+      return;
+    }
+    const hasAnswer = Object.prototype.hasOwnProperty.call(answers, element.name);
     const value = answers[element.name];
-    const isScalar = value === null || ['string', 'number', 'boolean'].includes(typeof value);
-    const isPlainObject = value !== null && typeof value === 'object' && !Array.isArray(value);
-    const wrongShape = (arrayValueTypes.has(element.type) && !Array.isArray(value)) ||
-      (objectValueTypes.has(element.type) && !isPlainObject) ||
-      (!arrayValueTypes.has(element.type) && !objectValueTypes.has(element.type) && !isScalar);
-    if (wrongShape) errors.push(`Invalid response: ${element.name}`);
+    const modelQuestion = model.getQuestionByName(element.name);
+    const isVisible = modelQuestion ? modelQuestion.isVisible : true;
+    const isEnabled = modelQuestion ? !modelQuestion.isReadOnly : true;
+
+    if (element.isRequired === true && isVisible && isEnabled && isEmptyAnswer(value)) {
+      addInvalid(element.name);
+    }
+    if (!hasAnswer) return;
+
+    let valid = true;
+    if (element.type === 'text') {
+      valid = validateTextValue(element, value);
+    } else if (element.type === 'comment') {
+      valid = typeof value === 'string';
+    } else if (element.type === 'boolean') {
+      valid = validateBooleanValue(element, value);
+    } else if (element.type === 'rating') {
+      valid = validateRatingValue(element, value, modelQuestion);
+    } else if (singleChoiceTypes.has(element.type)) {
+      const choices = modelChoiceValues(modelQuestion, element);
+      valid = !Array.isArray(value) && value !== null && typeof value !== 'object' &&
+        validateChoiceValues([value], choices, allowsFreeFormOther(schema, element));
+    } else if (multiChoiceTypes.has(element.type)) {
+      const choices = modelChoiceValues(modelQuestion, element);
+      valid = validateSelectionCount(element, value) && !hasDuplicateValues(value) &&
+        validateChoiceValues(value, choices, allowsFreeFormOther(schema, element));
+    } else if (element.type === 'tagbox') {
+      const configuredChoices = modelChoiceValues(modelQuestion, element) || [];
+      const choices = element.choicesLazyLoadEnabled === true && options.lazyTagboxChoices instanceof Set
+        ? [...new Set([...configuredChoices, ...options.lazyTagboxChoices])]
+        : configuredChoices;
+      valid = validateSelectionCount(element, value, true) && !hasDuplicateValues(value) &&
+        validateChoiceValues(value, choices, allowsFreeFormOther(schema, element));
+    } else if (element.type === 'imagepicker') {
+      const choices = modelChoiceValues(modelQuestion, element);
+      valid = element.multiSelect === true
+        ? validateSelectionCount(element, value) && !hasDuplicateValues(value) &&
+          Array.isArray(choices) && value.every((item) => choices.includes(item))
+        : !Array.isArray(value) && value !== null && typeof value !== 'object' &&
+          Array.isArray(choices) && choices.includes(value);
+    } else if (arrayTypes.has(element.type) || objectTypes.has(element.type)) {
+      valid = validateStructuredAnswer(element, value);
+    }
+    if (!valid) addInvalid(element.name);
   });
   return [...new Set(errors)];
 }
@@ -1376,9 +1845,10 @@ function csvToJson(csvString, title) {
         skipEmptyLines: true,
     });
 
-    // Force positional names regardless of provided value for consistency
+    // Legacy files may omit names. Preserve supplied canonical identities, while
+    // letting the endpoint normalizer allocate identities for arbitrary names.
     result.data.forEach((item, index) => {
-      item['Question name'] = `question_${index + 1}`;
+      item['Question name'] = item['Question name'] || `question_${index + 1}`;
     });
 
     // Iterate through each parsed data and create the corresponding question object
@@ -1389,8 +1859,10 @@ function csvToJson(csvString, title) {
             "name": item['Question name'],
             "title": item['Question title'],
             "isRequired": parseRequiredCsvValue(item['Required']),
-            "choicesLazyLoadEnabled": true,
-            "choicesLazyLoadPageSize": 25,
+            ...(item['Question type'] === 'tagbox' ? {
+              "choicesLazyLoadEnabled": true,
+              "choicesLazyLoadPageSize": 25,
+            } : {}),
             "maxSelectedChoices": item['Max answers'] ? parseInt(item['Max answers']) : null,
          };
 
@@ -1726,31 +2198,111 @@ app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => 
 });
 
 // PUT API endpoint for uploading a json file of questions
+const EXACT_QUESTION_REFERENCE_PROPERTIES = new Set([
+  'choicesFromQuestion',
+  // Survey-level set-value/run-expression/copy-value triggers.
+  'setToName',
+  'fromName',
+]);
+const SPECIAL_DOTTED_REFERENCE_ROOTS = SURVEYJS_RESERVED_EXPRESSION_ROOTS;
+
 function rewriteSurveyExpressions(value, nameMap, propertyName = '') {
   if (typeof value === 'string') {
+    // Some SurveyJS references are exact question names rather than expressions.
+    // Rewrite them from the original map in one pass for collision-safe reorders.
+    if (EXACT_QUESTION_REFERENCE_PROPERTIES.has(propertyName)) {
+      return nameMap.get(value) || value;
+    }
     // Only rewrite expression-bearing properties; titles and choice labels are data.
     if (!/(If$|Expression$|^expression$)/.test(propertyName)) return value;
-    // Replace complete SurveyJS references in one pass. Sequential replacements
-    // corrupt expressions when an old name is also another question's new
-    // canonical name (for example, alpha -> question_1 and question_1 -> question_2).
-    return value.replace(/\{([^{}]+)\}/g, (match, name) => (
-      nameMap.has(name) ? `{${nameMap.get(name)}}` : match
-    ));
+    // Replace complete SurveyJS references from the original map in one pass so
+    // assigned names can never cascade through a second replacement.
+    return value.replace(/\{([^{}]+)\}/g, (match, reference) => {
+      const dotIndex = reference.indexOf('.');
+      const root = dotIndex === -1 ? reference : reference.slice(0, dotIndex);
+      if (!nameMap.has(root) ||
+          (dotIndex !== -1 && SPECIAL_DOTTED_REFERENCE_ROOTS.has(root.toLowerCase()))) return match;
+      const suffix = dotIndex === -1 ? '' : reference.slice(dotIndex);
+      return `{${nameMap.get(root)}${suffix}}`;
+    });
   }
   if (Array.isArray(value)) return value.map((item) => rewriteSurveyExpressions(item, nameMap, propertyName));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteSurveyExpressions(item, nameMap, key)]));
 }
 
-// Canonicalize positional names and update SurveyJS expression references atomically.
-function normalizeQuestionNames(json) {
+// Preserve canonical identities and assign monotonically increasing identities to
+// imported/new questions. In particular, never renumber questions or reuse a gap
+// merely because elements were reordered, inserted, or deleted.
+function normalizeQuestionNames(json, {
+  minimumNextQuestionNumber = 1n,
+  preserveCanonicalNames,
+  currentCanonicalNames,
+  persistedNextQuestionNumber,
+} = {}) {
   const validated = validateSurveyDefinition(json);
-  const nameMap = new Map(validated.elements.map((element, index) => [element.name, `question_${index + 1}`]));
+  const canonicalName = /^question_([1-9]\d*)$/;
+  let minimumNext;
+  try {
+    minimumNext = BigInt(minimumNextQuestionNumber);
+  } catch {
+    throw new Error('minimumNextQuestionNumber must be a positive integer.');
+  }
+  if (minimumNext < 1n || String(minimumNextQuestionNumber).trim() !== minimumNext.toString()) {
+    throw new Error('minimumNextQuestionNumber must be a positive integer.');
+  }
+  const effectivePersistedCounter = persistedNextQuestionNumber === undefined
+    ? validated.claNextQuestionNumber
+    : persistedNextQuestionNumber;
+  let persistedMinimum = 1n;
+  if (effectivePersistedCounter !== undefined) {
+    if (!Number.isSafeInteger(effectivePersistedCounter) || effectivePersistedCounter < 1) {
+      throw new Error('claNextQuestionNumber must be a positive safe integer.');
+    }
+    persistedMinimum = BigInt(effectivePersistedCounter);
+  }
+
+  // Without this option, retain the legacy direct-call behavior of trusting
+  // canonical names. Updates always supply the persisted schema's names.
+  const suppliedCanonicalNames = currentCanonicalNames ?? preserveCanonicalNames;
+  let canonicalNamesToPreserve = null;
+  if (suppliedCanonicalNames !== undefined) {
+    if (typeof suppliedCanonicalNames === 'string' || !suppliedCanonicalNames?.[Symbol.iterator]) {
+      throw new Error('currentCanonicalNames must be an iterable of canonical question names.');
+    }
+    canonicalNamesToPreserve = new Set(
+      [...suppliedCanonicalNames].filter((name) => typeof name === 'string' && canonicalName.test(name))
+    );
+  }
+
+  const reservedCanonicalNames = canonicalNamesToPreserve || new Set(
+    validated.elements.map(({ name }) => name).filter((name) => canonicalName.test(name))
+  );
+  const currentMaximum = [...reservedCanonicalNames].reduce((maximum, name) => {
+    const number = BigInt(canonicalName.exec(name)[1]);
+    return number > maximum ? number : maximum;
+  }, 0n);
+  let nextQuestionNumber = [currentMaximum + 1n, minimumNext, persistedMinimum]
+    .reduce((maximum, candidate) => candidate > maximum ? candidate : maximum, 1n);
+  const nameMap = new Map(validated.elements.map((element) => {
+    if (canonicalName.test(element.name) && reservedCanonicalNames.has(element.name)) {
+      return [element.name, element.name];
+    }
+    while (reservedCanonicalNames.has(`question_${nextQuestionNumber}`)) nextQuestionNumber += 1n;
+    const assignedName = `question_${nextQuestionNumber}`;
+    reservedCanonicalNames.add(assignedName);
+    nextQuestionNumber += 1n;
+    return [element.name, assignedName];
+  }));
+  if (nextQuestionNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('claNextQuestionNumber exceeds the supported safe integer range.');
+  }
   return {
     ...rewriteSurveyExpressions(validated, nameMap),
-    elements: validated.elements.map((element, index) => ({
+    claNextQuestionNumber: Number(nextQuestionNumber),
+    elements: validated.elements.map((element) => ({
       ...rewriteSurveyExpressions(element, nameMap),
-      name: `question_${index + 1}`
+      name: nameMap.get(element.name)
     }))
   };
 }
@@ -1764,18 +2316,45 @@ app.post('/api/updateQuestions', express.json(), requireAuth, async (req, res) =
   if (!survey) return;
 
   try {
-    let savedQuestions;
+    let submittedQuestions;
+    let title = '';
     if (typeof surveyQuestions === 'string') {
       // Compatibility import: absent Required remains required, matching legacy CSV behavior.
       const surveyData = csvToJson(surveyQuestions);
-      savedQuestions = normalizeQuestionNames(surveyData.questions);
-      await insertQuestions(survey.name, surveyData.title, savedQuestions, survey.id);
+      submittedQuestions = surveyData.questions;
+      title = surveyData.title;
     } else if (typeof surveyQuestions === 'object' && surveyQuestions !== null) {
-      savedQuestions = normalizeQuestionNames(surveyQuestions);
-      await insertQuestions(survey.name, '', savedQuestions, survey.id);
+      submittedQuestions = surveyQuestions;
     } else {
       return res.status(400).json({ message: 'Invalid questions format.' });
     }
+
+    const historicalMaximumResult = await pool.query(
+      `SELECT COALESCE(MAX((matched.parts[1])::numeric), 0)::text AS max_question_number
+       FROM Respondent r
+       CROSS JOIN LATERAL jsonb_object_keys(
+         CASE WHEN jsonb_typeof(r.response) = 'object' THEN r.response ELSE '{}'::jsonb END
+       ) AS response_key(key)
+       CROSS JOIN LATERAL regexp_match(response_key.key, '^question_([1-9][0-9]*)$') AS matched(parts)
+       WHERE ${legacySurveyPredicate('r')}`,
+      [survey.id, survey.name]
+    );
+    const historicalMaximum = BigInt(historicalMaximumResult.rows[0]?.max_question_number || 0);
+    const currentCanonicalNames = new Set(
+      (Array.isArray(survey.questions?.elements) ? survey.questions.elements : [])
+        .map((question) => question?.name)
+        .filter((name) => typeof name === 'string' && /^question_[1-9]\d*$/.test(name))
+    );
+    const savedQuestions = normalizeQuestionNames(submittedQuestions, {
+      minimumNextQuestionNumber: historicalMaximum + 1n,
+      currentCanonicalNames,
+      // Survey Creator may discard unknown top-level metadata. Never let its
+      // submitted copy reset the allocation watermark held by the database.
+      persistedNextQuestionNumber: Object.prototype.hasOwnProperty.call(
+        survey.questions || {}, 'claNextQuestionNumber'
+      ) ? survey.questions.claNextQuestionNumber : 1,
+    });
+    await insertQuestions(survey.name, title, savedQuestions, survey.id);
 
     res.status(200).json({ message: 'Questions created successfully.', questions: savedQuestions });
   } catch (error) {
@@ -1795,7 +2374,19 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
       return res.status(validation.status).json({ message: validation.message });
     }
 
-    const answers = JSON.parse(data.answers);
+    let answers;
+    try {
+      answers = JSON.parse(data.answers);
+    } catch {
+      return res.status(400).json({ message: 'Answers must be valid JSON.' });
+    }
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+      return res.status(400).json({
+        message: 'Invalid survey responses.',
+        errors: ['Answers must be an object.']
+      });
+    }
+
     const schemaResult = await pool.query(
       validation.respondent.survey_id
         ? 'SELECT questions FROM Survey WHERE id = $1'
@@ -1805,7 +2396,39 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
     if (schemaResult.rows.length === 0) {
       return res.status(404).json({ message: 'Survey not found.' });
     }
-    const answerErrors = validateRequiredAnswers(schemaResult.rows[0].questions, answers);
+    const schema = schemaResult.rows[0].questions;
+    let lazyTagboxChoices;
+    const requestedLazyTagboxValues = new Set();
+    if (Array.isArray(schema?.elements)) {
+      const choiceModel = new Model(schema);
+      choiceModel.data = answers;
+      schema.elements.forEach((element) => {
+        if (element?.type !== 'tagbox' || element.choicesLazyLoadEnabled !== true) return;
+        const submitted = answers[element.name];
+        if (!Array.isArray(submitted)) return;
+        const configuredChoices = modelChoiceValues(choiceModel.getQuestionByName(element.name), element) || [];
+        submitted.forEach((value) => {
+          // Respondent-backed choices are exact strings. Primitive local/model
+          // choices are already trusted and must not trigger a database lookup.
+          if (typeof value === 'string' && !configuredChoices.includes(value)) {
+            requestedLazyTagboxValues.add(value);
+          }
+        });
+      });
+    }
+    if (requestedLazyTagboxValues.size > 0) {
+      const requestedValues = [...requestedLazyTagboxValues];
+      const choicesResult = await pool.query(
+        `SELECT r.name, r.contact_info
+         FROM Respondent r
+         WHERE ${legacySurveyPredicate('r')}
+           AND r.uuid != $3
+           AND CONCAT(COALESCE(r.name, ''), ' (', COALESCE(r.contact_info, ''), ')') = ANY($4::text[])`,
+        [validation.respondent.survey_id, surveyName, userId, requestedValues]
+      );
+      lazyTagboxChoices = new Set(choicesResult.rows.map(formatRespondentChoice));
+    }
+    const answerErrors = validateRequiredAnswers(schema, answers, { lazyTagboxChoices });
     if (answerErrors.length > 0) {
       return res.status(400).json({ message: 'Invalid survey responses.', errors: answerErrors });
     }
@@ -1859,6 +2482,10 @@ app.get('/api/admin/names', requireAuth, async (req, res) => {
   }
 });
 
+function formatRespondentChoice(respondent) {
+  return `${respondent.name ?? ''} (${respondent.contact_info ?? ''})`;
+}
+
 // GET API endpoint for lazy loading the names list
 app.get('/api/names', respondentRateLimiter, async (req, res) => {
   const { skip = 0, take = 10, filter = '', surveyName = '', userId = '' } = req.query;
@@ -1871,25 +2498,21 @@ app.get('/api/names', respondentRateLimiter, async (req, res) => {
   const client = await pool.connect();
   
   try {
-    // Modified query to exclude the current user based on UUID
     const query = `
       SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
-      JOIN Survey s ON r.survey_name = s.name
-      WHERE s.name = $1
-      AND r.uuid != $2
-      AND (r.name ILIKE $3 OR r.contact_info ILIKE $3)
+      WHERE ${legacySurveyPredicate('r')}
+      AND r.uuid != $3
+      AND (r.name ILIKE $4 OR r.contact_info ILIKE $4)
       ORDER BY r.name
-      OFFSET $4
-      LIMIT $5;
+      OFFSET $5
+      LIMIT $6;
     `;
 
-    const values = [surveyName, userId, `%${filter}%`, skip, take];
+    const values = [validation.respondent.survey_id, surveyName, userId, `%${filter}%`, skip, take];
     const result = await client.query(query, values);
 
-    const filteredNames = result.rows.map(user => 
-      `${user.name} (${user.contact_info})`
-    );
+    const filteredNames = result.rows.map(formatRespondentChoice);
 
     const total = result.rows.length > 0 ? Number(result.rows[0].total_count) : 0;
 
@@ -2293,8 +2916,15 @@ app.delete('/api/question', requireAuth, async (req, res) => {
     // First, get the current questions
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
-    const questions = survey.questions;
-    
+    const currentCanonicalNames = new Set(
+      (Array.isArray(survey.questions?.elements) ? survey.questions.elements : [])
+        .map((question) => question?.name)
+        .filter((name) => typeof name === 'string' && /^question_[1-9]\d*$/.test(name))
+    );
+    // Normalize before removal so the highest allocated identity remains in
+    // the persisted watermark even when it has never appeared in a response.
+    const questions = normalizeQuestionNames(survey.questions, { currentCanonicalNames });
+
     // Find and remove the question
     const questionIndex = questions.elements.findIndex(q => q.name === questionName);
     
@@ -2376,7 +3006,9 @@ module.exports = {
   parseRequiredCsvValue,
   csvToJson,
   NESTED_QUESTIONS_UNSUPPORTED_MESSAGE,
+  SUPPORTED_QUESTION_TYPES,
   validateSurveyDefinition,
   validateRequiredAnswers,
   normalizeQuestionNames,
+  formatRespondentChoice,
 };

@@ -9,7 +9,15 @@ import { Serializer, Question, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
 import { DraggableRankingQuestion } from '@network-survey/frontend-react';
+import { TAGBOX_PAGE_SIZE, TAGBOX_PLACEHOLDER } from '@network-survey/frontend-shared';
 import ReactDOM from 'react-dom/client';
+import {
+  restrictSurveyToolbox,
+  setSurveyToolboxItem,
+  SUPPORTED_SURVEY_TOOLBOX_TYPES,
+} from '../utils/surveyToolbox';
+import { hideQuestionValueName } from '../utils/surveyCreatorMetadata';
+import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
 
 // Define and register custom question class for draggableranking
 class QuestionDraggableRankingModel extends Question {
@@ -44,8 +52,6 @@ ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
   />
 ));
 
-const TAGBOX_PLACEHOLDER = 'Start typing to search for people';
-const TAGBOX_PAGE_SIZE = 25;
 const draggableQuestionRoots = new WeakMap();
 
 const configureTagboxPropertyMetadata = (() => {
@@ -201,10 +207,12 @@ const cleanupDraggableSurveyRoots = (survey) => {
   });
 };
 
-// Hide survey title, description, and image from the property panel
+// Hide survey-level metadata and alternate question answer keys from the
+// dashboard property panel. The API assigns canonical question names.
 Serializer.removeProperty('survey', 'title');
 Serializer.removeProperty('survey', 'description');
 Serializer.removeProperty('survey', 'logo');
+hideQuestionValueName();
 
 const SurveyEditor = () => {
   const [surveys, setSurveys] = useState([]);
@@ -385,12 +393,15 @@ const SurveyEditor = () => {
     showTitle: false, // hide survey title in editor
     showDescription: false,  // hide survey description in editor
     showLogo: false,         // hide survey image/logo in editor
-    // Use default questionTypes, we’ll add our custom item manually
+    // Match the API's flat, answer-bearing schema contract. This excludes
+    // nested containers and display-only elements from the authoring UI.
+    questionTypes: [...SUPPORTED_SURVEY_TOOLBOX_TYPES],
   };
   if (!creatorRef.current) {
     creatorRef.current = new SurveyCreator(creatorOptions);
-    // Add custom draggable-ranking question with a JSON template
-    creatorRef.current.toolbox.addItem({
+    // Add custom draggable-ranking question with a JSON template. Remove any
+    // generated item first so the custom item appears exactly once.
+    setSurveyToolboxItem(creatorRef.current.toolbox, {
       name: 'draggableranking',
       iconName: 'icon-tagbox',
       title: 'Draggable Ranking',
@@ -404,8 +415,9 @@ const SurveyEditor = () => {
         ]
       }
     });
-    // Ensure tagbox is available with default lazy-load configuration
-    creatorRef.current.toolbox.addItem({
+    // Ensure tagbox uses the custom lazy-load configuration without leaving the
+    // default toolbox item alongside it.
+    setSurveyToolboxItem(creatorRef.current.toolbox, {
       name: 'tagbox',
       iconName: 'icon-tagbox',
       title: 'People Tagbox',
@@ -422,30 +434,20 @@ const SurveyEditor = () => {
         choicesLazyLoadPageSize: TAGBOX_PAGE_SIZE
       }
     });
+    // Defensively remove any defaults introduced by Survey Creator upgrades.
+    restrictSurveyToolbox(creatorRef.current.toolbox);
   }
   const creator = creatorRef.current;
 
   const buildNormalizedSurveySchema = useCallback(() => {
-    try {
-      const rawJson = creator && creator.JSON ? JSON.parse(JSON.stringify(creator.JSON)) : {};
-      // Keep the full definition intact. In particular, do not flatten pages or
-      // nested elements: the API rejects unsupported nested definitions on save.
-      return {
-        ...rawJson,
-        elements: normalizeTagboxElements(rawJson.elements || [])
-      };
-    } catch (error) {
-      return { elements: [] };
-    }
+    const editorJson = creator?.survey?.toJSON ? creator.survey.toJSON() : creator?.JSON;
+    const rawJson = editorJson ? JSON.parse(JSON.stringify(editorJson)) : {};
+    const flatSchema = serializeFlatSurveySchema(rawJson);
+    return {
+      ...flatSchema,
+      elements: normalizeTagboxElements(flatSchema.elements)
+    };
   }, [creator]);
-
-  const ensurePositionalQuestionNames = useCallback((elements) => {
-    if (!Array.isArray(elements)) return [];
-    return elements.map((el, idx) => ({
-      ...el,
-      name: `question_${idx + 1}`
-    }));
-  }, []);
 
   useEffect(() => {
     if (!creator || !creator.onSurveyInstanceCreated) {
@@ -484,7 +486,8 @@ const SurveyEditor = () => {
     };
   }, []);
 
-  // Remove pages from loaded survey JSON (flatten to single elements array)
+  // Normalize the one logical editor page while rejecting unsupported layouts
+  // before Survey Creator can silently discard them in single-page mode.
   useEffect(() => {
     if (!selectedSurvey) {
       creator.JSON = {};
@@ -496,17 +499,18 @@ const SurveyEditor = () => {
         // Use the full survey JSON endpoint
         const response = await api.get(`/admin/questions?surveyName=${selectedSurvey}`);
         const json = response.data.questions || {};
-        // Do not flatten persisted pages or nested elements. They must remain
-        // visible to the save validation instead of being silently accepted.
+        const flatSchema = serializeFlatSurveySchema(json);
         creator.JSON = {
-          ...json,
-          elements: normalizeTagboxElements(json.elements || [])
+          ...flatSchema,
+          elements: normalizeTagboxElements(flatSchema.elements)
         };
+        setSaveError(null);
         if (creator.survey) {
           configureSurveyModel(creator.survey, 'designer');
         }
       } catch (err) {
         creator.JSON = {};
+        setSaveError(err.response?.data?.message || err.message || 'Unable to load survey. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -514,23 +518,30 @@ const SurveyEditor = () => {
     loadSurvey();
   }, [selectedSurvey, creator, configureSurveyModel]);
 
-  // Save handler preserves nested structures so the API can reject them explicitly.
   const handleSaveSurvey = async () => {
     if (!selectedSurvey) return;
     setSaving(true);
     setSaveError(null);
     try {
       const questions = buildNormalizedSurveySchema();
-      const withNames = {
-        ...questions,
-        elements: ensurePositionalQuestionNames(questions.elements)
-      };
-      await api.post('/updateQuestions', {
+      // Preserve editor identities and expression references in the request. The
+      // API canonicalizes positional names and rewrites references atomically.
+      const response = await api.post('/updateQuestions', {
         surveyName: selectedSurvey,
-        questions: withNames
+        questions
       });
+      // Adopt the API's canonical names immediately. Otherwise Survey Creator
+      // retains temporary names and a second save allocates fresh identities.
+      const savedSchema = serializeFlatSurveySchema(response.data?.questions || questions);
+      creator.JSON = {
+        ...savedSchema,
+        elements: normalizeTagboxElements(savedSchema.elements)
+      };
+      if (creator.survey) {
+        configureSurveyModel(creator.survey, 'designer');
+      }
     } catch (err) {
-      setSaveError(err.response?.data?.message || 'Unable to save survey. Please try again.');
+      setSaveError(err.response?.data?.message || err.message || 'Unable to save survey. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -543,8 +554,7 @@ const SurveyEditor = () => {
 
     try {
       const questions = buildNormalizedSurveySchema();
-      const previewJson = questions?.elements ? { elements: questions.elements } : {};
-      const model = new Model(previewJson);
+      const model = new Model(questions);
       model.showQuestionNumbers = false;
       model.showProgressBar = 'bottom';
       model.progressBarType = 'questions';
@@ -556,7 +566,7 @@ const SurveyEditor = () => {
       setPreviewOpen(true);
     } catch (error) {
       setPreviewSurveyModel(null);
-      setPreviewError('Unable to load survey preview.');
+      setPreviewError(error.message || 'Unable to load survey preview.');
       setPreviewOpen(true);
     }
   };

@@ -4,6 +4,7 @@ const request = require('supertest');
 const fs = require('node:fs');
 const path = require('node:path');
 const bcrypt = require('bcrypt');
+const { Model } = require('survey-core');
 
 process.env.NODE_ENV = 'test';
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
@@ -31,9 +32,11 @@ const {
   hashToken,
   parseRequiredCsvValue,
   csvToJson,
+  SUPPORTED_QUESTION_TYPES,
   validateSurveyDefinition,
   validateRequiredAnswers,
   normalizeQuestionNames,
+  formatRespondentChoice,
 } = require('../server');
 
 test('question schema requiredness is explicit, typed, and validates submitted answers', () => {
@@ -51,8 +54,8 @@ test('question schema requiredness is explicit, typed, and validates submitted a
 
   const schema = validateSurveyDefinition({
     elements: [
-      { type: 'tagbox', name: 'legacy', title: 'Legacy optional' },
-      { type: 'draggableranking', name: 'required', title: 'Rank', isRequired: true },
+      { type: 'tagbox', name: 'legacy', title: 'Legacy optional', choicesLazyLoadEnabled: true },
+      { type: 'draggableranking', name: 'required', title: 'Rank', choices: ['a'], isRequired: true },
     ]
   });
   assert.equal(schema.elements[0].isRequired, false);
@@ -79,7 +82,7 @@ test('question schema requiredness is explicit, typed, and validates submitted a
   };
   assert.equal(
     normalizeQuestionNames(collisionSchema).elements[1].visibleIf,
-    "{question_1} = 'yes'",
+    "{question_2} = 'yes'",
     'a replacement must not be rewritten again when it matches another old name'
   );
   const canonicalReferenceSchema = {
@@ -101,7 +104,83 @@ test('question schema requiredness is explicit, typed, and validates submitted a
     "{not_a_question} = 'yes'",
     'references outside the schema must remain unchanged'
   );
-  assert.throws(() => validateSurveyDefinition({ elements: [{ type: 'tagbox', isRequired: 'false' }] }), /required/);
+  const reorderedChoiceSourceSchema = {
+    elements: [
+      { type: 'radiogroup', name: 'question_2', choices: ['a'] },
+      { type: 'dropdown', name: 'question_1', choicesFromQuestion: 'question_2' },
+      { type: 'checkbox', name: 'dependent', choicesFromQuestion: 'question_1' },
+    ],
+    triggers: [{ type: 'copyvalue', expression: '{dependent} notempty', fromName: 'question_2', setToName: 'question_1' }],
+  };
+  const normalizedChoiceSources = normalizeQuestionNames(reorderedChoiceSourceSchema);
+  assert.deepEqual(
+    normalizedChoiceSources.elements.map(({ name, choicesFromQuestion }) => ({ name, choicesFromQuestion })),
+    [
+      { name: 'question_2', choicesFromQuestion: undefined },
+      { name: 'question_1', choicesFromQuestion: 'question_2' },
+      { name: 'question_3', choicesFromQuestion: 'question_1' },
+    ],
+    'canonical identities and exact references must survive a reorder collision-safely'
+  );
+  assert.deepEqual(normalizedChoiceSources.triggers[0], {
+    type: 'copyvalue',
+    expression: '{question_3} notempty',
+    fromName: 'question_2',
+    setToName: 'question_1',
+  });
+  assert.equal(SUPPORTED_QUESTION_TYPES.has('draggableranking'), true);
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{ type: 'tagbox', name: 'tag', isRequired: 'false' }] }),
+    /required/
+  );
+  assert.throws(() => validateSurveyDefinition({ elements: [{ type: 'text' }] }), /nonempty safe name/);
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{ type: 'text', name: 'unsafe name' }] }),
+    /nonempty safe name/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [
+      { type: 'text', name: 'duplicate' },
+      { type: 'comment', name: 'duplicate' },
+    ] }),
+    /names must be unique: duplicate/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{ type: 'madeup', name: 'unknown' }] }),
+    /unsupported type: madeup/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{ type: 'text', name: 'alias', valueName: 'shared' }] }),
+    /unsupported property valueName.*Remove valueName so answers are stored under the question name/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{
+      type: 'dropdown', name: 'remote', choicesByUrl: { url: 'https://example.test/choices' }
+    }] }),
+    /unsupported property choicesByUrl.*Remove choicesByUrl.*server-side URL choice resolution is not supported/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{
+      type: 'matrixdropdown', name: 'matrix', rows: ['row'],
+      columns: [{ name: 'remote', cellType: 'dropdown', choicesByUrl: { url: 'https://example.test/choices' } }]
+    }] }),
+    /column 1 defines unsupported property choicesByUrl/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{
+      type: 'dropdown', name: 'not_lazy', choicesLazyLoadEnabled: true
+    }] }),
+    /unsupported property choicesLazyLoadEnabled for type dropdown.*supported only for tagbox/
+  );
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{
+      type: 'tagbox', name: 'new_tags', allowAddNewTag: true
+    }] }),
+    /unsupported property allowAddNewTag=true.*Set allowAddNewTag to false or remove it/
+  );
+  assert.doesNotThrow(() => validateSurveyDefinition({ elements: [{
+    type: 'tagbox', name: 'known_tags', choicesLazyLoadEnabled: true, allowAddNewTag: false
+  }] }));
   assert.throws(
     () => validateSurveyDefinition({ elements: [{ type: 'panel', elements: [{ type: 'text' }] }] }),
     /Nested SurveyJS questions, panels, and pages are not supported/
@@ -112,7 +191,559 @@ test('question schema requiredness is explicit, typed, and validates submitted a
   );
 });
 
-test('authenticated question update rejects nested definitions before persistence', async (t) => {
+test('canonical question identities survive insertion, reorder, and deletion without compacting response keys', () => {
+  const inserted = normalizeQuestionNames({ elements: [
+    { type: 'text', name: 'new_question', title: 'New', visibleIf: '{question_3} notempty' },
+    { type: 'text', name: 'question_1', title: 'Original one' },
+    { type: 'text', name: 'question_3', title: 'Original three' },
+  ] });
+  assert.deepEqual(inserted.elements.map(({ name, title }) => [name, title]), [
+    ['question_4', 'New'],
+    ['question_1', 'Original one'],
+    ['question_3', 'Original three'],
+  ]);
+  assert.equal(inserted.elements[0].visibleIf, '{question_3} notempty');
+
+  const reordered = normalizeQuestionNames({ elements: [
+    inserted.elements[2], inserted.elements[0], inserted.elements[1],
+  ] });
+  assert.deepEqual(reordered.elements.map(({ name, title }) => [name, title]), [
+    ['question_3', 'Original three'],
+    ['question_4', 'New'],
+    ['question_1', 'Original one'],
+  ]);
+
+  const afterDeletion = normalizeQuestionNames({ elements: [
+    reordered.elements[0], reordered.elements[2],
+  ] });
+  assert.deepEqual(afterDeletion.elements.map(({ name, title }) => [name, title]), [
+    ['question_3', 'Original three'],
+    ['question_1', 'Original one'],
+  ], 'deleting question_4 must not compact the remaining response keys');
+  assert.deepEqual(
+    { question_1: 'answer one', question_3: 'answer three' },
+    { [afterDeletion.elements[1].name]: 'answer one', [afterDeletion.elements[0].name]: 'answer three' },
+    'existing answers retain the same semantic question identity'
+  );
+
+  const firstImport = normalizeQuestionNames({ elements: [
+    { type: 'text', name: 'arbitrary_alpha' },
+    { type: 'comment', name: 'arbitrary_beta', visibleIf: '{arbitrary_alpha} notempty' },
+  ] });
+  assert.deepEqual(firstImport.elements.map(({ name }) => name), ['question_1', 'question_2']);
+  assert.equal(firstImport.elements[1].visibleIf, '{question_1} notempty');
+
+  const afterHistoricalDeletion = normalizeQuestionNames({ elements: [
+    { type: 'text', name: 'question_2', title: 'Survivor' },
+    { type: 'text', name: 'later_addition', title: 'Later' },
+  ] }, { minimumNextQuestionNumber: 8 });
+  assert.deepEqual(afterHistoricalDeletion.elements.map(({ name }) => name), ['question_2', 'question_8']);
+
+  const persistedOnly = normalizeQuestionNames({ elements: [
+    { type: 'text', name: 'question_5', title: 'Persisted', visibleIf: '{question_99} notempty' },
+    { type: 'text', name: 'question_99', title: 'Imported canonical' },
+    { type: 'comment', name: 'fresh', title: 'Fresh', visibleIf: '{question_5} = 1 and {question_99} = 2' },
+  ] }, {
+    minimumNextQuestionNumber: 8,
+    currentCanonicalNames: new Set(['question_2', 'question_5']),
+  });
+  assert.deepEqual(persistedOnly.elements.map(({ name }) => name), ['question_5', 'question_8', 'question_9']);
+  assert.equal(persistedOnly.elements[0].visibleIf, '{question_8} notempty');
+  assert.equal(persistedOnly.elements[2].visibleIf, '{question_5} = 1 and {question_8} = 2');
+
+  const freshCanonicalImport = normalizeQuestionNames({ elements: [
+    { type: 'text', name: 'question_500', visibleIf: '{question_500} notempty' },
+  ] }, { preserveCanonicalNames: new Set() });
+  assert.equal(freshCanonicalImport.elements[0].name, 'question_1');
+  assert.equal(freshCanonicalImport.elements[0].visibleIf, '{question_1} notempty');
+
+  const reorderedPersisted = normalizeQuestionNames({ elements: [
+    { type: 'text', name: 'question_5' },
+    { type: 'text', name: 'question_2', visibleIf: '{question_5} notempty' },
+  ] }, { currentCanonicalNames: ['question_2', 'question_5'] });
+  assert.deepEqual(reorderedPersisted.elements.map(({ name }) => name), ['question_5', 'question_2']);
+  assert.equal(reorderedPersisted.elements[1].visibleIf, '{question_5} notempty');
+  const allocatedThenDeleted = normalizeQuestionNames({ elements: [
+    { type: 'text', name: 'question_1' },
+    { type: 'text', name: 'unanswered_highest' },
+  ] });
+  assert.equal(allocatedThenDeleted.claNextQuestionNumber, 3);
+  allocatedThenDeleted.elements.pop();
+  const afterUnansweredDeletion = normalizeQuestionNames({
+    ...allocatedThenDeleted,
+    elements: [...allocatedThenDeleted.elements, { type: 'text', name: 'later' }],
+  });
+  assert.deepEqual(afterUnansweredDeletion.elements.map(({ name }) => name), ['question_1', 'question_3']);
+  assert.equal(afterUnansweredDeletion.claNextQuestionNumber, 4);
+  assert.doesNotThrow(() => new Model(afterUnansweredDeletion),
+    'the respondent SurveyJS Model must ignore internal schema metadata');
+
+  assert.throws(
+    () => normalizeQuestionNames({ elements: [] }, { minimumNextQuestionNumber: 0 }),
+    /minimumNextQuestionNumber must be a positive integer/
+  );
+  for (const invalidCounter of [0, -1, 1.5, '3', null]) {
+    assert.throws(
+      () => normalizeQuestionNames({ elements: [], claNextQuestionNumber: invalidCounter }),
+      /claNextQuestionNumber must be a positive safe integer/
+    );
+  }
+});
+
+test('dotted expression references rewrite only known leading question names collision-safely', () => {
+  const normalized = normalizeQuestionNames({
+    elements: [
+      { type: 'multipletext', name: 'details', items: [{ name: 'first' }] },
+      { type: 'matrixdropdown', name: 'matrix', rows: ['r1'], columns: [{ name: 'c1', choices: [1] }] },
+      {
+        type: 'text',
+        name: 'question_1',
+        visibleIf: '{details.first} notempty and {matrix.r1.c1} = 1 and {question_1.value} = 2 and {unknown.value} = 3 and {row.c1} = 4'
+      },
+    ],
+  });
+
+  assert.equal(
+    normalized.elements[2].visibleIf,
+    '{question_2.first} notempty and {question_3.r1.c1} = 1 and {question_1.value} = 2 and {unknown.value} = 3 and {row.c1} = 4'
+  );
+
+  const reservedReferences = normalizeQuestionNames({ elements: [{
+    type: 'dropdown', name: 'choice', choices: ['a'],
+    choicesVisibleIf: '{item} != null and {survey.locale} = "en" and {panel.name} notempty and {composite.value} notempty',
+  }] });
+  assert.equal(reservedReferences.elements[0].choicesVisibleIf,
+    '{item} != null and {survey.locale} = "en" and {panel.name} notempty and {composite.value} notempty');
+  for (const reservedName of ['item', 'ROW', 'Panel', 'composite', 'Survey']) {
+    assert.throws(
+      () => validateSurveyDefinition({ elements: [{ type: 'text', name: reservedName }] }),
+      new RegExp(`name.*${reservedName}.*reserved SurveyJS expression variable`, 'i')
+    );
+  }
+});
+
+test('supported question types enforce requiredness, visibility, and practical value constraints', () => {
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'boolean', name: 'show' },
+    { type: 'text', name: 'text', isRequired: true },
+    { type: 'comment', name: 'comment' },
+    { type: 'boolean', name: 'boolean' },
+    { type: 'rating', name: 'rating', rateMin: 2, rateMax: 4 },
+    { type: 'radiogroup', name: 'radio', choices: ['a', { value: 'b', text: 'Bee' }] },
+    { type: 'dropdown', name: 'dropdown', choices: ['x', 'y'] },
+    { type: 'checkbox', name: 'checkbox', choices: ['a', 'b'] },
+    { type: 'tagbox', name: 'lazyTagbox', choicesLazyLoadEnabled: true },
+    { type: 'tagbox', name: 'staticTagbox', choices: ['known'] },
+    { type: 'draggableranking', name: 'drag', choices: ['a', 'b'], isRequired: true },
+    { type: 'imagepicker', name: 'imageSingle', choices: ['one', 'two'] },
+    { type: 'imagepicker', name: 'imageMulti', multiSelect: true, choices: ['one', 'two'] },
+    { type: 'file', name: 'file' },
+    { type: 'matrix', name: 'matrix', rows: ['row1'], columns: ['choice1', 'choice2'] },
+    { type: 'matrixdropdown', name: 'matrixDropdown', rows: ['row1'], columns: [
+      { name: 'single', cellType: 'dropdown', choices: ['a', 'b'] },
+      { name: 'multi', cellType: 'checkbox', choices: ['x', 'y'] },
+    ] },
+    { type: 'matrixdynamic', name: 'matrixDynamic', columns: [
+      { name: 'label', cellType: 'text' },
+      { name: 'pick', cellType: 'dropdown', choices: ['a', 'b'] },
+    ] },
+    { type: 'multipletext', name: 'multipleText', items: [{ name: 'first' }, { name: 'second' }] },
+    { type: 'text', name: 'hiddenRequired', isRequired: true, visibleIf: '{show} = true' },
+    { type: 'text', name: 'disabledRequired', isRequired: true, enableIf: '{show} = true' },
+  ] });
+
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    show: false,
+    text: 'hello',
+    comment: 'details',
+    boolean: true,
+    rating: 3,
+    radio: 'b',
+    dropdown: 'x',
+    checkbox: ['a'],
+    lazyTagbox: ['dynamically-loaded-user-id'],
+    staticTagbox: ['known'],
+    drag: ['b'],
+    imageSingle: 'one',
+    imageMulti: ['one', 'two'],
+    file: [{ name: 'report.pdf', type: 'application/pdf', content: 'data:pdf', size: 42 }],
+    matrix: { row1: 'choice2' },
+    matrixDropdown: { row1: { single: 'a', multi: ['x'] } },
+    matrixDynamic: [{ label: 'first row', pick: 'b' }],
+    multipleText: { first: 'one', second: 'two' },
+  }, { lazyTagboxChoices: new Set(['dynamically-loaded-user-id']) }), [],
+  'valid values and a conditionally hidden required question are accepted');
+
+  const invalidErrors = validateRequiredAnswers(schema, {
+    show: true,
+    text: 10,
+    comment: false,
+    boolean: 'true',
+    rating: 5,
+    radio: 'not-a-choice',
+    dropdown: ['x'],
+    checkbox: ['not-a-choice'],
+    lazyTagbox: ['still-allowed-dynamically'],
+    staticTagbox: ['unknown'],
+    drag: [],
+    imageSingle: ['one'],
+    imageMulti: 'one',
+    file: [{ name: 'bad.txt', content: { nested: true } }],
+    matrix: { unknownRow: 'choice1' },
+    matrixDropdown: { row1: { unknownColumn: { nested: true } } },
+    matrixDynamic: [{ unknownColumn: { nested: true } }],
+    multipleText: { unknownItem: { nested: true } },
+  }, { lazyTagboxChoices: new Set(['dynamically-loaded-user-id']) });
+  for (const name of [
+    'text', 'comment', 'boolean', 'rating', 'radio', 'dropdown', 'checkbox',
+    'lazyTagbox', 'staticTagbox', 'drag', 'imageSingle', 'imageMulti', 'file', 'matrix', 'matrixDropdown',
+    'matrixDynamic', 'multipleText', 'hiddenRequired', 'disabledRequired'
+  ]) {
+    assert.ok(invalidErrors.includes(`Invalid response: ${name}`), `${name} should be rejected`);
+  }
+  assert.equal(invalidErrors.includes('Invalid response: lazyTagbox'), true);
+  assert.deepEqual(
+    validateRequiredAnswers(schema, { show: false, text: 'ok', drag: ['a'], rating: Number.NaN }),
+    ['Invalid response: rating']
+  );
+  assert.deepEqual(
+    validateRequiredAnswers(schema, {
+      show: true,
+      text: 'ok',
+      drag: ['a'],
+      hiddenRequired: 'visible answer',
+      disabledRequired: 'enabled answer'
+    }),
+    [],
+    'visibleIf and enableIf required questions pass when active and answered'
+  );
+});
+
+test('lazy tagboxes accept the union of primitive configured choices and verified respondent strings', () => {
+  const schema = validateSurveyDefinition({ elements: [{
+    type: 'tagbox', name: 'people', choicesLazyLoadEnabled: true,
+    choices: ['Static', { value: 42, text: 'Forty two' }, false], maxSelectedChoices: 4,
+  }] });
+  const verified = new Set(['Alice (alice@example.com)']);
+
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    people: ['Static', 42, false, 'Alice (alice@example.com)'],
+  }, { lazyTagboxChoices: verified }), []);
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    people: ['Alice (forged@example.com)'],
+  }, { lazyTagboxChoices: verified }), ['Invalid response: people']);
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    people: [42, 42],
+  }, { lazyTagboxChoices: verified }), ['Invalid response: people'], 'duplicates remain invalid');
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    people: ['Static', 42, false, 'Alice (alice@example.com)', 'extra'],
+  }, { lazyTagboxChoices: new Set(['Alice (alice@example.com)', 'extra']) }),
+  ['Invalid response: people'], 'selection limits still apply to the union');
+});
+
+test('recursive requiredness and explicit matrixdynamic row bounds are enforced together', () => {
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'multipletext', name: 'details', isRequired: true, items: [{ name: 'first' }] },
+    { type: 'matrixdropdown', name: 'structured', isRequired: true, rows: ['r1'], columns: [{ name: 'c1', cellType: 'text' }] },
+    {
+      type: 'matrixdynamic', name: 'dynamic', isRequired: true, minRowCount: 2, maxRowCount: 3,
+      columns: [{ name: 'required', cellType: 'text', isRequired: true }]
+    },
+  ] });
+
+  for (const answers of [
+    { details: { first: '' }, structured: { r1: { c1: '' } }, dynamic: [{}, { required: '' }] },
+    { details: { first: 'ok' }, structured: { r1: { c1: 'ok' } }, dynamic: [{ required: 'only one' }] },
+    {
+      details: { first: 'ok' }, structured: { r1: { c1: 'ok' } },
+      dynamic: [{ required: '1' }, { required: '2' }, { required: '3' }, { required: '4' }]
+    },
+  ]) {
+    const errors = validateRequiredAnswers(schema, answers);
+    if (answers.details.first === '') {
+      assert.ok(errors.includes('Invalid response: details'));
+      assert.ok(errors.includes('Invalid response: structured'));
+    }
+    assert.ok(errors.includes('Invalid response: dynamic'));
+  }
+
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    details: { first: 'ok' },
+    structured: { r1: { c1: 'ok' } },
+    dynamic: [{ required: '1' }, { required: '2' }],
+  }), []);
+  assert.ok(validateRequiredAnswers(schema, {
+    details: { first: 'ok' }, structured: { r1: { c1: 'ok' } }, dynamic: [{ required: '1' }, {}],
+  }).includes('Invalid response: dynamic'), 'row bounds must not bypass nested required-cell validation');
+});
+
+test('nested survey definition contract rejects malformed values before SurveyJS model construction', () => {
+  const invalidElements = [
+    { type: 'imagepicker', name: 'image', choices: [null] },
+    { type: 'imagepicker', name: 'image', choices: [{ imageLink: 'cat.png' }] },
+    { type: 'radiogroup', name: 'choice', choices: [{ value: { nested: true }, text: 'Looks valid' }] },
+    { type: 'matrix', name: 'matrix', rows: null, columns: ['yes'] },
+    { type: 'matrixdropdown', name: 'matrix', rows: ['r1'], columns: [null] },
+    { type: 'matrixdropdown', name: 'matrix', rows: ['r1'], columns: [{ name: 'empty_dropdown' }] },
+    { type: 'matrixdynamic', name: 'matrix', columns: [{ name: 'bad.name' }] },
+    { type: 'matrixdynamic', name: 'matrix', columns: [{ name: 'same' }, { name: 'same' }] },
+    { type: 'matrixdynamic', name: 'matrix', columns: [{ name: 'cell', cellType: 'madeup' }] },
+    { type: 'multipletext', name: 'details', items: [null] },
+    { type: 'multipletext', name: 'details', items: [{ name: '__proto__' }] },
+    { type: 'matrixdynamic', name: 'matrix', minRowCount: 3, maxRowCount: 2, columns: [{ name: 'cell' }] },
+    { type: 'matrixdynamic', name: 'matrix', maxRowCount: 0, columns: [{ name: 'cell' }] },
+  ];
+  for (const element of invalidElements) {
+    assert.throws(() => validateSurveyDefinition({ elements: [element] }), undefined,
+      `${element.type} malformed nested definition should be rejected`);
+  }
+
+  const generatedModel = new Model();
+  const page = generatedModel.addNewPage('generated');
+  for (const type of ['imagepicker', 'matrix', 'matrixdropdown', 'matrixdynamic', 'multipletext', 'file']) {
+    page.addNewQuestion(type, type);
+  }
+  const generatedElements = generatedModel.toJSON().pages[0].elements;
+  assert.doesNotThrow(() => validateSurveyDefinition({ elements: generatedElements }),
+    'normal SurveyJS model-generated nested definitions, including spaced column names, remain valid');
+
+  assert.doesNotThrow(() => validateSurveyDefinition({ elements: [{
+    type: 'imagepicker', name: 'image', choices: [{ value: 'cat', imageLink: 'cat.png' }]
+  }] }));
+  assert.doesNotThrow(() => validateSurveyDefinition({ elements: [{
+    type: 'matrixdynamic', name: 'matrix', cellType: 'text',
+    columns: [{ name: 'inherited_text', cellType: 'default' }]
+  }] }), 'default matrix cells inherit non-choice parent cell types');
+});
+
+test('SurveyJS-generated rating values are accepted exactly', () => {
+  const generatedModel = new Model();
+  const page = generatedModel.addNewPage('ratings');
+  const stars = page.addNewQuestion('rating', 'stars');
+  stars.rateType = 'stars';
+  stars.rateCount = 10;
+  const fractional = page.addNewQuestion('rating', 'fractional');
+  fractional.rateMin = 0;
+  fractional.rateStep = 0.5;
+  fractional.rateCount = 4;
+  const generatedElements = generatedModel.toJSON().pages[0].elements;
+  const schema = validateSurveyDefinition({ elements: generatedElements });
+
+  assert.deepEqual(validateRequiredAnswers(schema, { stars: 10, fractional: 1.5 }), []);
+  assert.deepEqual(
+    validateRequiredAnswers(schema, { stars: 11, fractional: 2 }),
+    ['Invalid response: stars', 'Invalid response: fractional']
+  );
+});
+
+test('SurveyJS-generated inline Other values are accepted without weakening choice validation', () => {
+  const generatedModel = new Model({
+    storeOthersAsComment: false,
+    elements: [
+      { type: 'radiogroup', name: 'radio', choices: ['known'], showOtherItem: true },
+      { type: 'dropdown', name: 'dropdown', choices: ['known'], showOtherItem: true },
+      { type: 'checkbox', name: 'checkbox', choices: ['known', 'second known'], showOtherItem: true, maxSelectedChoices: 2 },
+      { type: 'tagbox', name: 'tagbox', choices: ['known', 'second known'], showOtherItem: true, maxSelectedChoices: 2 },
+    ],
+  });
+  for (const name of ['radio', 'dropdown', 'checkbox', 'tagbox']) {
+    const question = generatedModel.getQuestionByName(name);
+    const other = question.otherItem.value;
+    question.value = ['checkbox', 'tagbox'].includes(question.getType()) ? ['known', other] : other;
+    question.otherValue = `${name} free form`;
+  }
+
+  const serialized = generatedModel.toJSON();
+  const schema = validateSurveyDefinition({
+    storeOthersAsComment: serialized.storeOthersAsComment,
+    elements: serialized.pages[0].elements,
+  });
+  const generatedAnswers = JSON.parse(JSON.stringify(generatedModel.data));
+  assert.deepEqual(generatedAnswers, {
+    radio: 'radio free form',
+    dropdown: 'dropdown free form',
+    checkbox: ['known', 'checkbox free form'],
+    tagbox: ['known', 'tagbox free form'],
+  });
+  assert.deepEqual(validateRequiredAnswers(schema, generatedAnswers), []);
+
+  for (const answers of [
+    { checkbox: ['unknown one', 'unknown two'] },
+    { checkbox: ['same unknown', 'same unknown'] },
+    { checkbox: ['known', 'second known', 'one unknown'] },
+    { tagbox: ['unknown one', 'unknown two'] },
+    { radio: { forged: true } },
+  ]) {
+    const name = Object.keys(answers)[0];
+    assert.ok(validateRequiredAnswers(schema, answers).includes(`Invalid response: ${name}`));
+  }
+
+  const commentStoredSchema = validateSurveyDefinition({
+    elements: [{ type: 'checkbox', name: 'strict', choices: ['known'], showOtherItem: true }],
+  });
+  assert.deepEqual(
+    validateRequiredAnswers(commentStoredSchema, { strict: ['forged'] }),
+    ['Invalid response: strict'],
+    'default comment storage must not permit arbitrary unknown choice values'
+  );
+});
+
+test('configured SurveyJS values, comments, special choices, and duplicate selections are enforced', () => {
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'text', name: 'number', inputType: 'number', showCommentArea: true },
+    { type: 'boolean', name: 'boolean', valueTrue: 'yes', valueFalse: 'no' },
+    { type: 'rating', name: 'rating', rateValues: [{ value: 10, text: 'Ten' }, 20] },
+    {
+      type: 'checkbox', name: 'specials', choices: ['ordinary'], showOtherItem: true,
+      showNoneItem: true, noneItemValue: 'nothing', showRefuseItem: true,
+      refuseItemValue: 'decline', showDontKnowItem: true, dontKnowItemValue: 'unsure'
+    },
+    { type: 'ranking', name: 'ranking', choices: ['first', 'second'] },
+    { type: 'matrixdropdown', name: 'matrix', rows: ['row'], columns: [
+      { name: 'number', cellType: 'text', inputType: 'number' },
+      { name: 'boolean', cellType: 'boolean', valueTrue: 1, valueFalse: 0 },
+      { name: 'rating', cellType: 'rating', rateValues: ['low', 'high'] },
+      { name: 'multi', cellType: 'checkbox', choices: ['x'], showNoneItem: true },
+    ] },
+  ] });
+
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    number: 12,
+    'number-Comment': 'A useful comment',
+    boolean: 'no',
+    rating: 10,
+    specials: ['other', 'nothing', 'decline', 'unsure'],
+    'specials-Comment': 'Other detail',
+    ranking: ['second', 'first'],
+    matrix: { row: { number: 3, boolean: 0, rating: 'high', multi: ['none'] } },
+  }), []);
+
+  const invalid = validateRequiredAnswers(schema, {
+    number: '12',
+    'boolean-Comment': 'not configured',
+    boolean: true,
+    rating: 15,
+    specials: ['ordinary', 'ordinary'],
+    'specials-Comment': 'x'.repeat(4001),
+    ranking: ['first', 'first'],
+    matrix: { row: { number: '3', boolean: false, rating: 1, multi: ['x', 'x'] } },
+  });
+  for (const name of ['number', 'boolean', 'rating', 'specials', 'specials-Comment', 'ranking', 'matrix']) {
+    assert.ok(invalid.includes(`Invalid response: ${name}`), `${name} should be rejected`);
+  }
+  assert.ok(invalid.includes('Unknown question: boolean-Comment'));
+
+  assert.deepEqual(
+    validateRequiredAnswers({ elements: [{ type: 'persisted-widget', name: 'legacy' }] }, {}),
+    ['Unsupported question type: persisted-widget']
+  );
+});
+
+test('structured answer validation constrains schema keys, choices, and nested shapes', () => {
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'matrix', name: 'matrix', rows: ['r1'], columns: ['yes', 'no'] },
+    { type: 'matrixdropdown', name: 'dropdownMatrix', rows: ['r1'], columns: [
+      { name: 'pick', cellType: 'dropdown', choices: ['a', 'b'] },
+    ] },
+    { type: 'matrixdynamic', name: 'dynamicMatrix', columns: [
+      { name: 'label', cellType: 'text' },
+      { name: 'pick', cellType: 'dropdown', choices: ['a', 'b'] },
+    ] },
+    { type: 'multipletext', name: 'multiple', items: [{ name: 'first' }] },
+    { type: 'file', name: 'files' },
+  ] });
+
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    matrix: { r1: 'yes' },
+    dropdownMatrix: { r1: { pick: 'b' } },
+    dynamicMatrix: [{ label: 'row', pick: 'a' }],
+    multiple: { first: 'value' },
+    files: [{ name: 'answer.txt', type: 'text/plain', content: 'answer', size: 6, lastModified: 1710000000000 }],
+  }), []);
+
+  const invalidCases = [
+    ['matrix', { matrix: { unknownRow: 'yes' } }],
+    ['matrix', { matrix: { r1: 'unknownChoice' } }],
+    ['dropdownMatrix', { dropdownMatrix: { unknownRow: { pick: 'a' } } }],
+    ['dropdownMatrix', { dropdownMatrix: { r1: { unknownColumn: 'a' } } }],
+    ['dropdownMatrix', { dropdownMatrix: { r1: { pick: 'unknownChoice' } } }],
+    ['dynamicMatrix', { dynamicMatrix: ['not-an-object'] }],
+    ['dynamicMatrix', { dynamicMatrix: [{ unknownColumn: { nested: true } }] }],
+    ['multiple', { multiple: { unknownItem: 'value' } }],
+    ['multiple', { multiple: { first: { nested: true } } }],
+    ['files', { files: [{ content: 'missing name' }] }],
+    ['files', { files: [{ name: 'bad.txt', content: { nested: true } }] }],
+    ['files', { files: [{ name: 'bad.txt', extra: 'not allowed' }] }],
+    ['files', { files: [{ name: 'bad.txt', lastModified: Number.POSITIVE_INFINITY }] }],
+    ['files', { files: [{ name: 'bad.txt', lastModified: 'yesterday' }] }],
+  ];
+  for (const [name, answers] of invalidCases) {
+    const errors = validateRequiredAnswers(schema, answers);
+    assert.equal(errors.filter((error) => error === `Invalid response: ${name}`).length, 1,
+      `${name} errors should be present and deduplicated`);
+  }
+});
+
+test('nested required editors, selection limits, rating steps, and model-provided choices are enforced', () => {
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'radiogroup', name: 'choiceSource', choices: ['a', 'b', 'c'] },
+    { type: 'dropdown', name: 'dynamicSingle', choicesFromQuestion: 'choiceSource' },
+    { type: 'checkbox', name: 'dynamicMulti', choicesFromQuestion: 'choiceSource', minSelectedChoices: 1, maxSelectedChoices: 2 },
+    { type: 'tagbox', name: 'dynamicTagbox', choicesFromQuestion: 'choiceSource', minSelectedChoices: 1, maxSelectedChoices: 3, claMaxSelections: 2 },
+    { type: 'ranking', name: 'dynamicRanking', choicesFromQuestion: 'choiceSource', maxSelectedChoices: 2 },
+    { type: 'draggableranking', name: 'customRanking', choices: ['a', 'b', 'c'], maxSelectedChoices: 2 },
+    { type: 'imagepicker', name: 'dynamicImage', choicesFromQuestion: 'choiceSource', multiSelect: true, maxSelectedChoices: 2 },
+    { type: 'rating', name: 'steppedRating', rateMin: 0.1, rateMax: 0.5, rateStep: 0.2 },
+    { type: 'multipletext', name: 'requiredItems', items: [
+      { name: 'required', isRequired: true }, { name: 'optional' },
+    ] },
+    { type: 'matrixdropdown', name: 'requiredDropdownCell', rows: ['row'], columns: [
+      { name: 'required', cellType: 'text', isRequired: true },
+    ] },
+    { type: 'matrixdynamic', name: 'requiredDynamicCell', rowCount: 1, columns: [
+      { name: 'required', cellType: 'text', isRequired: true },
+    ] },
+  ] });
+
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    choiceSource: 'a',
+    dynamicSingle: 'b',
+    dynamicMulti: ['a', 'b'],
+    dynamicTagbox: ['a', 'c'],
+    dynamicRanking: ['c', 'a'],
+    customRanking: ['b', 'a'],
+    dynamicImage: ['b', 'c'],
+    steppedRating: 0.3,
+    requiredItems: { required: 'yes' },
+    requiredDropdownCell: { row: { required: 'yes' } },
+    requiredDynamicCell: [{ required: 'yes' }],
+  }), [], 'choicesFromQuestion values and values on the configured rating step are accepted');
+
+  const nestedErrors = validateRequiredAnswers(schema, {
+    requiredItems: { optional: 'present' },
+    requiredDropdownCell: { row: {} },
+    requiredDynamicCell: [{}],
+  });
+  for (const name of ['requiredItems', 'requiredDropdownCell', 'requiredDynamicCell']) {
+    assert.ok(nestedErrors.includes(`Invalid response: ${name}`), `${name} nested required value must be enforced`);
+  }
+
+  const constraintErrors = validateRequiredAnswers(schema, {
+    choiceSource: 'a',
+    dynamicSingle: 'forged',
+    dynamicMulti: [],
+    dynamicTagbox: ['a', 'b', 'c'],
+    dynamicRanking: ['a', 'b', 'c'],
+    customRanking: ['a', 'b', 'c'],
+    dynamicImage: ['a', 'b', 'c'],
+    steppedRating: 0.2,
+  });
+  for (const name of ['dynamicSingle', 'dynamicMulti', 'dynamicTagbox', 'dynamicRanking', 'customRanking', 'dynamicImage', 'steppedRating']) {
+    assert.ok(constraintErrors.includes(`Invalid response: ${name}`), `${name} constraint must be enforced`);
+  }
+});
+
+test('authenticated question update rejects nested, unknown, and invalid-identity definitions before persistence', async (t) => {
   const originalQuery = pool.query;
   const originalConnect = pool.connect;
   t.after(() => {
@@ -135,7 +766,7 @@ test('authenticated question update rejects nested definitions before persistenc
     }
     if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
     if (/LEFT JOIN organization_memberships/.test(sql)) {
-      return { rows: [{ id: 'survey-id', name: 'Survey A', role: 'editor' }] };
+      return { rows: [{ id: 'survey-id', name: 'Survey A', role: 'editor', questions: { elements: [] } }] };
     }
     return { rows: [], rowCount: 0 };
   };
@@ -155,6 +786,545 @@ test('authenticated question update rejects nested definitions before persistenc
   assert.equal(response.status, 400);
   assert.match(response.body.message, /Nested SurveyJS questions, panels, and pages are not supported/);
   assert.equal(persisted, false);
+
+  const unknownResponse = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [{ type: 'unknownwidget', name: 'unknown' }] }
+  });
+  assert.equal(unknownResponse.status, 400);
+  assert.match(unknownResponse.body.message, /unsupported type: unknownwidget/);
+  assert.equal(persisted, false);
+
+  const valueNameResponse = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [{ type: 'text', name: 'aliased', valueName: 'shared_answer' }] }
+  });
+  assert.equal(valueNameResponse.status, 400);
+  assert.match(valueNameResponse.body.message, /unsupported property valueName.*Remove valueName/);
+  assert.equal(persisted, false);
+
+  const choicesByUrlResponse = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [{
+      type: 'dropdown', name: 'remote', choicesByUrl: { url: 'https://example.test/choices' }
+    }] }
+  });
+  assert.equal(choicesByUrlResponse.status, 400);
+  assert.match(choicesByUrlResponse.body.message,
+    /unsupported property choicesByUrl.*Remove choicesByUrl.*server-side URL choice resolution is not supported/);
+  assert.equal(persisted, false, 'URL-backed choices must fail before persistence');
+
+  const nonTagboxLazyResponse = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [{ type: 'dropdown', name: 'lazy', choicesLazyLoadEnabled: true }] }
+  });
+  assert.equal(nonTagboxLazyResponse.status, 400);
+  assert.match(nonTagboxLazyResponse.body.message,
+    /unsupported property choicesLazyLoadEnabled for type dropdown.*supported only for tagbox/);
+
+  const addNewTagResponse = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [{ type: 'tagbox', name: 'new_tag', allowAddNewTag: true }] }
+  });
+  assert.equal(addNewTagResponse.status, 400);
+  assert.match(addNewTagResponse.body.message,
+    /unsupported property allowAddNewTag=true.*Set allowAddNewTag to false or remove it/);
+  assert.equal(persisted, false, 'unsupported tagbox runtime properties must fail before persistence');
+
+  const invalidIdentitySchemas = [
+    [{ type: 'text' }],
+    [{ type: 'text', name: 'unsafe name' }],
+    [{ type: 'text', name: 'duplicate' }, { type: 'comment', name: 'duplicate' }],
+  ];
+  for (const elements of invalidIdentitySchemas) {
+    const identityResponse = await agent.post('/api/updateQuestions').send({
+      surveyName: 'Survey A',
+      questions: { elements }
+    });
+    assert.equal(identityResponse.status, 400);
+  }
+  assert.equal(persisted, false, 'invalid identities must be rejected before persistence');
+
+  const malformedChoiceResponse = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [{ type: 'imagepicker', name: 'image', choices: [{ imageLink: 'cat.png' }] }] }
+  });
+  assert.equal(malformedChoiceResponse.status, 400);
+  assert.match(malformedChoiceResponse.body.message, /primitive value or text/);
+  assert.equal(persisted, false, 'malformed choices must fail before persistence');
+
+  const generatedModel = new Model();
+  const page = generatedModel.addNewPage('generated');
+  page.addNewQuestion('matrixdynamic', 'generated_matrix');
+  page.addNewQuestion('multipletext', 'generated_details');
+  const generatedElements = generatedModel.toJSON().pages[0].elements;
+  const validResponse = await agent.post('/api/updateQuestions').send({
+    surveyName: 'Survey A',
+    questions: { elements: [
+      ...generatedElements,
+      { type: 'comment', name: 'question_99', visibleIf: '{generated_matrix.Column 1} notempty and {question_99} empty' },
+    ] }
+  });
+  assert.equal(validResponse.status, 200);
+  assert.equal(persisted, true, 'normal SurveyJS model-generated schemas should persist');
+  assert.deepEqual(validResponse.body.questions.elements.map(({ name }) => name), ['question_1', 'question_2', 'question_3']);
+  assert.equal(validResponse.body.questions.elements[2].visibleIf,
+    '{question_1.Column 1} notempty and {question_3} empty');
+});
+
+test('authenticated question updates allocate above historical response keys for object and CSV payloads', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const hashedPassword = await bcrypt.hash('password123', 4);
+  const historicalQueries = [];
+  let historicalMaximum = '7';
+  let persistedQuestions = { claNextQuestionNumber: 12, elements: [
+    { type: 'text', name: 'question_2' },
+    { type: 'text', name: 'question_5' },
+  ] };
+  pool.query = async (sql, values) => {
+    if (/SELECT \* FROM users WHERE username = \$1/.test(sql)) {
+      return { rows: [{ id: 88, username: 'history-editor', password: hashedPassword, status: 'active' }] };
+    }
+    if (/SELECT \* FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ id: 88, username: 'history-editor', status: 'active' }] };
+    }
+    if (/information_schema\.columns/.test(sql)) throw new Error('test metadata unavailable');
+    if (/SELECT[\s\S]+sess[\s\S]+FROM[\s\S]+sessions/i.test(sql)) {
+      return { rows: [{ sess: { cookie: {}, userId: 88, username: 'history-editor' } }], rowCount: 1 };
+    }
+    if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
+    if (/LEFT JOIN organization_memberships/.test(sql)) {
+      return { rows: [{
+        id: 'history-survey-id', name: 'History Survey', role: 'editor', questions: persistedQuestions,
+      }] };
+    }
+    if (/jsonb_object_keys/.test(sql)) {
+      historicalQueries.push({ sql, values });
+      return { rows: [{ max_question_number: historicalMaximum }] };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const updates = [];
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      updates.push({ sql, values });
+      persistedQuestions = /SET title =/.test(sql) ? values[1] : values[0];
+      return { rows: [{ name: 'History Survey' }], rowCount: 1 };
+    },
+    release() {}
+  });
+
+  const agent = request.agent(app);
+  assert.equal((await agent.post('/api/login').send({
+    username: 'history-editor', password: 'password123'
+  })).status, 200);
+
+  const invalidCounter = await agent.post('/api/updateQuestions').send({
+    surveyName: 'History Survey',
+    questions: { claNextQuestionNumber: '12', elements: [{ type: 'text', name: 'fresh' }] },
+  });
+  assert.equal(invalidCounter.status, 400);
+  assert.match(invalidCounter.body.message, /claNextQuestionNumber must be a positive safe integer/);
+  assert.equal(updates.length, 0);
+
+  const reorderedAndImported = await agent.post('/api/updateQuestions').send({
+    surveyName: 'History Survey',
+    questions: { claNextQuestionNumber: 2, elements: [
+      { type: 'text', name: 'question_5', visibleIf: '{question_2} notempty' },
+      { type: 'text', name: 'question_2' },
+      { type: 'comment', name: 'question_7', visibleIf: '{question_5} and {question_7}' },
+    ] }
+  });
+  assert.equal(reorderedAndImported.status, 200);
+  assert.deepEqual(reorderedAndImported.body.questions.elements.map(({ name }) => name),
+    ['question_5', 'question_2', 'question_12']);
+  assert.equal(reorderedAndImported.body.questions.claNextQuestionNumber, 13,
+    'the persisted counter is authoritative over a valid but stale client counter');
+  assert.equal(reorderedAndImported.body.questions.elements[0].visibleIf, '{question_2} notempty');
+  assert.equal(reorderedAndImported.body.questions.elements[2].visibleIf, '{question_5} and {question_12}');
+
+  historicalMaximum = '8';
+  const csvAdd = await agent.post('/api/updateQuestions').send({
+    surveyName: 'History Survey',
+    questions: [
+      'Title,Question name,Question title,Question type,Max answers',
+      'Imported,question_8,Current CSV question,text,',
+      'Imported,question_3,Imported canonical,text,',
+      'Imported,csv_name,Fresh CSV question,comment,',
+    ].join('\n')
+  });
+  assert.equal(csvAdd.status, 200);
+  assert.deepEqual(csvAdd.body.questions.elements.map(({ name }) => name),
+    ['question_13', 'question_14', 'question_15']);
+  assert.equal(csvAdd.body.questions.claNextQuestionNumber, 16,
+    'CSV/Survey Creator payloads may omit the internal counter without resetting it');
+
+  const deleted = await agent.delete('/api/question').send({
+    surveyName: 'History Survey', questionName: 'question_15'
+  });
+  assert.equal(deleted.status, 200);
+  assert.equal(persistedQuestions.claNextQuestionNumber, 16,
+    'deleting the unanswered highest question preserves the allocation watermark');
+
+  const addAfterDelete = await agent.post('/api/updateQuestions').send({
+    surveyName: 'History Survey',
+    questions: { elements: [
+      persistedQuestions.elements[0],
+      persistedQuestions.elements[1],
+      { type: 'comment', name: 'fresh_after_delete' },
+    ] }
+  });
+  assert.equal(addAfterDelete.status, 200);
+  assert.deepEqual(addAfterDelete.body.questions.elements.map(({ name }) => name),
+    ['question_13', 'question_14', 'question_16']);
+  assert.equal(addAfterDelete.body.questions.claNextQuestionNumber, 17);
+
+  assert.equal(historicalQueries.length, 4);
+  for (const { sql, values } of historicalQueries) {
+    assert.match(sql, /jsonb_object_keys/);
+    assert.match(sql, /\^question_\(\[1-9\]\[0-9\]\*\)\$/);
+    assert.match(sql, /r\.survey_id = \$1 OR \(r\.survey_id IS NULL AND r\.survey_name = \$2\)/);
+    assert.deepEqual(values, ['history-survey-id', 'History Survey']);
+  }
+  assert.deepEqual(updates[0].values, [reorderedAndImported.body.questions, 'history-survey-id']);
+  assert.deepEqual(updates[1].values, ['Imported', csvAdd.body.questions, 'history-survey-id']);
+  assert.deepEqual(updates[2].values, [
+    { ...csvAdd.body.questions, elements: csvAdd.body.questions.elements.slice(0, 2) },
+    'history-survey-id',
+  ]);
+  assert.deepEqual(updates[3].values, [addAfterDelete.body.questions, 'history-survey-id']);
+});
+
+test('/api/user enforces required answers and accepts omitted optional answers', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'boolean', name: 'show' },
+    { type: 'draggableranking', name: 'question_1', choices: ['a', 'b'], isRequired: true },
+    { type: 'imagepicker', name: 'question_2', choices: ['one', 'two'], multiSelect: true },
+    { type: 'rating', name: 'question_3', rateMin: 1, rateMax: 3 },
+    { type: 'radiogroup', name: 'question_4', choices: ['yes', 'no'] },
+    { type: 'text', name: 'question_5', isRequired: true, visibleIf: '{show} = true' },
+  ] });
+  const queryCalls = [];
+  pool.query = async (sql, values) => {
+    queryCalls.push({ sql, values });
+    if (/FROM Respondent r/.test(sql)) {
+      return {
+        rows: [{
+          respondent_id: 91,
+          response: null,
+          can_respond: true,
+          survey_id: 'survey-requiredness-id'
+        }]
+      };
+    }
+    if (/SELECT questions FROM Survey WHERE id = \$1/.test(sql)) {
+      return { rows: [{ questions: schema }] };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const persisted = [];
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      persisted.push({ sql, values });
+      return { rowCount: 1, rows: [] };
+    },
+    release() {}
+  });
+
+  const missingRequired = await request(app)
+    .post('/api/user')
+    .send({ surveyName: 'Survey A', userId: 'valid-token', answers: '{}' });
+  assert.equal(missingRequired.status, 400);
+  assert.equal(missingRequired.body.message, 'Invalid survey responses.');
+  assert.deepEqual(missingRequired.body.errors, ['Invalid response: question_1']);
+  assert.equal(persisted.length, 0, 'invalid answers must not be persisted');
+
+  const malformedValues = await request(app)
+    .post('/api/user')
+    .send({
+      surveyName: 'Survey A',
+      userId: 'valid-token',
+      answers: JSON.stringify({
+        show: false,
+        question_1: ['a'],
+        question_2: 'one',
+        question_3: 10,
+        question_4: 'maybe'
+      })
+    });
+  assert.equal(malformedValues.status, 400);
+  for (const name of ['question_2', 'question_3', 'question_4']) {
+    assert.ok(malformedValues.body.errors.includes(`Invalid response: ${name}`));
+  }
+  assert.equal(persisted.length, 0, 'malformed values must not be persisted');
+
+  const omittedOptional = await request(app)
+    .post('/api/user')
+    .send({
+      surveyName: 'Survey A',
+      userId: 'valid-token',
+      answers: JSON.stringify({
+        show: false,
+        question_1: ['a'],
+        question_2: ['one', 'two'],
+        question_3: 2,
+        question_4: 'yes'
+      })
+    });
+  assert.equal(omittedOptional.status, 200);
+  assert.deepEqual(omittedOptional.body, { success: true });
+  assert.equal(persisted.length, 1);
+  assert.deepEqual(persisted[0].values[0].question_1, ['a']);
+  assert.deepEqual(persisted[0].values[0].question_2, ['one', 'two']);
+  assert.equal(persisted[0].values[0].question_5, undefined, 'hidden required answer may be omitted');
+  assert.equal(typeof persisted[0].values[0].timeStamp, 'string');
+  assert.equal(queryCalls.filter(({ sql }) => /SELECT questions FROM Survey/.test(sql)).length, 3);
+});
+
+test('/api/user rejects nested required omissions and answer constraints before persistence', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'radiogroup', name: 'source', choices: ['a', 'b', 'c'] },
+    { type: 'checkbox', name: 'selected', choicesFromQuestion: 'source', minSelectedChoices: 1, maxSelectedChoices: 2 },
+    { type: 'tagbox', name: 'tagged', choicesFromQuestion: 'source', claMaxSelections: 1 },
+    { type: 'rating', name: 'rating', rateMin: 1, rateMax: 2, rateStep: 0.5 },
+    { type: 'multipletext', name: 'details', items: [{ name: 'required', isRequired: true }] },
+    { type: 'matrixdropdown', name: 'matrix', rows: ['row'], columns: [
+      { name: 'required', cellType: 'text', isRequired: true },
+    ] },
+  ] });
+  pool.query = async (sql) => {
+    if (/FROM Respondent r/.test(sql)) {
+      return { rows: [{ can_respond: true, survey_id: 'survey-constraints-id' }] };
+    }
+    if (/SELECT questions FROM Survey/.test(sql)) return { rows: [{ questions: schema }] };
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const persisted = [];
+  pool.connect = async () => ({
+    query: async (sql, values) => { persisted.push({ sql, values }); return { rowCount: 1, rows: [] }; },
+    release() {},
+  });
+
+  const missingNested = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'valid-token',
+    answers: JSON.stringify({ details: {}, matrix: { row: {} } }),
+  });
+  assert.equal(missingNested.status, 400);
+  assert.ok(missingNested.body.errors.includes('Invalid response: details'));
+  assert.ok(missingNested.body.errors.includes('Invalid response: matrix'));
+
+  const invalidConstraints = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'valid-token',
+    answers: JSON.stringify({
+      source: 'a', selected: ['a', 'b', 'c'], tagged: ['a', 'b'], rating: 1.25,
+      details: { required: 'present' }, matrix: { row: { required: 'present' } },
+    }),
+  });
+  assert.equal(invalidConstraints.status, 400);
+  for (const name of ['selected', 'tagged', 'rating']) {
+    assert.ok(invalidConstraints.body.errors.includes(`Invalid response: ${name}`));
+  }
+  assert.equal(persisted.length, 0);
+
+  const valid = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'valid-token',
+    answers: JSON.stringify({
+      source: 'a', selected: ['a', 'c'], tagged: ['b'], rating: 1.5,
+      details: { required: 'present' }, matrix: { row: { required: 'present' } },
+    }),
+  });
+  assert.equal(valid.status, 200);
+  assert.equal(persisted.length, 1);
+});
+
+test('/api/user validates lazy tagbox answers against exact same-survey respondent strings', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  let schema = validateSurveyDefinition({ elements: [
+    {
+      type: 'tagbox', name: 'people', choicesLazyLoadEnabled: true,
+      choices: ['Configured', { value: 7, text: 'Seven' }, true],
+    },
+  ] });
+  const choiceQueries = [];
+  pool.query = async (sql, values) => {
+    if (/FROM Respondent r[\s\S]+JOIN Survey s/.test(sql)) {
+      return { rows: [{ can_respond: true, survey_id: 'survey-a-id' }] };
+    }
+    if (/SELECT questions FROM Survey/.test(sql)) return { rows: [{ questions: schema }] };
+    if (/SELECT r\.name, r\.contact_info/.test(sql)) {
+      choiceQueries.push({ sql, values });
+      return { rows: [
+        { name: 'Alice', contact_info: 'alice@example.com' },
+        { name: 'Bob', contact_info: 'bob@example.com' },
+        { name: null, contact_info: 'contact-only@example.com' },
+        { name: 'Name Only', contact_info: null },
+      ] };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  const persisted = [];
+  pool.connect = async () => ({
+    query: async (sql, values) => { persisted.push({ sql, values }); return { rows: [], rowCount: 1 }; },
+    release() {},
+  });
+
+  const omitted = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token', answers: '{}',
+  });
+  assert.equal(omitted.status, 200);
+  assert.equal(choiceQueries.length, 0, 'an omitted lazy tagbox must not query respondents');
+
+  const configuredOnly = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token',
+    answers: JSON.stringify({ people: ['Configured', 7, true] }),
+  });
+  assert.equal(configuredOnly.status, 200);
+  assert.equal(choiceQueries.length, 0, 'configured strings and primitive choices must not query respondents');
+
+  const valid = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token',
+    answers: JSON.stringify({ people: ['Configured', 7, true, 'Alice (alice@example.com)'] }),
+  });
+  assert.equal(valid.status, 200);
+  assert.equal(persisted.length, 3);
+  assert.match(choiceQueries[0].sql, /r\.uuid != \$3/);
+  assert.match(choiceQueries[0].sql,
+    /CONCAT\(COALESCE\(r\.name, ''\), ' \(', COALESCE\(r\.contact_info, ''\), '\)'\) = ANY\(\$4::text\[\]\)/);
+  assert.deepEqual(choiceQueries[0].values, [
+    'survey-a-id', 'Survey A', 'current-token', ['Alice (alice@example.com)']
+  ], 'only the unconfigured submitted string is verified in the database');
+
+  assert.equal(formatRespondentChoice({ name: null, contact_info: 'contact-only@example.com' }),
+    ' (contact-only@example.com)');
+  assert.equal(formatRespondentChoice({ name: 'Name Only', contact_info: null }), 'Name Only ()');
+  const nullableValues = [' (contact-only@example.com)', 'Name Only ()'];
+  const nullable = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token',
+    answers: JSON.stringify({ people: nullableValues }),
+  });
+  assert.equal(nullable.status, 200);
+  assert.deepEqual(choiceQueries[1].values[3], nullableValues,
+    'SQL exact matching must use the same empty-string normalization as response formatting');
+  assert.equal(persisted.length, 4);
+
+  const forged = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token',
+    answers: JSON.stringify({ people: ['Alice (forged@example.com)'] }),
+  });
+  assert.equal(forged.status, 400);
+  assert.deepEqual(forged.body.errors, ['Invalid response: people']);
+  assert.equal(persisted.length, 4, 'forged lazy choices must not persist');
+  assert.deepEqual(choiceQueries[2].values[3], ['Alice (forged@example.com)'],
+    'forged validation should query only the exact submitted value');
+
+  schema = { elements: [{
+    type: 'dropdown', name: 'remote', choicesByUrl: { url: 'https://example.test/choices' }
+  }] };
+  const remoteLegacy = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token', answers: JSON.stringify({ remote: 'choice' }),
+  });
+  assert.equal(remoteLegacy.status, 400);
+  assert.ok(remoteLegacy.body.errors.some((error) =>
+    /unsupported property choicesByUrl.*server-side URL choice resolution is not supported/.test(error)));
+  assert.equal(choiceQueries.length, 3, 'legacy choicesByUrl must be rejected without a choice lookup');
+  assert.equal(persisted.length, 4);
+
+  schema = { elements: [{ type: 'dropdown', name: 'lazy', choicesLazyLoadEnabled: true }] };
+  const nonTagboxLazyLegacy = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token', answers: '{}',
+  });
+  assert.equal(nonTagboxLazyLegacy.status, 400);
+  assert.ok(nonTagboxLazyLegacy.body.errors.some((error) =>
+    /unsupported property choicesLazyLoadEnabled for type dropdown.*supported only for tagbox/.test(error)));
+
+  schema = { elements: [{ type: 'tagbox', name: 'tags', allowAddNewTag: true }] };
+  const addNewTagLegacy = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token', answers: '{}',
+  });
+  assert.equal(addNewTagLegacy.status, 400);
+  assert.ok(addNewTagLegacy.body.errors.some((error) =>
+    /unsupported property allowAddNewTag=true.*Set allowAddNewTag to false or remove it/.test(error)));
+  assert.equal(persisted.length, 4, 'unsupported legacy schema properties must not persist answers');
+
+  schema = { elements: [{ type: 'text', name: 'legacy', valueName: 'shared' }] };
+  const aliasedLegacy = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token', answers: JSON.stringify({ legacy: 'answer' }),
+  });
+  assert.equal(aliasedLegacy.status, 400);
+  assert.ok(aliasedLegacy.body.errors.some((error) =>
+    /Unsupported question property: valueName.*Remove valueName/.test(error)));
+  assert.equal(persisted.length, 4);
+
+  schema = { elements: [{ type: 'old-custom-widget', name: 'legacy' }] };
+  const unsupported = await request(app).post('/api/user').send({
+    surveyName: 'Survey A', userId: 'current-token', answers: '{}',
+  });
+  assert.equal(unsupported.status, 400);
+  assert.deepEqual(unsupported.body.errors, ['Unsupported question type: old-custom-widget']);
+  assert.equal(persisted.length, 4);
+});
+
+test('/api/user returns a client error for malformed or non-object answers', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  let schemaQueries = 0;
+  pool.query = async (sql) => {
+    if (/FROM Respondent r/.test(sql)) {
+      return { rows: [{ can_respond: true, survey_id: 'survey-requiredness-id' }] };
+    }
+    schemaQueries += 1;
+    return { rows: [] };
+  };
+  pool.connect = async () => {
+    throw new Error('invalid answers must not be persisted');
+  };
+
+  const malformed = await request(app)
+    .post('/api/user')
+    .send({ surveyName: 'Survey A', userId: 'valid-token', answers: '{' });
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.message, 'Answers must be valid JSON.');
+
+  const arrayAnswers = await request(app)
+    .post('/api/user')
+    .send({ surveyName: 'Survey A', userId: 'valid-token', answers: '[]' });
+  assert.equal(arrayAnswers.status, 400);
+  assert.equal(arrayAnswers.body.message, 'Invalid survey responses.');
+  assert.deepEqual(arrayAnswers.body.errors, ['Answers must be an object.']);
+  assert.equal(schemaQueries, 0, 'invalid answer envelopes must fail before loading the schema');
 });
 
 test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL', (t) => {

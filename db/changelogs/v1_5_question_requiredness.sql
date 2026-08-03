@@ -1,7 +1,11 @@
 --liquibase formatted sql
 
 --changeset cladvisors:question-requiredness-1 splitStatements:false
---comment Materialize SurveyJS's existing false default for legacy elements without isRequired. No responses or question definitions are removed.
+--validCheckSum: 9:7db1c249349801ca94d85209857e7364
+--comment Materialize SurveyJS's existing false default for legacy elements without isRequired. Briefly block Survey writes to avoid overwriting concurrent question edits; fail after 10 seconds rather than wait indefinitely. No responses or question definitions are removed.
+SET LOCAL lock_timeout = '10s';
+LOCK TABLE Survey IN SHARE ROW EXCLUSIVE MODE;
+
 WITH normalized AS (
   SELECT
     s.name,

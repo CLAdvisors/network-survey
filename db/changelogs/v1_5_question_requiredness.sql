@@ -7,7 +7,7 @@ WITH normalized AS (
     s.name,
     jsonb_agg(
       CASE
-        WHEN element ? 'isRequired' THEN element
+        WHEN jsonb_exists(element, 'isRequired') THEN element
         ELSE jsonb_set(element, '{isRequired}', 'false'::jsonb)
       END
       ORDER BY ordinal
@@ -25,5 +25,5 @@ WHERE s.name = normalized.name
   AND EXISTS (
     SELECT 1
     FROM jsonb_array_elements(COALESCE(s.questions->'elements', '[]'::jsonb)) element
-    WHERE NOT (element ? 'isRequired')
+    WHERE NOT jsonb_exists(element, 'isRequired')
   );

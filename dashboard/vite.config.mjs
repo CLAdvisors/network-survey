@@ -34,6 +34,9 @@ export default defineConfig({
     dedupe: ['react', 'react-dom']
   },
   optimizeDeps: {
+    // Linked workspace packages can hide CommonJS dependencies from Vite's
+    // initial scan. Pre-bundle the React Redux CJS chain for browser-safe ESM.
+    include: ['prop-types', 'react-is', 'react-redux', 'hoist-non-react-statics'],
     esbuildOptions: {
       loader: {
         '.js': 'jsx'

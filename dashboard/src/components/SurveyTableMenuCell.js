@@ -6,23 +6,31 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
+  DialogContentText,
   DialogActions,
   Button,
+  TextField,
   Typography,
   Snackbar,
-  Alert
+  Alert,
+  Box
 } from '@mui/material';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayCircle from '@mui/icons-material/PlayCircle';
 import EmailIcon from '@mui/icons-material/Email';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import api from '../api/axios';
 import SendDemoDialog from './SendDemoDialog';
 import { useAuth } from '../context/AuthContext';
 
-const MenuCell = ({ row, onSurveyDeleted }) => {
+const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [startConfirmOpen, setStartConfirmOpen] = useState(false);
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [copiedName, setCopiedName] = useState(`${row.name} Copy`);
+  const [copying, setCopying] = useState(false);
+  const [copyError, setCopyError] = useState('');
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [demoDialogOpen, setDemoDialogOpen] = useState(false);
   const [demoSending, setDemoSending] = useState(false);
@@ -88,6 +96,45 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
     setStartConfirmOpen(false);
   };
 
+  const handleCopyClick = (event) => {
+    event.stopPropagation();
+    setCopiedName(`${row.name} Copy`);
+    setCopyError('');
+    setCopyDialogOpen(true);
+    handleClose();
+  };
+
+  const handleCopyClose = () => {
+    if (copying) return;
+    setCopyDialogOpen(false);
+    setCopyError('');
+  };
+
+  const handleCopyConfirm = async () => {
+    const name = copiedName.trim();
+    if (!name) {
+      setCopyError('Enter a name for the copied survey.');
+      return;
+    }
+
+    setCopying(true);
+    setCopyError('');
+    try {
+      const response = await api.post(`/surveys/${row.id || row.name}/copy`, { name });
+      setCopyDialogOpen(false);
+      setSnackbar({
+        open: true,
+        message: response.data?.message || `Survey copied successfully as "${name}".`,
+        severity: 'success'
+      });
+      await onSurveyCopied?.(response.data?.survey);
+    } catch (error) {
+      setCopyError(error.response?.data?.message || 'Failed to copy survey. Please try again.');
+    } finally {
+      setCopying(false);
+    }
+  };
+
   const handleDemoClick = (event) => {
     event.stopPropagation();
     setDemoDialogOpen(true);
@@ -145,6 +192,7 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
       <IconButton
         onClick={handleClick}
         size="small"
+        aria-label={`Survey actions for ${row.name}`}
         sx={{
           '&:hover': {
             backgroundColor: 'rgba(66, 179, 175, 0.1)',
@@ -196,6 +244,12 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
           </MenuItem>
         )}
         {canEditSurvey(row) && (
+          <MenuItem onClick={handleCopyClick}>
+            <ContentCopyIcon fontSize="small" />
+            Copy Survey
+          </MenuItem>
+        )}
+        {canEditSurvey(row) && (
           <MenuItem onClick={handleDemoClick}>
             <EmailIcon fontSize="small" />
             Send Email Demo
@@ -226,6 +280,44 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
             Start Survey
           </Button>
         </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={copyDialogOpen}
+        onClose={handleCopyClose}
+        onClick={(event) => event.stopPropagation()}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Copy survey</DialogTitle>
+        <Box component="form" onSubmit={(event) => { event.preventDefault(); handleCopyConfirm(); }}>
+          <DialogContent>
+            <DialogContentText sx={{ mb: 2 }}>
+              Copy the complete configuration and respondent roster from “{row.name}”.
+              Responses, invitation delivery history, completion state, and access links will be reset.
+            </DialogContentText>
+            <TextField
+              autoFocus
+              fullWidth
+              required
+              label="Copied survey name"
+              value={copiedName}
+              onChange={(event) => {
+                setCopiedName(event.target.value);
+                setCopyError('');
+              }}
+              error={Boolean(copyError)}
+              helperText={copyError || 'The survey title and invitation templates will be preserved.'}
+              inputProps={{ maxLength: 255 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCopyClose} disabled={copying}>Cancel</Button>
+            <Button type="submit" variant="contained" disabled={copying}>
+              {copying ? 'Copying…' : 'Copy survey'}
+            </Button>
+          </DialogActions>
+        </Box>
       </Dialog>
 
       <SendDemoDialog

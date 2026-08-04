@@ -14,11 +14,17 @@ const columns = [
     width: 100,
     sortable: false,
     filterable: false,
-    renderCell: (params) => <MenuCell row={params.row} onSurveyDeleted={params.row.onSurveyDeleted} />
+    renderCell: (params) => (
+      <MenuCell
+        row={params.row}
+        onSurveyDeleted={params.row.onSurveyDeleted}
+        onSurveyCopied={params.row.onSurveyCopied}
+      />
+    )
   },
 ];
 
-const SurveyTable = ({ rows, selectRow, onSurveyDeleted, selectedSurvey }) => {
+const SurveyTable = ({ rows, selectRow, onSurveyDeleted, onSurveyCopied, selectedSurvey }) => {
   const [tableRows, setTableRows] = useState([]);
 
   useEffect(() => {
@@ -26,11 +32,12 @@ const SurveyTable = ({ rows, selectRow, onSurveyDeleted, selectedSurvey }) => {
       const processedRows = rows.map(row => ({
         ...row,
         questions: row.questions === "null" ? "0" : row.questions,
-        onSurveyDeleted: onSurveyDeleted
+        onSurveyDeleted,
+        onSurveyCopied,
       }));
       setTableRows(processedRows);
     }
-  }, [rows, onSurveyDeleted]);
+  }, [rows, onSurveyDeleted, onSurveyCopied]);
 
   const handleRowClick = (params) => {
     selectRow(params.row);

@@ -1383,9 +1383,15 @@ test('signed demo links load survey questions but cannot be used for a different
   assert.equal(valid.status, 200);
   assert.equal(valid.body.title, 'Configured title');
 
-  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token });
+  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token, take: 2 });
   assert.equal(names.status, 200);
-  assert.deepEqual(names.body, { names: [], total: 0 }, 'demo links must not expose respondent PII');
+  assert.deepEqual(names.body, {
+    names: [
+      'Demo Person 001 (demo-person-001@example.com)',
+      'Demo Person 002 (demo-person-002@example.com)',
+    ],
+    total: 100,
+  }, 'demo links use synthetic choices instead of exposing respondent PII');
 
   const wrongSurvey = await request(app).get('/api/questions').query({ surveyName: 'Survey B', demoToken: token });
   assert.equal(wrongSurvey.status, 403);

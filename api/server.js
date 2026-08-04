@@ -324,6 +324,10 @@ function buildDashboardUrl(path) {
 }
 
 const DEMO_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const DEMO_RESPONDENT_CHOICES = Array.from({ length: 100 }, (_, index) => {
+  const number = String(index + 1).padStart(3, '0');
+  return `Demo Person ${number} (demo-person-${number}@example.com)`;
+});
 
 function createDemoToken(surveyId, surveyName, now = Date.now()) {
   const payload = Buffer.from(JSON.stringify({
@@ -2592,10 +2596,19 @@ app.get('/api/names', respondentRateLimiter, async (req, res) => {
   if (demoToken && (!demoClaims || demoClaims.surveyName !== surveyName)) {
     return res.status(403).json({ message: 'This demo link is invalid or has expired.' });
   }
-  // Demo recipients may be outside the organization. Never expose the
-  // respondent-backed lazy-choice directory through a forwarded demo link.
+  // Demo recipients may be outside the organization. Supply synthetic choices
+  // so people/tagbox questions remain testable without exposing respondent PII.
   if (demoClaims) {
-    return res.status(200).json({ names: [], total: 0 });
+    const normalizedFilter = String(filter).toLowerCase();
+    const filteredChoices = DEMO_RESPONDENT_CHOICES.filter((choice) =>
+      choice.toLowerCase().includes(normalizedFilter)
+    );
+    const safeSkip = Math.max(0, Number.parseInt(skip, 10) || 0);
+    const safeTake = Math.min(100, Math.max(1, Number.parseInt(take, 10) || 10));
+    return res.status(200).json({
+      names: filteredChoices.slice(safeSkip, safeSkip + safeTake),
+      total: filteredChoices.length,
+    });
   }
 
   const validation = await validateRespondentToken(surveyName, userId);

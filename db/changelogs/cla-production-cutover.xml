@@ -5,11 +5,9 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
     http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.10.xsd">
 
-    <!-- Keep this explicit list in the same order as master-changelog.xml.
-         Liquibase Community 4.29 rejects a nested changelog include followed by
-         formatted SQL, so the production-only root cannot include master here.
-         Local, CI, and staging continue to use master-changelog.xml and cannot
-         run the cutover. -->
+    <!-- Keep this explicit production-only list in the same order as
+         master-changelog.xml. Local, CI, and staging continue to use the
+         universal master and cannot run the cutover. -->
     <include file="v1_0_create_initial_tables.sql" relativeToChangelogFile="true" />
     <include file="v1_1_add_sent_email_count.sql" relativeToChangelogFile="true" />
     <include file="v1_2_product_iam_foundation.sql" relativeToChangelogFile="true" />

@@ -135,7 +135,7 @@ jobs:
           mkdir -p "$STAGE_DIR/deploy" "$STAGE_DIR/db"
           rsync -a --exclude node_modules api "$STAGE_DIR/"
           cp -a db/changelogs "$STAGE_DIR/db/"
-          cp scripts/deploy/remote-deploy.sh "$STAGE_DIR/deploy/"
+          cp scripts/deploy/remote-deploy.sh scripts/deploy/bootstrap-admin.js "$STAGE_DIR/deploy/"
           echo "$GITHUB_SHA" > "$STAGE_DIR/REVISION"
           tar -czf api-release.tar.gz -C "$STAGE_DIR" .
 

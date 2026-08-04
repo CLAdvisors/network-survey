@@ -28,9 +28,15 @@ export default defineConfig({
     strictPort: true
   },
   resolve: {
+    // Resolve peer dependencies from the consuming workspace rather than the
+    // real path of file: workspace packages.
+    preserveSymlinks: true,
     dedupe: ['react', 'react-dom']
   },
   optimizeDeps: {
+    // Linked workspace packages can hide CommonJS dependencies from Vite's
+    // initial scan. Pre-bundle the React Redux CJS chain for browser-safe ESM.
+    include: ['prop-types', 'react-is', 'react-redux', 'hoist-non-react-statics'],
     esbuildOptions: {
       loader: {
         '.js': 'jsx'

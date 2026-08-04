@@ -1,6 +1,9 @@
 import { waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { restoreTagboxSearchPlaceholder } from './tagboxSearchPlaceholder';
+import {
+  disposeTagboxSearchPlaceholder,
+  restoreTagboxSearchPlaceholder,
+} from './tagboxSearchPlaceholder';
 
 describe('restoreTagboxSearchPlaceholder', () => {
   it('restores the configured placeholder after SurveyJS clears it', async () => {
@@ -19,6 +22,10 @@ describe('restoreTagboxSearchPlaceholder', () => {
 
     input.placeholder = '';
     await waitFor(() => expect(input).toHaveAttribute('placeholder', question.placeholder));
+    disposeTagboxSearchPlaceholder(question);
+    input.placeholder = '';
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(input).toHaveAttribute('placeholder', '');
     animationFrame.mockRestore();
   });
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { DraggableRankingQuestion } from '@network-survey/frontend-react';
 
@@ -67,6 +68,7 @@ describe('DraggableRankingQuestion', () => {
         question={question}
         value={question.value}
         onChange={vi.fn()}
+        valueSource="question"
       />
     );
 
@@ -82,6 +84,47 @@ describe('DraggableRankingQuestion', () => {
     });
   });
 
+  it('normalizes inherited SurveyJS ItemValue values without duplicating ranked options', async () => {
+    const question = createQuestion([]);
+    question.choices = ['Alex', 'Blair'].map((name) => Object.create({ value: name, text: name }));
+    const onChange = vi.fn((nextValue) => {
+      question.value = nextValue;
+      question.emitValueChanged();
+    });
+    render(
+      <DraggableRankingQuestion
+        question={question}
+        value={question.value}
+        onChange={onChange}
+        valueSource="question"
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Rank: Alex' }));
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(['Alex']);
+      expect(within(screen.getByTestId('drop-ranked')).getByText('Alex')).toBeInTheDocument();
+      expect(within(screen.getByTestId('drop-available')).queryByText('Alex')).not.toBeInTheDocument();
+    });
+  });
+
+  it('offers keyboard-operable rank and unrank actions', async () => {
+    const question = createQuestion([]);
+    const onChange = vi.fn();
+    render(
+      <DraggableRankingQuestion question={question} value={question.value} onChange={onChange} />
+    );
+
+    const rankButton = await screen.findByRole('button', { name: 'Rank: Alex' });
+    rankButton.focus();
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Unrank: Alex' })).toHaveFocus();
+    });
+  });
+
   it('preserves controlled value-prop updates', async () => {
     const question = createQuestion(['Alex']);
     const props = { question, onChange: vi.fn() };
@@ -90,6 +133,10 @@ describe('DraggableRankingQuestion', () => {
     );
 
     await waitFor(() => expect(within(screen.getByTestId('drop-ranked')).getByText('Alex')).toBeInTheDocument());
+
+    question.value = ['Blair'];
+    question.emitValueChanged();
+    expect(within(screen.getByTestId('drop-ranked')).getByText('Alex')).toBeInTheDocument();
 
     rerender(<DraggableRankingQuestion {...props} value={['Casey']} />);
 

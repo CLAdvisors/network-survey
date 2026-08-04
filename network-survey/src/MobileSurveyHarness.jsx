@@ -4,11 +4,20 @@ import { Box, Button, Chip, Paper, Stack, Typography } from '@mui/material';
 import { Model, Question, Serializer } from 'survey-core';
 import { Survey as SurveyJs } from 'survey-react-ui';
 import { DraggableRankingQuestion } from '@network-survey/frontend-react';
-import { BRAND_COLORS } from '@network-survey/frontend-shared';
+import {
+  applyProductionSurveyTheme,
+  BRAND_COLORS,
+  PRODUCTION_SURVEY_CLASS_NAME,
+  PRODUCTION_SURVEY_WRAPPER_SX,
+} from '@network-survey/frontend-shared';
 import Header from './Header';
 import Logo from './logo.svg?react';
-import { restoreTagboxSearchPlaceholder } from './tagboxSearchPlaceholder';
-import './Survey.css';
+import {
+  disposeTagboxSearchPlaceholder,
+  restoreTagboxSearchPlaceholder,
+} from './tagboxSearchPlaceholder';
+import '@network-survey/frontend-shared/src/surveyRuntime.css';
+import './MobileSurveyHarness.css';
 
 const VIEWPORTS = [
   { label: '320 × 900', width: 320, height: 900 },
@@ -91,8 +100,8 @@ const questionJson = {
 };
 
 function makeModel() {
-  Model.cssType = 'defaultV2';
   const model = new Model(questionJson);
+  applyProductionSurveyTheme(model);
   model.showQuestionNumbers = false;
   model.showProgressBar = 'bottom';
   model.progressBarType = 'questions';
@@ -139,6 +148,7 @@ function HarnessSurvey() {
           value={options.question.value || []}
           onChange={(value) => { options.question.value = value; }}
           availableDirection="vertical"
+          valueSource="question"
         />
       );
     });
@@ -146,6 +156,7 @@ function HarnessSurvey() {
   });
 
   useEffect(() => () => {
+    model.getAllQuestions().forEach((question) => disposeTagboxSearchPlaceholder(question));
     rootsRef.current.forEach((root) => root.unmount());
     rootsRef.current.clear();
     model.dispose();
@@ -206,9 +217,12 @@ export default function MobileSurveyHarness() {
         >
           <Box className={`respondent-survey-frame${isFramedPhone ? ' respondent-survey-frame--phone' : ''}`}>
             <Header svgComponent={<Logo />} title={title} forceMobile={isFramedPhone} />
-            <Box className="harness-survey-layout" sx={{ p: 1.5 }}>
+            <Box className="harness-survey-layout">
               <Paper className="harness-survey-surface" elevation={1} sx={{ overflow: 'hidden' }}>
-                <Box className="survey-instructions" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+                <Box
+                  className="survey-instructions"
+                  sx={{ p: { xs: 2, sm: 3 }, borderBottom: '1px solid', borderColor: 'divider' }}
+                >
                 <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500, mb: 1, color: BRAND_COLORS.primary }}>
                   Survey Instructions
                 </Typography>
@@ -218,13 +232,13 @@ export default function MobileSurveyHarness() {
               </Box>
                 <Box
                   className="survey-content"
-                  sx={{
-                    '--sjs-primary-backcolor': BRAND_COLORS.primary,
-                    '--sjs-primary-backcolor-dark': BRAND_COLORS.primaryHover,
-                    '--sjs-secondary-backcolor': BRAND_COLORS.primary,
-                  }}
+                  sx={{ p: { xs: 2, sm: 3 }, ...PRODUCTION_SURVEY_WRAPPER_SX }}
                 >
-                <div className="modern-survey-container"><HarnessSurvey /></div>
+                <div
+                  className={`${PRODUCTION_SURVEY_CLASS_NAME}${isFramedPhone ? ' cla-survey-runtime--mobile' : ''}`}
+                >
+                  <HarnessSurvey />
+                </div>
               </Box>
               </Paper>
             </Box>

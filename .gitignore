@@ -18,6 +18,7 @@ db/liquibase.properties
 db/liquibase-prod.*
 dashboard/.env.production
 api/.env.prod
+api/.env.local
 network-survey/.env.production
 .local-dev.state.json
 db/.liquibase.local.generated.properties

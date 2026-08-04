@@ -4,10 +4,17 @@ import { Model, Serializer, Question } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { Alert, useTheme } from '@mui/material';
 import "survey-core/survey-core.min.css";
-import "./Survey.css";
+import "@network-survey/frontend-shared/src/surveyRuntime.css";
 import { buildApiUrl } from "./api";
 import { DraggableRankingQuestion } from "@network-survey/frontend-react";
-import { restoreTagboxSearchPlaceholder } from "./tagboxSearchPlaceholder";
+import {
+  applyProductionSurveyTheme,
+  PRODUCTION_SURVEY_CLASS_NAME
+} from "@network-survey/frontend-shared";
+import {
+  disposeTagboxSearchPlaceholder,
+  restoreTagboxSearchPlaceholder
+} from "./tagboxSearchPlaceholder";
 
 const draggableQuestionRoots = new WeakMap();
 
@@ -34,6 +41,9 @@ function SurveyComponent({setTitle}) {
     const [json, setJson] = React.useState(null);
     const [survey, setSurvey] = React.useState(null);
     const [hasResponse, setHasResponse] = React.useState(false);
+    const [submissionError, setSubmissionError] = React.useState(null);
+    const submissionInProgressRef = React.useRef(false);
+    const submissionAcceptedRef = React.useRef(false);
     const searchParams = new URLSearchParams(window.location.search);
     const userId = searchParams.get("userId"); 
     const surveyName = searchParams.get("surveyName"); 
@@ -62,26 +72,42 @@ function SurveyComponent({setTitle}) {
       if (!json) return;
 
       const newSurvey = new Model(json);
-      
+      const roots = new Set();
+      applyProductionSurveyTheme(newSurvey);
+
       // Configure survey settings
       newSurvey.showQuestionNumbers = false;
       newSurvey.showProgressBar = "bottom";
       newSurvey.progressBarType = "questions";
       newSurvey.completedHtml  = "Thank you for completing the survey.";
 
-      // Set modern theme
-      Model.cssType = "defaultV2";
-      
-      // Survey event handlers
-      newSurvey.onComplete.add((sender, options) => {
-        // Hide the "already completed" banner after a (re)submission to avoid confusion on the completion screen
-        setHasResponse(false);
-
+      // Submit before completing. This keeps respondents on the form if the API
+      // rejects a stale or malformed response instead of showing a false success.
+      newSurvey.onCompleting.add((sender, options) => {
         if (userId === 'demo') return;
+        if (submissionAcceptedRef.current) {
+          submissionAcceptedRef.current = false;
+          return;
+        }
+        options.allowComplete = false;
+        if (submissionInProgressRef.current) return;
+
+        submissionInProgressRef.current = true;
+        setSubmissionError(null);
         const data = JSON.stringify(sender.data, null, 3);
         const url = buildApiUrl('/user');
-        // Fire-and-forget; if needed we could await and handle errors, but UI should reflect resubmission immediately
-        postRequest(url, { userId, surveyName, answers: data }).catch((e) => console.error('Submit failed:', e));
+        postRequest(url, { userId, surveyName, answers: data })
+          .then(() => {
+            setHasResponse(false);
+            submissionAcceptedRef.current = true;
+            sender.doComplete();
+          })
+          .catch((error) => {
+            setSubmissionError(error.message || 'Your response could not be submitted. Please try again.');
+          })
+          .finally(() => {
+            submissionInProgressRef.current = false;
+          });
       });
 
       newSurvey.onChoicesLazyLoad.add((_, options) => {
@@ -120,6 +146,7 @@ function SurveyComponent({setTitle}) {
         const previousRoot = draggableQuestionRoots.get(options.question);
         if (previousRoot) {
           previousRoot.unmount();
+          roots.delete(previousRoot);
           draggableQuestionRoots.delete(options.question);
         }
 
@@ -134,17 +161,29 @@ function SurveyComponent({setTitle}) {
 
         const root = ReactDOM.createRoot(container);
         draggableQuestionRoots.set(options.question, root);
+        roots.add(root);
         root.render(
           <DraggableRankingQuestion
             question={options.question}
             value={options.question.value || []}
             onChange={(val) => (options.question.value = val)}
             availableDirection="vertical"
+            valueSource="question"
           />
         );
       });
 
       setSurvey(newSurvey);
+
+      return () => {
+        newSurvey.getAllQuestions().forEach((question) => {
+          disposeTagboxSearchPlaceholder(question);
+          draggableQuestionRoots.delete(question);
+        });
+        roots.forEach((root) => root.unmount());
+        roots.clear();
+        newSurvey.dispose();
+      };
     }, [json, userId, surveyName]);
 
     // API handlers
@@ -191,7 +230,12 @@ function SurveyComponent({setTitle}) {
     }
 
     return (
-      <div className="modern-survey-container">
+      <div className={PRODUCTION_SURVEY_CLASS_NAME}>
+        {submissionError && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {submissionError}
+          </Alert>
+        )}
         {hasResponse && (
           <Alert
             severity="info"

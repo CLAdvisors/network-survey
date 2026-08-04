@@ -28,7 +28,9 @@
     "react-quill": "^2.0.0",
     "react-router-dom": "^6.30.0",
     "react-tabs": "^6.0.2",
-    "survey-creator-react": "^2.0.4",
+    "survey-core": "2.5.35",
+    "survey-creator-react": "2.5.35",
+    "survey-react-ui": "2.5.35",
     "web-vitals": "^2.1.4"
   },
   "devDependencies": {

@@ -29,7 +29,7 @@ run_pm2() {
 echo "==> Installing release $REVISION to $RELEASE_DIR"
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
-cp -a "$SOURCE_DIR/api" "$SOURCE_DIR/db" "$RELEASE_DIR/"
+cp -a "$SOURCE_DIR/api" "$SOURCE_DIR/db" "$SOURCE_DIR/deploy" "$RELEASE_DIR/"
 
 echo "==> Installing production dependencies"
 (cd "$RELEASE_DIR/api" && npm ci --omit=dev)
@@ -42,11 +42,9 @@ get_env_value() {
   grep "^$1=" "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-
 }
 
-append_secret_from_ssm() {
-  local env_key="$1"
-  local parameter_env_key="$2"
+get_secret_from_ssm() {
+  local parameter_env_key="$1"
   local parameter_name
-  local value
 
   parameter_name=$(get_env_value "$parameter_env_key")
   if [ -z "$parameter_name" ]; then
@@ -54,12 +52,19 @@ append_secret_from_ssm() {
     exit 1
   fi
 
-  value=$(aws ssm get-parameter \
+  aws ssm get-parameter \
     --name "$parameter_name" \
     --with-decryption \
     --query 'Parameter.Value' \
-    --output text)
+    --output text
+}
 
+append_secret_from_ssm() {
+  local env_key="$1"
+  local parameter_env_key="$2"
+  local value
+
+  value=$(get_secret_from_ssm "$parameter_env_key")
   ENV_KEY="$env_key" SECRET_VALUE="$value" node - <<'NODE' >> "$RELEASE_DIR/api/.env.prod"
 const key = process.env.ENV_KEY;
 const value = process.env.SECRET_VALUE || '';
@@ -99,6 +104,17 @@ liquibase \
   --changeLogFile=changelogs/master-changelog.xml \
   --searchPath="$RELEASE_DIR/db" \
   update
+
+if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
+  echo "==> Ensuring bootstrap dashboard administrator"
+  BOOTSTRAP_ADMIN_PASSWORD=$(get_secret_from_ssm BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)
+  BOOTSTRAP_ADMIN_USERNAME=$(get_env_value BOOTSTRAP_ADMIN_USERNAME) \
+    BOOTSTRAP_ADMIN_PASSWORD="$BOOTSTRAP_ADMIN_PASSWORD" \
+    DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" \
+    DB_SSL=true DB_SSL_CA="$SERVICE_DIR/certs/rds-global-bundle.pem" \
+    node "$RELEASE_DIR/deploy/bootstrap-admin.js"
+  unset BOOTSTRAP_ADMIN_PASSWORD
+fi
 
 echo "==> Activating release"
 chown -R ubuntu:ubuntu "$RELEASE_DIR"

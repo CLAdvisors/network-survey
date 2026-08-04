@@ -18,6 +18,23 @@ import * as d3 from "d3";
 import CollapsibleSection from "./CollapsibleSection";
 import DownloadIcon from "@mui/icons-material/Download";
 
+// Results can contain answers from any SurveyJS question type, not only arrays
+// of selected people. Normalize them before rendering in a DataGrid cell.
+export const toDisplayAnswers = (value) => {
+  if (value === null || value === undefined || value === "") return [];
+  const values = Array.isArray(value) ? value : [value];
+  return values.map((answer) => {
+    if (answer && typeof answer === "object") {
+      try {
+        return JSON.stringify(answer);
+      } catch {
+        return String(answer);
+      }
+    }
+    return String(answer);
+  });
+};
+
 const Results = () => {
   const [surveys, setSurveys] = useState([]);
   const [selectedSurvey, setSelectedSurvey] = useState("");
@@ -140,7 +157,7 @@ const Results = () => {
       headerName: "Answers",
       flex: 1,
       renderCell: (params) => {
-        const answers = params.value || [];
+        const answers = toDisplayAnswers(params.value);
         const displayAnswers = answers.slice(0, 5);
         const remainingCount = answers.length - 5;
 
@@ -172,7 +189,7 @@ const Results = () => {
       .map((question, index) => ({
         id: index,
         question: question.text,
-        answers: responses[question.name || `question_${question.id}`] || [],
+        answers: toDisplayAnswers(responses[question.name || `question_${question.id}`]),
       }))
       .filter((row) => row.answers.length > 0);
   };

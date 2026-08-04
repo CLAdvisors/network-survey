@@ -102,17 +102,26 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts_lifecycle" {
 resource "aws_s3_object" "api_config" {
   bucket = aws_s3_bucket.config_bucket.id
   key    = "configs/.env.prod"
+
+  lifecycle {
+    precondition {
+      condition     = (var.bootstrap_admin_username == null) == (var.bootstrap_admin_password_parameter_name == null)
+      error_message = "bootstrap_admin_username and bootstrap_admin_password_parameter_name must either both be set or both be null."
+    }
+  }
   content = templatefile(var.env_template_path, {
-    db_host                       = var.db_host
-    db_port                       = var.db_port
-    db_name                       = var.db_name
-    db_user                       = var.db_user
-    db_password_parameter_name    = var.db_password_parameter_name
-    frontend_url                  = var.frontend_url
-    survey_url                    = var.survey_url
-    session_secret_parameter_name = var.session_secret_parameter_name
-    session_cookie_name           = var.session_cookie_name
-    resend_api_key_parameter_name = var.resend_api_key_parameter_name
+    db_host                                 = var.db_host
+    db_port                                 = var.db_port
+    db_name                                 = var.db_name
+    db_user                                 = var.db_user
+    db_password_parameter_name              = var.db_password_parameter_name
+    frontend_url                            = var.frontend_url
+    survey_url                              = var.survey_url
+    session_secret_parameter_name           = var.session_secret_parameter_name
+    session_cookie_name                     = var.session_cookie_name
+    resend_api_key_parameter_name           = var.resend_api_key_parameter_name
+    bootstrap_admin_username                = var.bootstrap_admin_username
+    bootstrap_admin_password_parameter_name = var.bootstrap_admin_password_parameter_name
   })
 }
 
@@ -218,11 +227,13 @@ data "aws_iam_policy_document" "s3_access_policy" {
       "ssm:GetParameter",
       "ssm:GetParameters",
     ]
-    resources = [
+    resources = concat([
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.db_password_parameter_name}",
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.session_secret_parameter_name}",
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.resend_api_key_parameter_name}",
-    ]
+      ], var.bootstrap_admin_password_parameter_name == null ? [] : [
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.bootstrap_admin_password_parameter_name}",
+    ])
   }
 
   statement {

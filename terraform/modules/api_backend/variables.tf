@@ -106,6 +106,18 @@ variable "resend_api_key_parameter_name" {
   type        = string
 }
 
+variable "bootstrap_admin_username" {
+  description = "Username for the deploy-time initial dashboard administrator. Null disables bootstrapping."
+  type        = string
+  default     = null
+}
+
+variable "bootstrap_admin_password_parameter_name" {
+  description = "SSM SecureString parameter containing the bootstrap administrator password. Null disables bootstrapping."
+  type        = string
+  default     = null
+}
+
 variable "frontend_url" {
   description = "Dashboard/frontend URL written to API runtime config."
   type        = string

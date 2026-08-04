@@ -2,14 +2,29 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { SurveyCreator, SurveyCreatorComponent } from 'survey-creator-react';
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
-// Base SurveyJS styles (theme is applied via cssType)
-import { Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
+import "@network-survey/frontend-shared/src/surveyRuntime.css";
+// SurveyJS runtime themes are applied to each model via applyTheme().
+import { Alert, Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import api from '../api/axios';
 import { Serializer, Question, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
 import { DraggableRankingQuestion } from '@network-survey/frontend-react';
+import {
+  applyProductionSurveyTheme,
+  PRODUCTION_SURVEY_CLASS_NAME,
+  PRODUCTION_SURVEY_WRAPPER_SX,
+  TAGBOX_PAGE_SIZE,
+  TAGBOX_PLACEHOLDER
+} from '@network-survey/frontend-shared';
 import ReactDOM from 'react-dom/client';
+import {
+  restrictSurveyToolbox,
+  setSurveyToolboxItem,
+  SUPPORTED_SURVEY_TOOLBOX_TYPES,
+} from '../utils/surveyToolbox';
+import { hideQuestionValueName } from '../utils/surveyCreatorMetadata';
+import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
 
 // Define and register custom question class for draggableranking
 class QuestionDraggableRankingModel extends Question {
@@ -41,11 +56,10 @@ ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
     question={props.question}
     value={props.question.value || []}
     onChange={val => props.question.value = val}
+    valueSource="question"
   />
 ));
 
-const TAGBOX_PLACEHOLDER = 'Start typing to search for people';
-const TAGBOX_PAGE_SIZE = 25;
 const draggableQuestionRoots = new WeakMap();
 
 const configureTagboxPropertyMetadata = (() => {
@@ -64,7 +78,7 @@ const configureTagboxPropertyMetadata = (() => {
       });
     }
 
-    const allowedProperties = new Set(['title', 'claMaxSelections']);
+    const allowedProperties = new Set(['title', 'isRequired', 'claMaxSelections']);
     Serializer.getProperties('tagbox').forEach((prop) => {
       const isAllowed = allowedProperties.has(prop.name);
       prop.visible = isAllowed;
@@ -101,14 +115,6 @@ const ensureTagboxQuestionBehavior = (question) => {
     return safe;
   };
 
-  if (!question._claRequiredSyncing && question.isRequired !== true) {
-    question._claRequiredSyncing = true;
-    try {
-      question.isRequired = true;
-    } finally {
-      question._claRequiredSyncing = false;
-    }
-  }
 
   question.choices = Array.isArray(question.choices) ? question.choices : [];
   question.choicesLazyLoadEnabled = true;
@@ -140,26 +146,7 @@ const ensureTagboxQuestionBehavior = (question) => {
     question.onPropertyChanged.add(handler);
     question._claMaxSelectionWatcher = handler;
   }
-  if (question.onPropertyChanged && !question._claRequiredWatcher) {
-    const requiredWatcher = (_, options) => {
-      if (!options?.name) {
-        return;
-      }
-      if (options.name === 'isRequired' && options.newValue !== true) {
-        if (question._claRequiredSyncing) {
-          return;
-        }
-        question._claRequiredSyncing = true;
-        try {
-          question.isRequired = true;
-        } finally {
-          question._claRequiredSyncing = false;
-        }
-      }
-    };
-    question.onPropertyChanged.add(requiredWatcher);
-    question._claRequiredWatcher = requiredWatcher;
-  }
+
 };
 
 const normalizeTagboxElements = (elements) => {
@@ -190,7 +177,6 @@ const normalizeTagboxElements = (elements) => {
       if (!normalized.optionsCaption) {
         normalized.optionsCaption = 'Type to search';
       }
-      normalized.isRequired = true;
       const rawLimit = Number(normalized.claMaxSelections ?? normalized.maxSelectedChoices ?? 0);
       const safeLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.max(1, Math.floor(rawLimit)) : 0;
       if (safeLimit > 0) {
@@ -203,25 +189,6 @@ const normalizeTagboxElements = (elements) => {
     }
     return normalized;
   });
-};
-
-const extractElementsFromSurveyJson = (json) => {
-  if (!json || typeof json !== 'object') {
-    return [];
-  }
-  if (Array.isArray(json.pages)) {
-    const aggregated = [];
-    json.pages.forEach((page) => {
-      if (Array.isArray(page?.elements)) {
-        aggregated.push(...page.elements);
-      }
-    });
-    return aggregated;
-  }
-  if (Array.isArray(json.elements)) {
-    return json.elements;
-  }
-  return [];
 };
 
 const cleanupDraggableQuestionRoot = (question) => {
@@ -248,10 +215,12 @@ const cleanupDraggableSurveyRoots = (survey) => {
   });
 };
 
-// Hide survey title, description, and image from the property panel
+// Hide survey-level metadata and alternate question answer keys from the
+// dashboard property panel. The API assigns canonical question names.
 Serializer.removeProperty('survey', 'title');
 Serializer.removeProperty('survey', 'description');
 Serializer.removeProperty('survey', 'logo');
+hideQuestionValueName();
 
 const SurveyEditor = () => {
   const [surveys, setSurveys] = useState([]);
@@ -259,6 +228,7 @@ const SurveyEditor = () => {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewSurveyModel, setPreviewSurveyModel] = useState(null);
   const [previewError, setPreviewError] = useState(null);
@@ -396,6 +366,7 @@ const SurveyEditor = () => {
             question={options.question}
             value={options.question.value || []}
             onChange={(val) => (options.question.value = val)}
+            valueSource="question"
           />
         );
       };
@@ -431,12 +402,15 @@ const SurveyEditor = () => {
     showTitle: false, // hide survey title in editor
     showDescription: false,  // hide survey description in editor
     showLogo: false,         // hide survey image/logo in editor
-    // Use default questionTypes, we’ll add our custom item manually
+    // Match the API's flat, answer-bearing schema contract. This excludes
+    // nested containers and display-only elements from the authoring UI.
+    questionTypes: [...SUPPORTED_SURVEY_TOOLBOX_TYPES],
   };
   if (!creatorRef.current) {
     creatorRef.current = new SurveyCreator(creatorOptions);
-    // Add custom draggable-ranking question with a JSON template
-    creatorRef.current.toolbox.addItem({
+    // Add custom draggable-ranking question with a JSON template. Remove any
+    // generated item first so the custom item appears exactly once.
+    setSurveyToolboxItem(creatorRef.current.toolbox, {
       name: 'draggableranking',
       iconName: 'icon-tagbox',
       title: 'Draggable Ranking',
@@ -450,8 +424,9 @@ const SurveyEditor = () => {
         ]
       }
     });
-    // Ensure tagbox is available with default lazy-load configuration
-    creatorRef.current.toolbox.addItem({
+    // Ensure tagbox uses the custom lazy-load configuration without leaving the
+    // default toolbox item alongside it.
+    setSurveyToolboxItem(creatorRef.current.toolbox, {
       name: 'tagbox',
       iconName: 'icon-tagbox',
       title: 'People Tagbox',
@@ -468,26 +443,20 @@ const SurveyEditor = () => {
         choicesLazyLoadPageSize: TAGBOX_PAGE_SIZE
       }
     });
+    // Defensively remove any defaults introduced by Survey Creator upgrades.
+    restrictSurveyToolbox(creatorRef.current.toolbox);
   }
   const creator = creatorRef.current;
 
   const buildNormalizedSurveySchema = useCallback(() => {
-    try {
-      const rawJson = creator && creator.JSON ? JSON.parse(JSON.stringify(creator.JSON)) : {};
-      const elements = normalizeTagboxElements(extractElementsFromSurveyJson(rawJson));
-      return { elements };
-    } catch (error) {
-      return { elements: [] };
-    }
+    const editorJson = creator?.survey?.toJSON ? creator.survey.toJSON() : creator?.JSON;
+    const rawJson = editorJson ? JSON.parse(JSON.stringify(editorJson)) : {};
+    const flatSchema = serializeFlatSurveySchema(rawJson);
+    return {
+      ...flatSchema,
+      elements: normalizeTagboxElements(flatSchema.elements)
+    };
   }, [creator]);
-
-  const ensurePositionalQuestionNames = useCallback((elements) => {
-    if (!Array.isArray(elements)) return [];
-    return elements.map((el, idx) => ({
-      ...el,
-      name: `question_${idx + 1}`
-    }));
-  }, []);
 
   useEffect(() => {
     if (!creator || !creator.onSurveyInstanceCreated) {
@@ -500,6 +469,7 @@ const SurveyEditor = () => {
         configureSurveyModel(options.survey, 'designer');
       }
       if (options.area === 'preview-tab') {
+        applyProductionSurveyTheme(options.survey);
         configureSurveyModel(options.survey, 'preview');
       }
     };
@@ -526,7 +496,8 @@ const SurveyEditor = () => {
     };
   }, []);
 
-  // Remove pages from loaded survey JSON (flatten to single elements array)
+  // Normalize the one logical editor page while rejecting unsupported layouts
+  // before Survey Creator can silently discard them in single-page mode.
   useEffect(() => {
     if (!selectedSurvey) {
       creator.JSON = {};
@@ -537,25 +508,19 @@ const SurveyEditor = () => {
       try {
         // Use the full survey JSON endpoint
         const response = await api.get(`/admin/questions?surveyName=${selectedSurvey}`);
-        let json = response.data.questions || {};
-        // Flatten any pages into a single elements array
-        let elements = [];
-        if (Array.isArray(json.pages)) {
-          json.pages.forEach(page => {
-            if (Array.isArray(page.elements)) {
-              elements.push(...page.elements);
-            }
-          });
-        } else if (Array.isArray(json.elements)) {
-          elements = json.elements;
-        }
-        const preparedElements = normalizeTagboxElements(elements);
-        creator.JSON = { elements: preparedElements };
+        const json = response.data.questions || {};
+        const flatSchema = serializeFlatSurveySchema(json);
+        creator.JSON = {
+          ...flatSchema,
+          elements: normalizeTagboxElements(flatSchema.elements)
+        };
+        setSaveError(null);
         if (creator.survey) {
           configureSurveyModel(creator.survey, 'designer');
         }
       } catch (err) {
         creator.JSON = {};
+        setSaveError(err.response?.data?.message || err.message || 'Unable to load survey. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -563,19 +528,30 @@ const SurveyEditor = () => {
     loadSurvey();
   }, [selectedSurvey, creator, configureSurveyModel]);
 
-  // Save handler (always use current JSON from creator, flatten pages if present)
   const handleSaveSurvey = async () => {
     if (!selectedSurvey) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const questions = buildNormalizedSurveySchema();
-      const withNames = { elements: ensurePositionalQuestionNames(questions.elements) };
-      await api.post('/updateQuestions', {
+      // Preserve editor identities and expression references in the request. The
+      // API canonicalizes positional names and rewrites references atomically.
+      const response = await api.post('/updateQuestions', {
         surveyName: selectedSurvey,
-        questions: withNames
+        questions
       });
+      // Adopt the API's canonical names immediately. Otherwise Survey Creator
+      // retains temporary names and a second save allocates fresh identities.
+      const savedSchema = serializeFlatSurveySchema(response.data?.questions || questions);
+      creator.JSON = {
+        ...savedSchema,
+        elements: normalizeTagboxElements(savedSchema.elements)
+      };
+      if (creator.survey) {
+        configureSurveyModel(creator.survey, 'designer');
+      }
     } catch (err) {
-      // Optionally show error
+      setSaveError(err.response?.data?.message || err.message || 'Unable to save survey. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -588,12 +564,11 @@ const SurveyEditor = () => {
 
     try {
       const questions = buildNormalizedSurveySchema();
-      const previewJson = questions?.elements ? { elements: questions.elements } : {};
-      const model = new Model(previewJson);
+      const model = new Model(questions);
+      applyProductionSurveyTheme(model);
       model.showQuestionNumbers = false;
       model.showProgressBar = 'bottom';
       model.progressBarType = 'questions';
-  Model.cssType = 'default';
 
       configureSurveyModel(model, 'preview-runtime');
       setPreviewSurveyModel(model);
@@ -601,7 +576,7 @@ const SurveyEditor = () => {
       setPreviewOpen(true);
     } catch (error) {
       setPreviewSurveyModel(null);
-      setPreviewError('Unable to load survey preview.');
+      setPreviewError(error.message || 'Unable to load survey preview.');
       setPreviewOpen(true);
     }
   };
@@ -665,6 +640,7 @@ const SurveyEditor = () => {
           Demo Survey
         </Button>
       </Box>
+      {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
       <Box
         sx={{
           padding: '20px',
@@ -694,7 +670,13 @@ const SurveyEditor = () => {
             </Box>
           )}
           {!previewError && previewSurveyModel && (
-            <Survey model={previewSurveyModel} />
+            <Box
+              className={PRODUCTION_SURVEY_CLASS_NAME}
+              data-testid="branded-survey-wrapper"
+              sx={PRODUCTION_SURVEY_WRAPPER_SX}
+            >
+              <Survey model={previewSurveyModel} />
+            </Box>
           )}
         </DialogContent>
         <DialogActions>

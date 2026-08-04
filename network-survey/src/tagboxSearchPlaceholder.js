@@ -9,38 +9,51 @@ function getSearchPlaceholder(question) {
     || '';
 }
 
+export function disposeTagboxSearchPlaceholder(question) {
+  const state = placeholderObservers.get(question);
+  if (!state) return;
+  state.observer?.disconnect();
+  if (state.animationFrame !== null && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(state.animationFrame);
+  }
+  placeholderObservers.delete(question);
+}
+
 export function restoreTagboxSearchPlaceholder(questionElement, question) {
   if (question?.getType?.() !== 'tagbox' || !questionElement) {
-    return;
+    return () => {};
   }
 
-  placeholderObservers.get(questionElement)?.disconnect();
+  disposeTagboxSearchPlaceholder(question);
 
   const applyPlaceholder = () => {
     const input = questionElement.querySelector('.sd-tagbox__filter-string-input');
     const placeholder = getSearchPlaceholder(question);
     if (input && placeholder && input.placeholder !== placeholder) {
       // SurveyJS clears the real input placeholder after each selection.
-      // Keep the configured/localized search instruction on the actual
-      // combobox rather than exposing it only through generated CSS content.
+      // Keep the localized search instruction on the actual combobox rather
+      // than exposing it only through generated CSS content.
       input.placeholder = placeholder;
     }
   };
 
   applyPlaceholder();
 
+  const state = { observer: null, animationFrame: null };
   if (typeof MutationObserver === 'function') {
-    const observer = new MutationObserver(applyPlaceholder);
-    observer.observe(questionElement, {
+    state.observer = new MutationObserver(applyPlaceholder);
+    state.observer.observe(questionElement, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['placeholder'],
     });
-    placeholderObservers.set(questionElement, observer);
   }
 
   if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(applyPlaceholder);
+    state.animationFrame = requestAnimationFrame(applyPlaceholder);
   }
+  placeholderObservers.set(question, state);
+
+  return () => disposeTagboxSearchPlaceholder(question);
 }

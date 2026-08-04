@@ -30,7 +30,10 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit, memberships = [] }) => {
       setError('Choose an organization for this survey');
       return;
     }
-    onSubmit(surveyName, organizationId || undefined);
+    const resolvedOrganizationId = organizationId || (
+      creatableMemberships.length === 1 ? creatableMemberships[0].organizationId : undefined
+    );
+    onSubmit(surveyName, resolvedOrganizationId);
     setSurveyName('');
     setOrganizationId('');
     setError('');

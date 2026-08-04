@@ -4,9 +4,9 @@ import { Model, Serializer, Question } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { Alert, useTheme } from '@mui/material';
 import "survey-core/survey-core.min.css";
-import "./Survey.css";
 import { buildApiUrl } from "./api";
 import { DraggableRankingQuestion } from "@network-survey/frontend-react";
+import { applyBrandedPanellessSurveyTheme } from "@network-survey/frontend-shared";
 
 const draggableQuestionRoots = new WeakMap();
 
@@ -64,16 +64,14 @@ function SurveyComponent({setTitle}) {
       if (!json) return;
 
       const newSurvey = new Model(json);
-      
+      applyBrandedPanellessSurveyTheme(newSurvey);
+
       // Configure survey settings
       newSurvey.showQuestionNumbers = false;
       newSurvey.showProgressBar = "bottom";
       newSurvey.progressBarType = "questions";
       newSurvey.completedHtml  = "Thank you for completing the survey.";
 
-      // Set modern theme
-      Model.cssType = "defaultV2";
-      
       // Submit before completing. This keeps respondents on the form if the API
       // rejects a stale or malformed response instead of showing a false success.
       newSurvey.onCompleting.add((sender, options) => {

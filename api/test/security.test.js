@@ -27,6 +27,7 @@ const {
   buildDashboardUrl,
   createDemoToken,
   verifyDemoToken,
+  sanitizeSurveyForDemo,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
@@ -1362,6 +1363,31 @@ test('demo links are signed, survey-bound, and expire without database state', (
   tokenParts[2] = `${tokenParts[2][0] === 'A' ? 'B' : 'A'}${tokenParts[2].slice(1)}`;
   assert.equal(verifyDemoToken(tokenParts.join('.'), issuedAt + 1), null);
   assert.equal(verifyDemoToken(token, issuedAt + (24 * 60 * 60 * 1000)), null);
+});
+
+test('demo schema sanitization recursively replaces legacy people choices', () => {
+  const privateChoices = ['Private Person (private@example.com)'];
+  const schema = {
+    pages: [{
+      elements: [{
+        type: 'panel',
+        elements: [{ type: 'tagbox', name: 'nested', choices: privateChoices }],
+      }, {
+        type: 'paneldynamic',
+        templateElements: [{ type: 'matrixdropdown', columns: [{ cellType: 'tagbox', choices: privateChoices }] }],
+      }],
+    }],
+  };
+
+  const sanitized = sanitizeSurveyForDemo(schema);
+  const nestedTagbox = sanitized.pages[0].elements[0].elements[0];
+  const matrixTagbox = sanitized.pages[0].elements[1].templateElements[0].columns[0];
+  for (const question of [nestedTagbox, matrixTagbox]) {
+    assert.deepEqual(question.choices, []);
+    assert.equal(question.choicesLazyLoadEnabled, true);
+    assert.equal(question.allowAddNewTag, false);
+  }
+  assert.deepEqual(schema.pages[0].elements[0].elements[0].choices, privateChoices, 'persisted schema is not mutated');
 });
 
 test('signed demo links load survey questions but cannot be used for a different survey', async (t) => {

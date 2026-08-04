@@ -362,18 +362,26 @@ function verifyDemoToken(token, now = Date.now()) {
   }
 }
 
-function sanitizeSurveyForDemo(questions) {
-  if (!questions || typeof questions !== 'object' || !Array.isArray(questions.elements)) {
-    return questions;
+function sanitizeSurveyForDemo(value) {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeSurveyForDemo);
   }
-  return {
-    ...questions,
-    elements: questions.elements.map((element) => (
-      element?.type === 'tagbox' && element.choicesLazyLoadEnabled === true
-        ? { ...element, choices: [] }
-        : element
-    )),
-  };
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const sanitized = Object.fromEntries(
+    Object.entries(value).map(([key, nestedValue]) => [key, sanitizeSurveyForDemo(nestedValue)])
+  );
+  if (value.type === 'tagbox' || value.cellType === 'tagbox') {
+    sanitized.choices = [];
+    sanitized.choicesLazyLoadEnabled = true;
+    sanitized.choicesLazyLoadPageSize = Number(value.choicesLazyLoadPageSize) > 0
+      ? value.choicesLazyLoadPageSize
+      : 25;
+    sanitized.allowAddNewTag = false;
+  }
+  return sanitized;
 }
 
 app.use(express.json());

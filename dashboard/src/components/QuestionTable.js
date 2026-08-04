@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
@@ -11,11 +11,43 @@ import TableMenuCell from './TableMenuCell';
 import { parseQuestionsCsv } from '../utils/questionsCsv';
 import { buildQuestionTableSchema } from '../utils/questionTableSchema';
 
-const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }) => {
+const QuestionTable = ({
+  rows,
+  surveyName,
+  onQuestionsUpdate,
+  readOnly = false,
+  onDirtyChange,
+  onBusyChange,
+}) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
+  const busyCountRef = useRef(0);
+  const loaded = rows !== null && rows !== undefined && Boolean(surveyName);
+  const [busy, setBusy] = useState(false);
+
+  const beginBusy = useCallback(() => {
+    busyCountRef.current += 1;
+    setBusy(true);
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      busyCountRef.current = Math.max(0, busyCountRef.current - 1);
+      if (busyCountRef.current === 0) setBusy(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    onDirtyChange?.(hasChanges);
+    return () => onDirtyChange?.(false);
+  }, [hasChanges, onDirtyChange]);
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
   const [sortModel, setSortModel] = useState([
     {
       field: 'id',
@@ -29,19 +61,27 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
   });
 
   useEffect(() => {
-    if (rows) {
-      console.log('rows:', rows);
-      const updatedRows = rows.map((row, index) => ({
-        ...row,
-        id: index + 1,
-        questions: row.questions === "null" ? "0" : row.questions
-      }));
-      setTableRows(updatedRows);
-      setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+    if (!rows) {
+      // A guarded survey switch clears parent rows before loading the next survey.
+      // Render-time `loaded` disables controls before this effect clears the draft.
+      setTableRows([]);
+      setOriginalRows([]);
+      setHasChanges(false);
+      return;
     }
-  }, [rows]);
+    const updatedRows = rows.map((row, index) => ({
+      ...row,
+      id: index + 1,
+      questions: row.questions === "null" ? "0" : row.questions
+    }));
+    setTableRows(updatedRows);
+    setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+    setHasChanges(false);
+  }, [rows, surveyName]);
 
   const handleDeleteQuestion = async (row) => {
+    if (!loaded) return;
+    const finishBusy = beginBusy();
     try {
       const response = await api.delete('/question', {
         data: {
@@ -82,15 +122,17 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         message: 'Failed to delete question. Please try again.',
         severity: 'error'
       });
+    } finally {
+      finishBusy();
     }
   };
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly },
+    { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly && loaded && !busy },
     { field: 'type', headerName: 'Question type', width: 150, editable: false },
-    { field: 'required', headerName: 'Required', width: 100, type: 'boolean', editable: !readOnly },
-    { field: 'max', headerName: 'Max answers', width: 150,  editable: !readOnly  },
+    { field: 'required', headerName: 'Required', width: 100, type: 'boolean', editable: !readOnly && loaded && !busy },
+    { field: 'max', headerName: 'Max answers', width: 150, editable: !readOnly && loaded && !busy },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -100,6 +142,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
       renderCell: (params) => (
         <TableMenuCell
           row={params.row}
+          disabled={!loaded || busy || hasChanges}
           actions={[
             {
               label: 'Delete Question',
@@ -122,7 +165,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
 
 
   const handleProcessRowUpdate = (newRow) => {
-    if (readOnly) return originalRows.find(row => row.id === newRow.id) || newRow;
+    if (readOnly || !loaded || busy) return tableRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
@@ -144,6 +187,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
   };
 
   const handleSave = async () => {
+    if (!loaded) return;
+    const finishBusy = beginBusy();
     try {
       const response = await saveRows(tableRows);
 
@@ -178,10 +223,14 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         message: 'Failed to save changes. Please try again.',
         severity: 'error'
       });
+    } finally {
+      finishBusy();
     }
   };
 
   const handleUpload = async (csvContent) => {
+    if (!loaded) return;
+    const finishBusy = beginBusy();
     try {
       // Parse the new CSV content
       const newQuestions = parseQuestionsCsv(csvContent);
@@ -209,7 +258,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
 
         setTableRows(refreshedRows);
         setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
-        
+        setHasChanges(false);
+
         const surveysResponse = await api.get('/surveys');
         if (onQuestionsUpdate) {
           onQuestionsUpdate(surveysResponse.data.surveys);
@@ -229,10 +279,13 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         severity: 'error'
       });
       throw err;
+    } finally {
+      finishBusy();
     }
   };
 
   const handleAddRow = () => {
+    if (!loaded) return;
     const newId = Math.max(0, ...tableRows.map(row => row.id)) + 1;
     const newRow = {
       id: newId,
@@ -272,11 +325,12 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         </Typography>
         {!readOnly && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <AddRowButton onClick={handleAddRow} />
+            <AddRowButton onClick={handleAddRow} disabled={!loaded || busy} />
             <TableUploadButton
               onUpload={handleUpload}
               templateData={TEMPLATE_DATA}
               tableName="Questions"
+              disabled={!loaded || busy || hasChanges}
             />
             {hasChanges && (
               <Button
@@ -284,6 +338,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
                 startIcon={<SaveIcon />}
                 onClick={handleSave}
                 size="small"
+                disabled={!loaded || busy}
               >
                 Save
               </Button>
@@ -300,7 +355,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         }}
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={readOnly ? undefined : handleProcessRowUpdate}
+        processRowUpdate={readOnly || !loaded || busy ? undefined : handleProcessRowUpdate}
         components={{
           Toolbar: GridToolbar,
         }}

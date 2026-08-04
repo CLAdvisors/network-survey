@@ -23,11 +23,17 @@ const Dashboard = () => {
   const [snackbar, setSnackbar] = React.useState(null);
   const [contentDirty, setContentDirty] = React.useState(false);
   const [notificationDirty, setNotificationDirty] = React.useState(false);
+  const [questionDirty, setQuestionDirty] = React.useState(false);
+  const [respondentDirty, setRespondentDirty] = React.useState(false);
   const [contentBusy, setContentBusy] = React.useState(false);
   const [notificationBusy, setNotificationBusy] = React.useState(false);
+  const [questionBusy, setQuestionBusy] = React.useState(false);
+  const [respondentBusy, setRespondentBusy] = React.useState(false);
+  const relatedRequestRef = React.useRef(0);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
-  const hasBusyEdits = contentBusy || notificationBusy;
-  const hasDirtyEdits = contentDirty || notificationDirty;
+  const canViewSelectedSurveyData = canViewSensitiveSurveyData(selectSurvey);
+  const hasBusyEdits = contentBusy || notificationBusy || questionBusy || respondentBusy;
+  const hasDirtyEdits = contentDirty || notificationDirty || questionDirty || respondentDirty;
   const blocker = useBlocker(({ currentLocation, nextLocation }) => (
     (hasBusyEdits || hasDirtyEdits)
     && `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}`
@@ -69,6 +75,7 @@ const Dashboard = () => {
           survey => (survey.id || survey.name) === (selectSurvey.id || selectSurvey.name)
         );
         if (!surveyStillExists) {
+          relatedRequestRef.current += 1;
           setSelectSurvey(null);
           setQuestionData(null);
           setRespondentData(null);
@@ -84,61 +91,80 @@ const Dashboard = () => {
   }, []);
 
   React.useEffect(() => {
+    const requestId = ++relatedRequestRef.current;
+    const controller = new AbortController();
+    const isCurrent = () => (
+      relatedRequestRef.current === requestId && !controller.signal.aborted
+    );
+
+    // Never render the previous survey's data under a newly selected heading.
+    setQuestionData(null);
+    setRespondentData(null);
+    if (!selectSurvey) return () => controller.abort();
+
+    const selectedSurveyId = selectSurvey.id || selectSurvey.name;
+    const mayViewRespondents = canViewSelectedSurveyData;
     const fetchRelatedData = async () => {
-      if (!selectSurvey) return;
-
       try {
-        // Fetch question data; viewers are allowed to see question text.
         const questionResponse = await api.get(
-          `/listQuestions?surveyName=${selectSurvey.id || selectSurvey.name}`
+          `/listQuestions?surveyName=${selectedSurveyId}`,
+          { signal: controller.signal }
         );
-        setQuestionData(questionResponse.data.questions);
+        if (isCurrent()) setQuestionData(questionResponse.data.questions);
       } catch (err) {
-        console.log(err);
-        setQuestionData(null);
+        if (isCurrent()) {
+          console.log(err);
+          setQuestionData(null);
+        }
       }
 
-      if (!canViewSensitiveSurveyData(selectSurvey)) {
-        setRespondentData(null);
-        return;
-      }
+      if (!mayViewRespondents || !isCurrent()) return;
 
       try {
-        // Fetch respondent data for analyst+ roles only because it includes PII.
         const respondentResponse = await api.get(
-          `/targets?surveyName=${selectSurvey.id || selectSurvey.name}`
+          `/targets?surveyName=${selectedSurveyId}`,
+          { signal: controller.signal }
         );
-
-        // Remove dummy user with name 'None'
-        const filteredRespondents = respondentResponse.data.filter(
+        if (!isCurrent()) return;
+        setRespondentData(respondentResponse.data.filter(
           (respondent) => respondent.name !== "None"
-        );
-        setRespondentData(filteredRespondents);
+        ));
       } catch (err) {
-        console.log(err);
-        setRespondentData(null);
+        if (isCurrent()) {
+          console.log(err);
+          setRespondentData(null);
+        }
       }
     };
 
-    fetchRelatedData();
-  }, [selectSurvey, canViewSensitiveSurveyData]);
+    void fetchRelatedData();
+    return () => controller.abort();
+  }, [selectSurvey, canViewSelectedSurveyData]);
 
   const handleSelectRow = (childData) => {
     const currentId = selectSurvey?.id || selectSurvey?.name;
     const nextId = childData?.id || childData?.name;
-    if (currentId && currentId !== nextId && (contentBusy || notificationBusy)) {
+    if (currentId && currentId === nextId) return;
+    if (currentId && currentId !== nextId && hasBusyEdits) {
       setSnackbar({
         severity: 'warning',
         message: 'Please wait for the current save or CSV import to finish before switching surveys.',
       });
       return;
     }
-    if (currentId && currentId !== nextId && (contentDirty || notificationDirty)) {
+    if (currentId && currentId !== nextId && hasDirtyEdits) {
       const shouldDiscard = window.confirm('Discard unsaved changes and switch surveys?');
       if (!shouldDiscard) return;
     }
+    // Invalidate in-flight results immediately after all discard guards pass;
+    // waiting for the next effect cleanup leaves a microtask-sized stale window.
+    relatedRequestRef.current += 1;
+    setQuestionData(null);
+    setRespondentData(null);
     setContentDirty(false);
     setNotificationDirty(false);
+    setQuestionDirty(false);
+    setRespondentDirty(false);
     setSelectSurvey(childData);
   };
 
@@ -175,6 +201,7 @@ const Dashboard = () => {
   const handleSurveyDeleted = async (deletedSurveyName) => {
     await fetchSurveyData();
     if (selectSurvey && selectSurvey.name === deletedSurveyName) {
+      relatedRequestRef.current += 1;
       setSelectSurvey(null);
       setQuestionData(null);
       setRespondentData(null);
@@ -257,6 +284,8 @@ const Dashboard = () => {
           surveyName={selectSurvey?.id || selectSurvey?.name}
           onQuestionsUpdate={handleQuestionsUpdate}
           readOnly={!canEditSurvey(selectSurvey)}
+          onDirtyChange={setQuestionDirty}
+          onBusyChange={setQuestionBusy}
         />
       </CollapsibleSection>
 
@@ -287,6 +316,8 @@ const Dashboard = () => {
             surveyName={selectSurvey?.id || selectSurvey?.name}
             onRespondentsUpdate={handleRespondentsUpdate}
             readOnly={!canEditSurvey(selectSurvey)}
+            onDirtyChange={setRespondentDirty}
+            onBusyChange={setRespondentBusy}
           />
         </CollapsibleSection>
       )}

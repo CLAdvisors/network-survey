@@ -36,7 +36,10 @@ const {
   normalizeLanguage,
   buildNotificationMaps,
   createEmailQueueProcessor,
+  deliverInvitationWithOwnership,
+  sendAccountEmail,
   sendEmailWithResend,
+  getResendFetchTimeoutMs,
   sendTestMail,
   startSurvey,
   emailQueue,
@@ -1348,6 +1351,13 @@ test('editable survey content migration is additive, included, and backfills exa
   assert.match(migration, /ADD COLUMN IF NOT EXISTS subject VARCHAR\(255\)/);
   assert.match(migration, /DEFAULT 'CLA Network Survey'/);
   assert.match(migration, /UPDATE EMAIL[\s\S]*SET subject = 'CLA Network Survey'[\s\S]*WHERE subject IS NULL/i);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS invitation_claim_token UUID/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS invitation_claimed_at TIMESTAMP/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS invitation_first_attempted_at TIMESTAMP/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS invitation_delivery_id UUID/);
+  assert.match(migration, /UPDATE Respondent[\s\S]*invitation_delivery_id = gen_random_uuid\(\)[\s\S]*WHERE invitation_delivery_id IS NULL/i);
+  assert.match(migration, /ALTER COLUMN invitation_delivery_id SET DEFAULT gen_random_uuid\(\)[\s\S]*ALTER COLUMN invitation_delivery_id SET NOT NULL/i);
+  assert.match(migration, /CREATE INDEX IF NOT EXISTS idx_respondent_pending_invitation_claim[\s\S]*WHERE email_sent IS NOT TRUE/i);
   assert.doesNotMatch(migration, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
 });
 
@@ -1442,66 +1452,169 @@ test('sendTestMail selects current localized subjects and bodies for legacy resp
   assert.equal(released, 2);
 });
 
-test('Resend response errors are treated as provider failures', async () => {
-  const providerError = { message: 'invalid recipient', statusCode: 422 };
+test('Resend fetch timeout configuration is positive and falls back safely', () => {
+  assert.equal(getResendFetchTimeoutMs(undefined), 30_000);
+  assert.equal(getResendFetchTimeoutMs('1250'), 1250);
+  assert.equal(getResendFetchTimeoutMs('0'), 30_000);
+  assert.equal(getResendFetchTimeoutMs('invalid'), 30_000);
+});
+
+test('Resend sends preserve idempotency and include an injectable bounded fetch signal', async () => {
+  const calls = [];
   const resendClient = {
-    emails: { send: async () => ({ data: null, error: providerError }) },
+    emails: {
+      async send(emailData, options) {
+        calls.push({ emailData, options });
+        return { data: { id: 'accepted' }, error: null };
+      },
+    },
+  };
+
+  await sendEmailWithResend(
+    { to: 'invite@example.com' },
+    { idempotencyKey: 'survey-invitation-delivery-id' },
+    resendClient,
+    5
+  );
+
+  assert.equal(calls[0].options.idempotencyKey, 'survey-invitation-delivery-id');
+  assert.ok(calls[0].options.signal instanceof AbortSignal);
+});
+
+test('Resend timeout aborts promptly and is explicitly ambiguous', async () => {
+  let requestOptions;
+  const timeoutController = new AbortController();
+  const resendClient = {
+    emails: {
+      send: async (_emailData, options) => {
+        requestOptions = options;
+        queueMicrotask(() => timeoutController.abort(new DOMException(
+          'The operation was aborted due to timeout',
+          'TimeoutError'
+        )));
+        return new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        });
+      },
+    },
   };
 
   await assert.rejects(
-    sendEmailWithResend({ to: 'bad@example.com' }, resendClient),
-    (error) => error.message === providerError.message && error.providerError === providerError
+    sendEmailWithResend(
+      { to: 'timeout@example.com' },
+      { signal: timeoutController.signal },
+      resendClient
+    ),
+    (error) => error.name === 'TimeoutError' && error.definitiveProviderRejection === false
   );
+  assert.equal(requestOptions.signal, timeoutController.signal);
+  assert.equal(requestOptions.signal.aborted, true);
 });
 
-test('email queue books successful respondent tokens without conflating duplicate addresses', async () => {
-  const marked = [];
-  const providerError = new Error('provider rejected message');
-  let releaseFirst;
-  const firstSend = new Promise((resolve) => { releaseFirst = resolve; });
+test('Resend response errors classify only unambiguous known-rejection 4xx as definitive', async () => {
+  const cases = [
+    [{ message: 'bad request', statusCode: 400 }, true],
+    [{ message: 'unauthorized', statusCode: 401 }, true],
+    [{ message: 'invalid recipient', statusCode: 422 }, true],
+    [{ message: 'rate limited', statusCode: 429 }, true],
+    [{ message: 'request timed out', statusCode: 408 }, false],
+    [{ message: 'request timed out', name: 'timeout_error', statusCode: 422 }, false],
+    [{ message: 'request aborted', code: 'ABORTED', statusCode: 400 }, false],
+    [{ message: 'conflict', statusCode: 409 }, false],
+    [{ message: 'concurrent request', name: 'concurrent_idempotent_requests', statusCode: 409 }, false],
+    [{ message: 'invalid request', name: 'invalid_idempotent_request', statusCode: 409 }, false],
+    [{ message: 'normalized conflict', code: 'IDEMPOTENCY-CONFLICT', statusCode: 422 }, false],
+    [{ message: 'application error', name: 'application_error', statusCode: null }, false],
+    [{ message: 'provider unavailable', statusCode: 500 }, false],
+    [{ message: 'malformed status', statusCode: '422' }, false],
+    [{ message: 'non-finite status', statusCode: Number.NaN }, false],
+  ];
+
+  for (const [providerError, definitiveProviderRejection] of cases) {
+    const resendClient = {
+      emails: { send: async () => ({ data: null, error: providerError }) },
+    };
+    await assert.rejects(
+      sendEmailWithResend({ to: 'bad@example.com' }, resendClient),
+      (error) => error.message === providerError.message
+        && error.providerError === providerError
+        && error.definitiveProviderRejection === definitiveProviderRejection
+    );
+  }
+});
+
+test('account email reports Resend result errors as unsent with manual-delivery guidance', async (t) => {
+  const originalConsoleError = console.error;
+  const calls = [];
+  t.after(() => { console.error = originalConsoleError; });
+  console.error = () => {};
+  const providerErrors = [
+    { message: 'rejected', statusCode: 422 },
+    { message: 'application error', name: 'application_error', statusCode: null },
+  ];
+  const resendClient = {
+    emails: {
+      send: async (emailData, options) => {
+        calls.push({ emailData, options });
+        return { data: null, error: providerErrors[calls.length - 1] };
+      },
+    },
+  };
+
+  for (const to of ['rejected@example.com', 'ambiguous@example.com']) {
+    const result = await sendAccountEmail({
+      to, subject: 'Invite', html: '<p>Invite</p>', text: 'Invite',
+    }, resendClient);
+    assert.equal(result.sent, false);
+    assert.match(result.message, /deliver the returned link manually/i);
+  }
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(({ emailData }) => emailData.to), [
+    'rejected@example.com', 'ambiguous@example.com',
+  ]);
+  assert.ok(calls[0].options.signal instanceof AbortSignal);
+  assert.ok(calls[1].options.signal instanceof AbortSignal);
+});
+
+test('account email reports sent only when Resend accepts the request', async () => {
+  const resendClient = {
+    emails: { send: async () => ({ data: { id: 'accepted' }, error: null }) },
+  };
+
+  assert.deepEqual(await sendAccountEmail({
+    to: 'ok@example.com', subject: 'Invite', html: '<p>Invite</p>', text: 'Invite',
+  }, resendClient), { sent: true });
+});
+
+test('email queue invokes invitation ownership only when a queued provider request starts', async () => {
+  const events = [];
   const processor = createEmailQueueProcessor({
-    rateLimit: 3,
+    rateLimit: 1,
     delay: 0,
     wait: async () => {},
     sendEmail: async (emailData) => {
-      if (emailData.subject === 'first') await firstSend;
-      if (emailData.subject === 'duplicate-failed') throw providerError;
-      return { id: emailData.subject };
+      events.push(`provider:${emailData.to}`);
+      return { id: emailData.to };
     },
-    markSuccessful: async (delivery) => {
-      marked.push(delivery);
+    withInvitationOwnership: async (metadata, providerRequest) => {
+      events.push(`ownership:${metadata.respondentToken}`);
+      return providerRequest();
     },
   });
-  const survey = { surveyId: 'survey-id', surveyName: 'Survey A' };
 
-  const first = processor.enqueue(
-    { to: 'duplicate@example.com', subject: 'first' },
-    { ...survey, respondentToken: 'respondent-one' }
-  );
-  const failed = processor.enqueue(
-    { to: 'duplicate@example.com', subject: 'duplicate-failed' },
-    { ...survey, respondentToken: 'respondent-two' }
-  );
-  const second = processor.enqueue(
-    { to: 'second@example.com', subject: 'second' },
-    { ...survey, respondentToken: 'respondent-three' }
-  );
-  const duplicateSuccess = processor.enqueue(
-    { to: 'duplicate@example.com', subject: 'duplicate-success' },
-    { ...survey, respondentToken: 'respondent-four' }
-  );
-  releaseFirst();
-
-  assert.deepEqual(await first, { id: 'first' });
-  await assert.rejects(failed, (error) => error === providerError);
-  assert.deepEqual(await second, { id: 'second' });
-  assert.deepEqual(await duplicateSuccess, { id: 'duplicate-success' });
-  assert.deepEqual(marked, [
-    { ...survey, respondentTokens: ['respondent-one'] },
-    { ...survey, respondentTokens: ['respondent-three', 'respondent-four'] },
+  assert.deepEqual(await processor.enqueue(
+    { to: 'invite@example.com' },
+    { respondentToken: 'respondent-one', invitationClaimToken: 'claim' }
+  ), { id: 'invite@example.com' });
+  assert.deepEqual(await processor.enqueue(
+    { to: 'reminder@example.com' },
+    { trackDelivery: false }
+  ), { id: 'reminder@example.com' });
+  assert.deepEqual(events, [
+    'ownership:respondent-one',
+    'provider:invite@example.com',
+    'provider:reminder@example.com',
   ]);
-  assert.equal(processor.queue.length, 0);
-  assert.equal(processor.isProcessing(), false);
 });
 
 test('test and reminder queue sends await providers without marking initial invitation delivery', async () => {
@@ -1529,83 +1642,703 @@ test('test and reminder queue sends await providers without marking initial invi
   assert.deepEqual(marked, []);
 });
 
-test('email queue settles successful sends even when email_sent bookkeeping fails', async () => {
+test('email queue ownership rejection skips stale queued sends', async () => {
+  let providerCalls = 0;
   const processor = createEmailQueueProcessor({
-    sendEmail: async () => ({ id: 'sent' }),
-    markSuccessful: async () => { throw new Error('database unavailable'); },
+    withInvitationOwnership: async () => {
+      const error = new Error('lost');
+      error.code = 'INVITATION_CLAIM_LOST';
+      throw error;
+    },
+    sendEmail: async () => { providerCalls += 1; },
   });
 
-  assert.deepEqual(await processor.enqueue(
+  await assert.rejects(
+    processor.enqueue(
+      { to: 'stale@example.com' },
+      { invitationClaimToken: 'stale-claim', idempotencyKey: 'survey-invitation-delivery-id' }
+    ),
+    (error) => error.code === 'INVITATION_CLAIM_LOST'
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test('email queue passes a stable provider idempotency option only for invitations', async () => {
+  const calls = [];
+  const processor = createEmailQueueProcessor({
+    sendEmail: async (emailData, options) => {
+      calls.push({ emailData, options });
+      return { id: 'accepted' };
+    },
+  });
+  const idempotencyKey = 'survey-invitation-11111111-1111-4111-8111-111111111111';
+
+  await processor.enqueue({ to: 'invite@example.com' }, { idempotencyKey });
+  await processor.enqueue({ to: 'reminder@example.com' }, { trackDelivery: false });
+  await processor.enqueue({ to: 'invite@example.com' }, { idempotencyKey });
+
+  assert.deepEqual(calls.map(({ options }) => options), [
+    { idempotencyKey },
+    undefined,
+    { idempotencyKey },
+  ]);
+});
+
+test('email queue propagates invitation ownership bookkeeping failures', async () => {
+  const bookkeepingError = new Error('database unavailable');
+  const processor = createEmailQueueProcessor({
+    sendEmail: async () => ({ id: 'sent' }),
+    withInvitationOwnership: async () => { throw bookkeepingError; },
+  });
+
+  await assert.rejects(processor.enqueue(
     { to: 'sent@example.com' },
-    { surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'respondent-token' }
-  ), { id: 'sent' });
+    { invitationClaimToken: 'claim' }
+  ), (error) => error === bookkeepingError);
   assert.equal(processor.isProcessing(), false);
 });
 
-test('startSurvey releases its client and prevalidates every canonicalized template before enqueueing', async (t) => {
+test('startSurvey validates production Resend configuration before connecting or claiming', async (t) => {
   const originalConnect = pool.connect;
-  const initialQueueLength = emailQueue.length;
-  let released = false;
-  t.after(() => {
-    pool.connect = originalConnect;
-    emailQueue.splice(initialQueueLength);
-  });
-  pool.connect = async () => ({
-    async query(sql) {
-      if (/FROM Respondent/i.test(sql)) {
-        return { rows: [
-          { contact_info: 'one@example.com', uuid: 'one', lang: 'en' },
-          { contact_info: 'two@example.com', uuid: 'two', lang: "'Spanish'" },
-        ] };
-      }
-      return { rows: [{ lang: '"English"', text: 'Hello', subject: 'Subject' }] };
-    },
-    release() { released = true; },
-  });
+  let connectCalls = 0;
+  t.after(() => { pool.connect = originalConnect; });
+  pool.connect = async () => {
+    connectCalls += 1;
+    throw new Error('must not connect');
+  };
 
-  await assert.rejects(startSurvey({ id: 'survey-id', name: 'Survey A' }), /Spanish/);
-  assert.equal(released, true);
-  assert.equal(emailQueue.length, initialQueueLength, 'no recipient is queued when any template is missing');
+  await assert.rejects(
+    startSurvey({ id: 'survey-id', name: 'Survey A' }),
+    /Missing RESEND_KEY or RESEND_API_KEY/
+  );
+  assert.equal(connectCalls, 0, 'configuration failure persists zero claims');
 });
 
-test('startSurvey awaits every provider send and rejects delivery failures after releasing its client', async (t) => {
+test('startSurvey prevalidates all templates before persisting a claim or sending', async (t) => {
   const originalConnect = pool.connect;
-  let released = false;
-  let respondentSql = '';
-  const sent = [];
+  const calls = [];
   t.after(() => { pool.connect = originalConnect; });
   pool.connect = async () => ({
     async query(sql) {
-      if (/FROM Respondent/i.test(sql)) {
-        respondentSql = sql;
+      if (sql === 'BEGIN' || sql === 'ROLLBACK') calls.push(sql);
+      else if (/^\s*SELECT[\s\S]*FROM Respondent/i.test(sql)) {
+        calls.push('SELECT respondents');
         return { rows: [
           { contact_info: 'one@example.com', uuid: 'one', lang: 'English' },
-          { contact_info: 'two@example.com', uuid: 'two', lang: 'English' },
+          { contact_info: 'two@example.com', uuid: 'two', lang: 'Spanish' },
+        ] };
+      } else if (/^\s*SELECT[\s\S]*FROM email/i.test(sql)) {
+        calls.push('SELECT templates');
+        return { rows: [{ lang: 'English', text: 'Hello', subject: 'Subject' }] };
+      } else calls.push('WRITE');
+      return { rows: [] };
+    },
+    release() { calls.push('release'); },
+  });
+
+  let sent = false;
+  await assert.rejects(
+    startSurvey({ id: 'survey-id', name: 'Survey A' }, async () => { sent = true; }),
+    /Spanish/
+  );
+  assert.deepEqual(calls, ['BEGIN', 'SELECT respondents', 'SELECT templates', 'ROLLBACK', 'release']);
+  assert.equal(sent, false);
+});
+
+test('startSurvey uses claimed_at for retry delay and immutable first_attempted_at for the 23h cutoff', async (t) => {
+  const originalConnect = pool.connect;
+  const transactionCalls = [];
+  t.after(() => { pool.connect = originalConnect; });
+  pool.connect = async () => ({
+    async query(sql, values) {
+      transactionCalls.push({ sql, values });
+      if (/^\s*SELECT[\s\S]*FROM Respondent/i.test(sql)) {
+        assert.match(sql, /invitation_claim_token IS NULL[\s\S]*claimed_at < CURRENT_TIMESTAMP - \(\$3 \* INTERVAL '1 minute'\)[\s\S]*first_attempted_at IS NULL[\s\S]*first_attempted_at > CURRENT_TIMESTAMP - \(\$4 \* INTERVAL '1 hour'\)[\s\S]*FOR UPDATE SKIP LOCKED/i);
+        assert.deepEqual(values, ['survey-id', 'Survey A', 30, 23]);
+        // Never-attempted abandoned claims can retry after claimed_at goes stale.
+        // Once a provider request starts, the immutable first attempt controls the
+        // cutoff even though every ambiguous failure refreshes claimed_at.
+        return { rows: [
+          { contact_info: 'new@example.com', uuid: 'new', lang: 'English', invitation_delivery_id: '11111111-1111-4111-8111-111111111111' },
+          { contact_info: 'retry@example.com', uuid: 'retry', lang: 'English', invitation_delivery_id: '22222222-2222-4222-8222-222222222222' },
         ] };
       }
-      return { rows: [{ lang: 'English', text: 'Hello', subject: 'Subject' }] };
+      if (/^\s*SELECT[\s\S]*FROM email/i.test(sql)) {
+        return { rows: [{ lang: 'English', text: 'Hello', subject: 'Subject' }] };
+      }
+      if (/^\s*UPDATE Respondent/i.test(sql)) {
+        assert.match(sql, /invitation_claim_token IS NULL[\s\S]*claimed_at < CURRENT_TIMESTAMP - \(\$5 \* INTERVAL '1 minute'\)[\s\S]*first_attempted_at IS NULL[\s\S]*first_attempted_at > CURRENT_TIMESTAMP - \(\$6 \* INTERVAL '1 hour'\)/i);
+        assert.deepEqual(values.slice(4), [30, 23]);
+        return { rows: [{ uuid: 'new' }, { uuid: 'retry' }] };
+      }
+      return { rows: [] };
     },
-    release() { released = true; },
+    release() { transactionCalls.push({ sql: 'RELEASE' }); },
   });
-  const providerError = new Error('Resend failed');
-  const mailer = async (email, token, surveyName, text, subject, options) => {
-    assert.equal(released, true);
-    sent.push({ email, token, surveyName, text, subject, options });
-    if (email === 'two@example.com') throw providerError;
+
+  const sent = [];
+  await startSurvey({ id: 'survey-id', name: 'Survey A' }, async (_email, uuid, _name, _text, _subject, options) => {
+    sent.push({ uuid, options });
+  });
+  assert.deepEqual(sent.map(({ uuid }) => uuid), ['new', 'retry']);
+  assert.equal(sent[0].options.invitationClaimToken, sent[1].options.invitationClaimToken);
+  assert.equal(sent[0].options.invitationDeliveryId, '11111111-1111-4111-8111-111111111111');
+  assert.equal(transactionCalls.at(-2).sql, 'COMMIT');
+  assert.equal(transactionCalls.at(-1).sql, 'RELEASE');
+});
+
+test('startSurvey releases a claim after a synchronous pre-enqueue mailer failure', async (t) => {
+  const originalConnect = pool.connect;
+  const originalQuery = pool.query;
+  const releases = [];
+  t.after(() => {
+    pool.connect = originalConnect;
+    pool.query = originalQuery;
+  });
+  pool.connect = async () => ({
+    async query(sql) {
+      if (/^\s*SELECT[\s\S]*FROM Respondent/i.test(sql)) {
+        return { rows: [{
+          contact_info: 'one@example.com', uuid: 'one', lang: 'English',
+          invitation_delivery_id: '11111111-1111-4111-8111-111111111111',
+        }] };
+      }
+      if (/^\s*SELECT[\s\S]*FROM email/i.test(sql)) {
+        return { rows: [{ lang: 'English', text: 'Hello', subject: 'Subject' }] };
+      }
+      if (/^\s*UPDATE Respondent/i.test(sql)) return { rows: [{ uuid: 'one' }] };
+      return { rows: [] };
+    },
+    release() {},
+  });
+  pool.query = async (sql, values) => {
+    releases.push({ sql, values });
+    return { rowCount: 1, rows: [] };
+  };
+  const localError = new Error('could not construct request');
+
+  await assert.rejects(
+    startSurvey({ id: 'survey-id', name: 'Survey A' }, () => { throw localError; }),
+    (error) => error === localError
+  );
+  assert.equal(releases.length, 1);
+  assert.match(releases[0].sql, /invitation_claim_token = NULL[\s\S]*invitation_claimed_at = NULL[\s\S]*invitation_first_attempted_at = NULL/i);
+  assert.deepEqual(releases[0].values[0], ['one']);
+  assert.equal(typeof releases[0].values[1], 'string');
+});
+
+test('a concurrent start skips claimed rows instead of relying on process-local state', async (t) => {
+  const originalConnect = pool.connect;
+  const originalQuery = pool.query;
+  let connectionNumber = 0;
+  t.after(() => {
+    pool.connect = originalConnect;
+    pool.query = originalQuery;
+  });
+  pool.query = async (_sql, values) => ({ rowCount: values?.[0]?.length || 0, rows: [] });
+  pool.connect = async () => {
+    const ownNumber = ++connectionNumber;
+    return {
+      async query(sql) {
+        if (/^\s*SELECT[\s\S]*FROM Respondent/i.test(sql)) {
+          return { rows: ownNumber === 1
+            ? [{ contact_info: 'one@example.com', uuid: 'one', lang: 'English' }]
+            : [] };
+        }
+        if (/^\s*SELECT[\s\S]*FROM email/i.test(sql)) {
+          return { rows: [{ lang: 'English', text: 'Hello', subject: 'Subject' }] };
+        }
+        if (/^\s*UPDATE Respondent/i.test(sql)) return { rows: [{ uuid: 'one' }] };
+        return { rows: [] };
+      },
+      release() {},
+    };
   };
 
-  await assert.rejects(startSurvey({ id: 'survey-id', name: 'Survey A' }, mailer), (error) => error === providerError);
-  assert.match(respondentSql, /email_sent\s+IS\s+NOT\s+TRUE/i, 'retry query excludes already-successful recipients');
-  assert.deepEqual(sent, [
-    {
-      email: 'one@example.com', token: 'one', surveyName: 'Survey A', text: 'Hello', subject: 'Subject',
-      options: { surveyId: 'survey-id', trackDelivery: true },
+  let finishFirst;
+  let firstReached;
+  const reached = new Promise((resolve) => { firstReached = resolve; });
+  const first = startSurvey({ id: 'survey-id', name: 'Survey A' }, async () => {
+    firstReached();
+    await new Promise((resolve) => { finishFirst = resolve; });
+  });
+  await reached;
+  let secondSent = false;
+  await startSurvey({ id: 'survey-id', name: 'Survey A' }, async () => { secondSent = true; });
+  assert.equal(secondSent, false);
+  finishFirst();
+  await first;
+});
+
+test('attempt horizon commits before provider I/O and the second row lock spans delivery', async () => {
+  const events = [];
+  let lockHeld = false;
+  let commitCount = 0;
+  const client = {
+    async query(sql) {
+      if (sql === 'BEGIN') return { rowCount: 0 };
+      if (/SELECT uuid FROM Respondent/i.test(sql)) {
+        lockHeld = true;
+        events.push(`send-lock-${commitCount + 1}`);
+        return { rowCount: 1, rows: [{ uuid: 'respondent-token' }] };
+      }
+      if (/invitation_first_attempted_at = COALESCE/i.test(sql)) {
+        events.push('horizon-update');
+        return { rowCount: 1 };
+      }
+      if (/SET email_sent = true/i.test(sql)) {
+        events.push('send-finalize');
+        return { rowCount: 1 };
+      }
+      if (sql === 'COMMIT') {
+        commitCount += 1;
+        events.push(`send-commit-${commitCount}`);
+        lockHeld = false;
+        return { rowCount: 0 };
+      }
+      if (sql === 'ROLLBACK') return { rowCount: 0 };
+      throw new Error(`Unexpected SQL: ${sql}`);
     },
-    {
-      email: 'two@example.com', token: 'two', surveyName: 'Survey A', text: 'Hello', subject: 'Subject',
-      options: { surveyId: 'survey-id', trackDelivery: true },
+    release() { events.push('release'); },
+  };
+  let releaseProvider;
+  const providerHeld = new Promise((resolve) => { releaseProvider = resolve; });
+  const delivery = deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'respondent-token',
+    invitationClaimToken: 'claim-token', invitationDeliveryId: 'delivery-id',
+  }, async () => {
+    events.push('provider-start');
+    assert.equal(commitCount, 1, 'durable horizon transaction committed before provider invocation');
+    assert.equal(lockHeld, true, 'second SELECT FOR UPDATE lock is held during provider I/O');
+    await providerHeld;
+    events.push('provider-end');
+    return { id: 'accepted' };
+  }, { connect: async () => client });
+
+  while (!events.includes('provider-start')) await Promise.resolve();
+  events.push('edit-attempt');
+  assert.equal(lockHeld, true);
+  releaseProvider();
+  assert.deepEqual(await delivery, { id: 'accepted' });
+  assert.deepEqual(events, [
+    'send-lock-1', 'horizon-update', 'send-commit-1', 'send-lock-2',
+    'provider-start', 'edit-attempt', 'provider-end', 'send-finalize',
+    'send-commit-2', 'release',
+  ]);
+});
+
+test('exact 23-hour invitation horizon boundary is quarantined before provider I/O', async () => {
+  const cutoffHours = 23;
+  const now = Date.parse('2026-01-02T12:00:00.000Z');
+  const row = {
+    claimToken: 'claim-token',
+    firstAttemptedAt: now - (cutoffHours * 60 * 60 * 1000),
+  };
+  const calls = [];
+  let providerCalled = false;
+  const client = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (/SELECT uuid FROM Respondent/i.test(sql)) {
+        const checksHorizon = /invitation_first_attempted_at IS NOT NULL/i.test(sql);
+        const insideHorizon = row.firstAttemptedAt !== null
+          && row.firstAttemptedAt > now - (values.at(-1) * 60 * 60 * 1000);
+        return { rowCount: checksHorizon && !insideHorizon ? 0 : 1, rows: [{ uuid: 'respondent-token' }] };
+      }
+      if (/invitation_first_attempted_at = COALESCE/i.test(sql)) return { rowCount: 1 };
+      return { rowCount: 0 };
     },
-  ], 'all eligible unsent respondents are attempted with exact delivery metadata');
+    release() { calls.push({ sql: 'RELEASE' }); },
+  };
+
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'respondent-token',
+    invitationClaimToken: row.claimToken, invitationDeliveryId: 'delivery-id',
+  }, async () => { providerCalled = true; }, { connect: async () => client }), (error) => {
+    assert.equal(error.code, 'INVITATION_CLAIM_LOST');
+    assert.match(error.message, /quarantined/i);
+    return true;
+  });
+
+  const horizonLock = calls.find(({ sql }) => /invitation_first_attempted_at IS NOT NULL/i.test(sql));
+  assert.ok(horizonLock);
+  assert.match(horizonLock.sql, /invitation_first_attempted_at > CURRENT_TIMESTAMP - \(\$6 \* INTERVAL '1 hour'\)/i);
+  assert.equal(horizonLock.values[5], cutoffHours);
+  assert.equal(providerCalled, false);
+  assert.equal(row.claimToken, 'claim-token');
+  assert.equal(row.firstAttemptedAt, now - (cutoffHours * 60 * 60 * 1000));
+  assert.deepEqual(calls.filter(({ sql }) => sql === 'COMMIT' || sql === 'ROLLBACK').map(({ sql }) => sql), ['COMMIT', 'ROLLBACK']);
+});
+
+test('queued retry crossing the 23-hour cutoff leaves its claim and horizon quarantined', async () => {
+  const cutoffMs = 23 * 60 * 60 * 1000;
+  let databaseNow = Date.parse('2026-01-02T12:00:00.000Z');
+  const row = {
+    claimToken: 'claim-token',
+    firstAttemptedAt: databaseNow - cutoffMs + 1,
+    claimedAt: databaseNow - (31 * 60 * 1000),
+  };
+  const originalHorizon = row.firstAttemptedAt;
+  let commitCount = 0;
+  let providerCalled = false;
+  const client = {
+    async query(sql, values) {
+      if (/SELECT uuid FROM Respondent/i.test(sql)) {
+        const checksHorizon = /invitation_first_attempted_at IS NOT NULL/i.test(sql);
+        const insideHorizon = row.firstAttemptedAt !== null
+          && row.firstAttemptedAt > databaseNow - (values.at(-1) * 60 * 60 * 1000);
+        return { rowCount: checksHorizon && !insideHorizon ? 0 : 1, rows: [{ uuid: 'respondent-token' }] };
+      }
+      if (/invitation_first_attempted_at = COALESCE/i.test(sql)) {
+        row.claimedAt = databaseNow;
+        row.firstAttemptedAt ??= databaseNow;
+        return { rowCount: 1 };
+      }
+      if (sql === 'COMMIT') {
+        commitCount += 1;
+        if (commitCount === 1) databaseNow += 2;
+      }
+      return { rowCount: 0 };
+    },
+    release() {},
+  };
+
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'respondent-token',
+    invitationClaimToken: row.claimToken, invitationDeliveryId: 'delivery-id',
+  }, async () => { providerCalled = true; }, { connect: async () => client }), (error) => {
+    assert.equal(error.code, 'INVITATION_CLAIM_LOST');
+    assert.match(error.message, /quarantined/i);
+    return true;
+  });
+  assert.equal(providerCalled, false);
+  assert.equal(row.claimToken, 'claim-token');
+  assert.equal(row.firstAttemptedAt, originalHorizon, 'the immutable horizon remains available for quarantine');
+});
+
+test('first-ever invitation passes final horizon validation after its timestamp commits', async () => {
+  let databaseNow = Date.parse('2026-01-02T12:00:00.000Z');
+  const row = { firstAttemptedAt: null };
+  let commitCount = 0;
+  let providerCalled = false;
+  const client = {
+    async query(sql, values) {
+      if (/SELECT uuid FROM Respondent/i.test(sql)) {
+        const checksHorizon = /invitation_first_attempted_at IS NOT NULL/i.test(sql);
+        const insideHorizon = row.firstAttemptedAt !== null
+          && row.firstAttemptedAt > databaseNow - (values.at(-1) * 60 * 60 * 1000);
+        return { rowCount: checksHorizon && !insideHorizon ? 0 : 1, rows: [{ uuid: 'respondent-token' }] };
+      }
+      if (/invitation_first_attempted_at = COALESCE/i.test(sql)) {
+        row.firstAttemptedAt ??= databaseNow;
+        return { rowCount: 1 };
+      }
+      if (/SET email_sent = true/i.test(sql)) return { rowCount: 1 };
+      if (sql === 'COMMIT' && ++commitCount === 1) databaseNow += 1000;
+      return { rowCount: 0 };
+    },
+    release() {},
+  };
+
+  const result = await deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'respondent-token',
+    invitationClaimToken: 'claim-token', invitationDeliveryId: 'delivery-id',
+  }, async () => {
+    providerCalled = true;
+    return { id: 'accepted' };
+  }, { connect: async () => client });
+
+  assert.equal(providerCalled, true);
+  assert.deepEqual(result, { id: 'accepted' });
+});
+
+test('ownership loss between horizon commit and second lock skips provider', async () => {
+  const calls = [];
+  let selectCount = 0;
+  let providerCalled = false;
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (/SELECT uuid FROM Respondent/i.test(sql)) {
+        selectCount += 1;
+        return selectCount === 1
+          ? { rowCount: 1, rows: [{ uuid: 'respondent-token' }] }
+          : { rowCount: 0, rows: [] };
+      }
+      if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+      return { rowCount: 0 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'respondent-token',
+    invitationClaimToken: 'claim-token', invitationDeliveryId: 'delivery-id',
+  }, async () => { providerCalled = true; }, { connect: async () => client }), (error) => {
+    assert.equal(error.code, 'INVITATION_CLAIM_LOST');
+    return true;
+  });
+  assert.equal(providerCalled, false);
+  assert.deepEqual(calls.filter((sql) => sql === 'COMMIT' || sql === 'ROLLBACK'), ['COMMIT', 'ROLLBACK']);
+  assert.equal(calls.at(-1), 'RELEASE');
+});
+
+test('definitive provider rejection releases the exact claim atomically before surfacing the error', async () => {
+  const calls = [];
+  const providerDetail = { message: 'provider rejected', statusCode: 422 };
+  const resendClient = {
+    emails: { send: async () => ({ data: null, error: providerDetail }) },
+  };
+  const client = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+      if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+      return { rowCount: 0 };
+    },
+    release() { calls.push({ sql: 'RELEASE' }); },
+  };
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+    invitationClaimToken: 'claim', invitationDeliveryId: 'stable-delivery-id',
+  }, () => sendEmailWithResend({ to: 'bad@example.com' }, resendClient), { connect: async () => client }), (error) => {
+    assert.equal(error.providerError, providerDetail);
+    assert.equal(error.definitiveProviderRejection, true);
+    return true;
+  });
+  const releaseClaim = calls.find(({ sql }) => /SET email_sent = false,[\s\S]*invitation_claim_token = NULL/i.test(sql));
+  assert.ok(releaseClaim);
+  assert.match(releaseClaim.sql, /invitation_first_attempted_at = NULL/);
+  assert.deepEqual(releaseClaim.values.slice(0, 3), ['token', 'claim', 'stable-delivery-id']);
+  assert.deepEqual(calls.slice(-2).map(({ sql }) => sql), ['COMMIT', 'RELEASE']);
+});
+
+test('ambiguous Resend statuses and idempotency conflicts retain the durable invitation horizon', async () => {
+  const cases = [
+    { message: 'application error', name: 'application_error', statusCode: null },
+    { message: 'provider unavailable', statusCode: 500 },
+    { message: 'malformed status', statusCode: '422' },
+    { message: 'request timed out', statusCode: 408 },
+    { message: 'request timed out', name: 'timeout_error', statusCode: 422 },
+    { message: 'request aborted', code: 'ABORTED', statusCode: 400 },
+    { message: 'conflict', statusCode: 409 },
+    { message: 'concurrent request', name: 'concurrent_idempotent_requests', statusCode: 409 },
+    { message: 'invalid request', name: 'invalid_idempotent_request', statusCode: 409 },
+  ];
+
+  for (const providerDetail of cases) {
+    const calls = [];
+    const client = {
+      async query(sql, values) {
+        calls.push({ sql, values });
+        if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+        if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+        return { rowCount: 0 };
+      },
+      release() { calls.push({ sql: 'RELEASE' }); },
+    };
+    const resendClient = {
+      emails: { send: async () => ({ data: null, error: providerDetail }) },
+    };
+
+    await assert.rejects(deliverInvitationWithOwnership({
+      surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+      invitationClaimToken: 'claim', invitationDeliveryId: 'stable-delivery-id',
+    }, () => sendEmailWithResend({ to: 'bad@example.com' }, resendClient), { connect: async () => client }), (error) => {
+      assert.equal(error.providerError, providerDetail);
+      assert.equal(error.definitiveProviderRejection, false);
+      return true;
+    });
+
+    const updates = calls.filter(({ sql }) => /UPDATE Respondent/i.test(sql));
+    assert.equal(updates.length, 2);
+    assert.match(updates[0].sql, /invitation_first_attempted_at = COALESCE/i);
+    assert.match(updates[1].sql, /SET invitation_claimed_at = CURRENT_TIMESTAMP/i);
+    assert.doesNotMatch(updates[1].sql, /invitation_first_attempted_at\s*=|invitation_claim_token\s*=\s*NULL/i);
+    assert.deepEqual(calls.slice(-2).map(({ sql }) => sql), ['COMMIT', 'RELEASE']);
+  }
+});
+
+test('provider timeout retains the durable invitation horizon and releases its transaction client', async () => {
+  const calls = [];
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+      if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+      return { rowCount: 0 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+  const timeoutController = new AbortController();
+  const resendClient = {
+    emails: {
+      send: async (_emailData, options) => {
+        queueMicrotask(() => timeoutController.abort(new DOMException(
+          'The operation was aborted due to timeout',
+          'TimeoutError'
+        )));
+        return new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        });
+      },
+    },
+  };
+
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+    invitationClaimToken: 'claim', invitationDeliveryId: 'stable-delivery-id',
+  }, () => sendEmailWithResend(
+    { to: 'timeout@example.com' },
+    {
+      idempotencyKey: 'survey-invitation-stable-delivery-id',
+      signal: timeoutController.signal,
+    },
+    resendClient
+  ), { connect: async () => client }), (error) => {
+    assert.equal(error.name, 'TimeoutError');
+    assert.equal(error.definitiveProviderRejection, false);
+    return true;
+  });
+
+  const updates = calls.filter((sql) => /UPDATE Respondent/i.test(sql));
+  assert.equal(updates.length, 2);
+  assert.match(updates[0], /invitation_first_attempted_at = COALESCE/i);
+  assert.match(updates[1], /SET invitation_claimed_at = CURRENT_TIMESTAMP/i);
+  assert.doesNotMatch(updates[1], /invitation_claim_token\s*=\s*NULL|invitation_first_attempted_at\s*=/i);
+  assert.deepEqual(calls.slice(-2), ['COMMIT', 'RELEASE']);
+});
+
+test('repeated ambiguous provider failures retain the immutable first attempt and refresh only retry time', async () => {
+  const calls = [];
+  const transportError = new Error('request timed out');
+  const client = {
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+      if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+      return { rowCount: 0 };
+    },
+    release() { calls.push({ sql: 'RELEASE' }); },
+  };
+
+  const attempt = () => assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+    invitationClaimToken: 'claim', invitationDeliveryId: 'stable-delivery-id',
+  }, async () => { throw transportError; }, { connect: async () => client }), (error) => error === transportError);
+  await attempt();
+  await attempt();
+
+  const updates = calls.filter(({ sql }) => /UPDATE Respondent/i.test(sql));
+  assert.equal(updates.length, 4, 'each request refreshes retry time before and after its ambiguous failure');
+  for (const requestUpdate of [updates[0], updates[2]]) {
+    assert.match(requestUpdate.sql, /invitation_first_attempted_at = COALESCE\(invitation_first_attempted_at, CURRENT_TIMESTAMP\)/i);
+  }
+  for (const failureUpdate of [updates[1], updates[3]]) {
+    assert.match(failureUpdate.sql, /SET invitation_claimed_at = CURRENT_TIMESTAMP/i);
+    assert.doesNotMatch(failureUpdate.sql, /invitation_first_attempted_at\s*=/i);
+    assert.match(failureUpdate.sql, /invitation_claim_token = \$2[\s\S]*invitation_delivery_id = \$3/i);
+    assert.doesNotMatch(failureUpdate.sql, /invitation_claim_token = NULL|invitation_claimed_at = NULL|invitation_first_attempted_at = NULL/i);
+    assert.deepEqual(failureUpdate.values.slice(0, 3), ['token', 'claim', 'stable-delivery-id']);
+  }
+  assert.deepEqual(calls.slice(-2).map(({ sql }) => sql), ['COMMIT', 'RELEASE']);
+});
+
+test('hard provider throw retains the already committed durable horizon', async () => {
+  const calls = [];
+  const transportError = new Error('socket closed');
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+      if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+      return { rowCount: 0 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+    invitationClaimToken: 'claim', invitationDeliveryId: 'delivery-id',
+  }, async () => {
+    assert.equal(calls.filter((sql) => sql === 'COMMIT').length, 1);
+    throw transportError;
+  }, { connect: async () => client }), (error) => error === transportError);
+
+  const updates = calls.filter((sql) => /UPDATE Respondent/i.test(sql));
+  assert.match(updates[0], /invitation_first_attempted_at = COALESCE/i);
+  assert.doesNotMatch(updates[1], /invitation_first_attempted_at\s*=|invitation_claim_token\s*=\s*NULL/i);
+  assert.deepEqual(calls.filter((sql) => sql === 'COMMIT'), ['COMMIT', 'COMMIT']);
+  assert.equal(calls.at(-1), 'RELEASE');
+});
+
+test('invitation callback rolls back and releases when final bookkeeping fails', async () => {
+  const calls = [];
+  const bookkeepingError = new Error('finalization failed');
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+      if (/SET invitation_claimed_at/i.test(sql)) return { rowCount: 1 };
+      if (/SET email_sent = true/i.test(sql)) throw bookkeepingError;
+      return { rowCount: 0 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+    invitationClaimToken: 'claim', invitationDeliveryId: 'delivery-id',
+  }, async () => ({ id: 'accepted' }), { connect: async () => client }), (error) => error === bookkeepingError);
+  assert.equal(calls.at(-2), 'ROLLBACK');
+  assert.equal(calls.at(-1), 'RELEASE');
+  assert.equal(calls.filter((sql) => /invitation_first_attempted_at = COALESCE/i.test(sql)).length, 1);
+});
+
+test('first transaction commit failure rolls back, releases, and skips provider', async () => {
+  const calls = [];
+  const commitError = new Error('commit failed');
+  let providerCalled = false;
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+      if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+      if (sql === 'COMMIT') throw commitError;
+      return { rowCount: 0 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+    invitationClaimToken: 'claim', invitationDeliveryId: 'delivery-id',
+  }, async () => { providerCalled = true; }, { connect: async () => client }), (error) => error === commitError);
+  assert.equal(providerCalled, false);
+  assert.equal(calls.at(-3), 'COMMIT');
+  assert.equal(calls.at(-2), 'ROLLBACK');
+  assert.equal(calls.at(-1), 'RELEASE');
+});
+
+test('final commit failure rolls back while retaining the durable first-attempt horizon', async () => {
+  const calls = [];
+  const commitError = new Error('final commit failed');
+  let commitCount = 0;
+  const client = {
+    async query(sql) {
+      calls.push(sql);
+      if (/SELECT uuid FROM Respondent/i.test(sql)) return { rowCount: 1, rows: [{ uuid: 'token' }] };
+      if (/UPDATE Respondent/i.test(sql)) return { rowCount: 1 };
+      if (sql === 'COMMIT' && ++commitCount === 2) throw commitError;
+      return { rowCount: 0 };
+    },
+    release() { calls.push('RELEASE'); },
+  };
+  await assert.rejects(deliverInvitationWithOwnership({
+    surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token',
+    invitationClaimToken: 'claim', invitationDeliveryId: 'delivery-id',
+  }, async () => ({ id: 'accepted' }), { connect: async () => client }), (error) => error === commitError);
+  assert.deepEqual(calls.filter((sql) => sql === 'COMMIT' || sql === 'ROLLBACK'), ['COMMIT', 'COMMIT', 'ROLLBACK']);
+  assert.equal(calls.filter((sql) => /invitation_first_attempted_at = COALESCE/i.test(sql)).length, 1);
+  assert.equal(calls.at(-1), 'RELEASE');
 });
 
 test('notification validation enforces language, safe nonblank subjects, and text bounds', () => {
@@ -2132,7 +2865,7 @@ test('dashboard read-only tables hide edit controls and demo email avoids public
   assert.match(questionTable, /editable: !readOnly/);
   assert.match(questionTable, /!readOnly &&/);
   assert.match(respondentTable, /readOnly = false/);
-  assert.match(respondentTable, /disabled=\{readOnly\}/);
+  assert.match(respondentTable, /disabled=\{readOnly \|\| !loaded \|\| busy\}/);
   assert.match(respondentTable, /!readOnly &&/);
   assert.match(respondentTable, /surveyName,/);
   assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);
@@ -2280,12 +3013,39 @@ test('survey create organization defaulting handles none, one, multiple, and pla
   assert.equal(res.statusCode, 400);
 });
 
-test('startSurvey email_sent update and survey archive implementation are scoped and non-destructive', () => {
+test('respondent contact changes revoke old access UUIDs and start a fresh delivery without clearing responses', () => {
   const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
-  assert.match(serverSource, /UPDATE Respondent SET email_sent = true[\s\S]*WHERE uuid = ANY\(\$1\)[\s\S]*survey_id = \$2 OR \(survey_id IS NULL AND survey_name = \$3\)/);
-  assert.doesNotMatch(serverSource, /email_sent = true WHERE contact_info = ANY/);
+  const insertUsersSource = serverSource.match(/async function insertUsers[\s\S]*?async function insertEmails/)?.[0] || '';
+  assert.match(insertUsersSource, /Respondent\.contact_info IS DISTINCT FROM EXCLUDED\.contact_info/);
+  assert.match(insertUsersSource, /Respondent\.lang IS DISTINCT FROM EXCLUDED\.lang/);
+  assert.match(insertUsersSource, /Respondent\.can_respond IS DISTINCT FROM EXCLUDED\.can_respond/);
+  assert.match(insertUsersSource, /uuid = CASE[\s\S]*contact_info IS DISTINCT FROM EXCLUDED\.contact_info[\s\S]*THEN EXCLUDED\.uuid[\s\S]*ELSE Respondent\.uuid/);
+  assert.match(insertUsersSource, /crypto\.randomUUID\(\)/);
+  assert.doesNotMatch(insertUsersSource, /response\s*=/);
+  assert.match(insertUsersSource, /invitation_delivery_id = CASE[\s\S]*THEN gen_random_uuid\(\)[\s\S]*ELSE Respondent\.invitation_delivery_id/);
+  assert.match(insertUsersSource, /THEN false\s+ELSE Respondent\.email_sent/);
+  assert.match(insertUsersSource, /invitation_claim_token = CASE[\s\S]*THEN NULL[\s\S]*ELSE Respondent\.invitation_claim_token/);
+  assert.match(insertUsersSource, /invitation_claimed_at = CASE[\s\S]*THEN NULL[\s\S]*ELSE Respondent\.invitation_claimed_at/);
+  assert.match(insertUsersSource, /invitation_first_attempted_at = CASE[\s\S]*THEN NULL[\s\S]*ELSE Respondent\.invitation_first_attempted_at/);
+});
+
+test('startSurvey durable claim implementation and survey archive are scoped and non-destructive', () => {
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  const startSurveySource = serverSource.match(/async function startSurvey[\s\S]*?\/\/ sendMail/)?.[0] || '';
+  const deliverySource = serverSource.match(/async function deliverInvitationWithOwnership[\s\S]*?const emailQueueProcessor/)?.[0] || '';
+  assert.match(startSurveySource, /FOR UPDATE SKIP LOCKED/);
+  assert.match(startSurveySource, /SET invitation_claim_token = \$1, invitation_claimed_at = CURRENT_TIMESTAMP[\s\S]*RETURNING uuid/);
+  assert.match(startSurveySource, /first_attempted_at > CURRENT_TIMESTAMP - \(\$4 \* INTERVAL '1 hour'\)/);
+  assert.match(deliverySource, /FOR UPDATE/);
+  assert.match(deliverySource, /invitation_first_attempted_at = COALESCE\(invitation_first_attempted_at, CURRENT_TIMESTAMP\)[\s\S]*providerResult = await providerRequest\(\)/);
+  assert.match(deliverySource, /providerResult = await providerRequest\(\)[\s\S]*SET email_sent = true,[\s\S]*invitation_claim_token = NULL/);
+  assert.match(deliverySource, /SET email_sent = false,[\s\S]*invitation_claim_token = NULL[\s\S]*invitation_delivery_id = \$3/);
+  assert.doesNotMatch(startSurveySource, /SET email_sent = true|SET email_sent = false/);
   assert.match(serverSource, /respondentToken: id/);
-  assert.match(serverSource, /trackDelivery: false/);
+  assert.match(serverSource, /idempotencyKey: options\.invitationDeliveryId[\s\S]*survey-invitation-/);
+  assert.match(deliverySource, /SET invitation_claimed_at = CURRENT_TIMESTAMP[\s\S]*invitation_claim_token = \$2[\s\S]*invitation_delivery_id = \$3/);
+  assert.match(startSurveySource, /trackDelivery: false/);
+  assert.doesNotMatch(startSurveySource, /trackDelivery: true/);
   assert.match(serverSource, /UPDATE survey SET archived_at = CURRENT_TIMESTAMP, archived_by_user_id = \$1 WHERE id = \$2/);
   assert.doesNotMatch(serverSource, /DELETE FROM email WHERE survey_name[\s\S]+DELETE FROM respondent WHERE survey_name[\s\S]+DELETE FROM survey WHERE name/);
 });

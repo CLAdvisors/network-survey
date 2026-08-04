@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
@@ -37,11 +37,43 @@ const formatRowsToCSV = (rows) => {
   return `${CSV_HEADER}\n${dataRows.join('\n')}`;
 };
 
-const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = false }) => {
+const RespondentTable = ({
+  rows,
+  surveyName,
+  onRespondentsUpdate,
+  readOnly = false,
+  onDirtyChange,
+  onBusyChange,
+}) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
+  const busyCountRef = useRef(0);
+  const loaded = rows !== null && rows !== undefined && Boolean(surveyName);
+  const [busy, setBusy] = useState(false);
+
+  const beginBusy = useCallback(() => {
+    busyCountRef.current += 1;
+    setBusy(true);
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      busyCountRef.current = Math.max(0, busyCountRef.current - 1);
+      if (busyCountRef.current === 0) setBusy(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    onDirtyChange?.(hasChanges);
+    return () => onDirtyChange?.(false);
+  }, [hasChanges, onDirtyChange]);
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+  }, [busy, onBusyChange]);
   const [sortModel, setSortModel] = useState([
     {
       field: 'id',
@@ -50,13 +82,13 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
   ]);
 
   const columns = [
-    { field: 'name', headerName: 'User Name', width: 150, editable: !readOnly },
-    { field: 'email', headerName: 'Email', width: 200, editable: !readOnly },
+    { field: 'name', headerName: 'User Name', width: 150, editable: !readOnly && loaded && !busy },
+    { field: 'email', headerName: 'Email', width: 200, editable: !readOnly && loaded && !busy },
     { 
       field: 'language', 
       headerName: 'Language', 
       width: 130,
-      editable: !readOnly,
+      editable: !readOnly && loaded && !busy,
       type: 'singleSelect',
       valueOptions: LANGUAGES.map(lang => lang.label),
       renderCell: (params) => {
@@ -73,7 +105,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
       renderCell: (params) => (
         <Switch
           checked={params.value}
-          disabled={readOnly}
+          disabled={readOnly || !loaded || busy}
           onChange={(e) => {
             e.stopPropagation();
             const newValue = e.target.checked;
@@ -95,11 +127,14 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
       renderCell: (params) => (
         <TableMenuCell
           row={params.row}
+          disabled={!loaded || busy || hasChanges}
           actions={[
             {
               label: 'Send Reminder',
               icon: <EmailIcon fontSize="small" />,
               handler: async (row) => {
+                if (!loaded) return;
+                const finishBusy = beginBusy();
                 try {
                   const response = await api.post('/testEmail', {
                     email: row.email,
@@ -111,6 +146,8 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
                   const errorMsg = error.response?.data?.message || error.message || 'An unknown error occurred';
                   console.error('Error sending reminder:', error);
                   alert('Failed to send reminder: ' + errorMsg);
+                } finally {
+                  finishBusy();
                 }
               }
             },
@@ -119,6 +156,8 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
               icon: <DeleteIcon fontSize="small" />,
               color: 'error.main',
               handler: async (row) => {
+                if (!loaded) return;
+                const finishBusy = beginBusy();
                 try {
                   await api.delete('/user', {
                     data: {
@@ -126,9 +165,11 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
                       surveyName: surveyName
                     }
                   });
-                  params.row.onRespondentDeleted();
+                  await params.row.onRespondentDeleted();
                 } catch (error) {
                   console.error('Error deleting respondent:', error);
+                } finally {
+                  finishBusy();
                 }
               }
             }
@@ -141,19 +182,27 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
 
 
   useEffect(() => {
-    if (rows) {
-      const updatedRows = rows.map(row => ({
-        ...row,
-        language: row.language || 'English',
-        canRespond: row.canRespond === undefined ? true : row.canRespond,
-        onRespondentDeleted: fetchRespondentData
-      }));
-      setTableRows(updatedRows);
-      setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+    if (!rows) {
+      // Never retain one survey's local rows while the next survey is loading or
+      // has failed to load. `loaded` disables controls before this effect runs.
+      setTableRows([]);
+      setOriginalRows([]);
+      setHasChanges(false);
+      return;
     }
-  }, [rows]);
+    const updatedRows = rows.map(row => ({
+      ...row,
+      language: row.language || 'English',
+      canRespond: row.canRespond === undefined ? true : row.canRespond,
+      onRespondentDeleted: fetchRespondentData
+    }));
+    setTableRows(updatedRows);
+    setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+    setHasChanges(false);
+  }, [rows, surveyName]);
 
   const fetchRespondentData = async () => {
+    if (!loaded) return;
     try {
       const response = await api.get(`/targets?surveyName=${surveyName}`);
       const refreshedRows = response.data.map(row => ({
@@ -164,7 +213,8 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
       }));
       setTableRows(refreshedRows);
       setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
-      
+      setHasChanges(false);
+
       const surveysResponse = await api.get('/surveys');
       if (onRespondentsUpdate) {
         onRespondentsUpdate(surveysResponse.data.surveys);
@@ -175,7 +225,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
   };
 
   const handleProcessRowUpdate = (newRow) => {
-    if (readOnly) return originalRows.find(row => row.id === newRow.id) || newRow;
+    if (readOnly || !loaded || busy) return tableRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
@@ -193,6 +243,8 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
   };
 
   const handleSave = async () => {
+    if (!loaded) return;
+    const finishBusy = beginBusy();
     try {
       const changedRows = tableRows.filter(row => {
         const original = originalRows.find(origRow => origRow.id === row.id);
@@ -224,10 +276,14 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
       }
     } catch (error) {
       console.error('Failed to save changes:', error);
+    } finally {
+      finishBusy();
     }
   };
 
   const handleUpload = async (csvContent) => {
+    if (!loaded) return;
+    const finishBusy = beginBusy();
     try {
       const response = await api.post('/updateTargets', {
         csvData: csvContent,
@@ -240,10 +296,13 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
     } catch (err) {
       console.error('Error updating respondents:', err);
       throw err;
+    } finally {
+      finishBusy();
     }
   };
 
   const handleAddRow = () => {
+    if (!loaded) return;
     const newId = Math.max(0, ...tableRows.map(row => row.id)) + 1;
     const newRow = {
       id: newId,
@@ -274,11 +333,12 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
         </Typography>
         {!readOnly && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <AddRowButton onClick={handleAddRow} />
+            <AddRowButton onClick={handleAddRow} disabled={!loaded || busy} />
             <TableUploadButton
               onUpload={handleUpload}
               templateData={TEMPLATE_DATA}
               tableName="Respondents"
+              disabled={!loaded || busy || hasChanges}
             />
             {hasChanges && (
               <Button
@@ -286,6 +346,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
                 startIcon={<SaveIcon />}
                 onClick={handleSave}
                 size="small"
+                disabled={!loaded || busy}
               >
                 Save
               </Button>
@@ -302,7 +363,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
         }}
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={readOnly ? undefined : handleProcessRowUpdate}
+        processRowUpdate={readOnly || !loaded || busy ? undefined : handleProcessRowUpdate}
         components={{
           Toolbar: GridToolbar,
         }}

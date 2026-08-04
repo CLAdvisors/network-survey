@@ -2,14 +2,19 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { SurveyCreator, SurveyCreatorComponent } from 'survey-creator-react';
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
-// Base SurveyJS styles (theme is applied via cssType)
+// SurveyJS runtime themes are applied to each model via applyTheme().
 import { Alert, Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import api from '../api/axios';
 import { Serializer, Question, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
 import { DraggableRankingQuestion } from '@network-survey/frontend-react';
-import { TAGBOX_PAGE_SIZE, TAGBOX_PLACEHOLDER } from '@network-survey/frontend-shared';
+import {
+  applyBrandedPanellessSurveyTheme,
+  BRANDED_SURVEY_WRAPPER_SX,
+  TAGBOX_PAGE_SIZE,
+  TAGBOX_PLACEHOLDER
+} from '@network-survey/frontend-shared';
 import ReactDOM from 'react-dom/client';
 import {
   restrictSurveyToolbox,
@@ -460,6 +465,7 @@ const SurveyEditor = () => {
         configureSurveyModel(options.survey, 'designer');
       }
       if (options.area === 'preview-tab') {
+        applyBrandedPanellessSurveyTheme(options.survey);
         configureSurveyModel(options.survey, 'preview');
       }
     };
@@ -555,10 +561,10 @@ const SurveyEditor = () => {
     try {
       const questions = buildNormalizedSurveySchema();
       const model = new Model(questions);
+      applyBrandedPanellessSurveyTheme(model);
       model.showQuestionNumbers = false;
       model.showProgressBar = 'bottom';
       model.progressBarType = 'questions';
-  Model.cssType = 'default';
 
       configureSurveyModel(model, 'preview-runtime');
       setPreviewSurveyModel(model);
@@ -660,7 +666,9 @@ const SurveyEditor = () => {
             </Box>
           )}
           {!previewError && previewSurveyModel && (
-            <Survey model={previewSurveyModel} />
+            <Box data-testid="branded-survey-wrapper" sx={BRANDED_SURVEY_WRAPPER_SX}>
+              <Survey model={previewSurveyModel} />
+            </Box>
           )}
         </DialogContent>
         <DialogActions>

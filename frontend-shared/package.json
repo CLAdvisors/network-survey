@@ -4,5 +4,8 @@
   "private": true,
   "type": "module",
   "main": "src/index.js",
-  "module": "src/index.js"
+  "module": "src/index.js",
+  "peerDependencies": {
+    "survey-core": "2.5.35"
+  }
 }

@@ -372,7 +372,11 @@ function sanitizeSurveyForDemo(value) {
       return;
     }
     if (!node || typeof node !== 'object') return;
-    if (typeof node.name === 'string') namedDefinitions.set(node.name, node);
+    if (typeof node.name === 'string') {
+      const definitions = namedDefinitions.get(node.name) || [];
+      definitions.push(node);
+      namedDefinitions.set(node.name, definitions);
+    }
     const isTagbox = inheritedTagbox || node.type === 'tagbox' || node.cellType === 'tagbox';
     if (isTagbox && typeof node.choicesFromQuestion === 'string') {
       peopleChoiceSources.add(node.choicesFromQuestion);
@@ -387,15 +391,16 @@ function sanitizeSurveyForDemo(value) {
   // leak persisted respondent values into an externally forwarded demo.
   const pendingSources = [...peopleChoiceSources];
   while (pendingSources.length > 0) {
-    const source = namedDefinitions.get(pendingSources.pop());
-    if (
-      source
-      && typeof source.choicesFromQuestion === 'string'
-      && !peopleChoiceSources.has(source.choicesFromQuestion)
-    ) {
-      peopleChoiceSources.add(source.choicesFromQuestion);
-      pendingSources.push(source.choicesFromQuestion);
-    }
+    const sources = namedDefinitions.get(pendingSources.pop()) || [];
+    sources.forEach((source) => {
+      if (
+        typeof source.choicesFromQuestion === 'string'
+        && !peopleChoiceSources.has(source.choicesFromQuestion)
+      ) {
+        peopleChoiceSources.add(source.choicesFromQuestion);
+        pendingSources.push(source.choicesFromQuestion);
+      }
+    });
   }
 
   const sanitize = (node, inheritedTagbox = false) => {
@@ -411,6 +416,10 @@ function sanitizeSurveyForDemo(value) {
         sanitize(nestedValue, node.cellType === 'tagbox' && key === 'columns'),
       ])
     );
+
+    // Legacy schemas may contain remote choice URLs that current validation
+    // rejects. Never disclose or call those URLs from a public demo link.
+    delete sanitized.choicesByUrl;
 
     if (isTagbox) {
       sanitized.choices = [];

@@ -40,10 +40,10 @@ test('an editor can send a no-results email demo from a survey row', async () =>
 });
 
 test('an editor copies a survey with a clear destination name and sees success', async () => {
-  const copiedSurvey = { id: 'survey-copy', name: 'Leadership Survey 2027', title: 'Leadership' };
+  const copiedSurvey = { id: 'survey-copy', name: 'LeadershipSurvey2027', title: 'Leadership' };
   const onSurveyCopied = vi.fn();
   api.post.mockResolvedValue({
-    data: { message: 'Survey copied successfully as "Leadership Survey 2027".', survey: copiedSurvey },
+    data: { message: 'Survey copied successfully as "LeadershipSurvey2027".', survey: copiedSurvey },
   });
   render(
     <SurveyTableMenuCell
@@ -57,14 +57,15 @@ test('an editor copies a survey with a clear destination name and sees success',
   expect(screen.getByText(/complete configuration and respondent roster from “Leadership Survey”/)).toBeInTheDocument();
 
   const nameInput = screen.getByLabelText(/Copied survey name/);
+  expect(nameInput).toHaveValue('LeadershipSurveyCopy');
   await userEvent.clear(nameInput);
-  await userEvent.type(nameInput, 'Leadership Survey 2027{enter}');
+  await userEvent.type(nameInput, 'LeadershipSurvey2027{enter}');
 
   await waitFor(() => expect(api.post).toHaveBeenCalledWith(
     '/surveys/survey-1/copy',
-    { name: 'Leadership Survey 2027' }
+    { name: 'LeadershipSurvey2027' }
   ));
-  expect(await screen.findByText('Survey copied successfully as "Leadership Survey 2027".')).toBeInTheDocument();
+  expect(await screen.findByText('Survey copied successfully as "LeadershipSurvey2027".')).toBeInTheDocument();
   expect(onSurveyCopied).toHaveBeenCalledWith(copiedSurvey);
 });
 
@@ -82,11 +83,31 @@ test('copy validation and API collisions remain visible in the dialog', async ()
   expect(screen.getByText('Enter a name for the copied survey.')).toBeInTheDocument();
   expect(api.post).not.toHaveBeenCalled();
 
-  await userEvent.type(nameInput, 'Existing Survey');
+  await userEvent.type(nameInput, 'Invalid Name');
+  expect(screen.getByText('Only letters and numbers are allowed.')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Copy survey' }));
+  expect(api.post).not.toHaveBeenCalled();
+
+  await userEvent.clear(nameInput);
+  await userEvent.type(nameInput, 'ExistingSurvey');
   await userEvent.click(screen.getByRole('button', { name: 'Copy survey' }));
   expect(await screen.findByText('A survey with that name already exists.')).toBeInTheDocument();
-  expect(nameInput).toHaveValue('Existing Survey');
+  expect(nameInput).toHaveValue('ExistingSurvey');
   expect(screen.getByRole('dialog')).toBeInTheDocument();
+});
+
+test('copy default remains unique and valid at the survey-name length boundary', async () => {
+  const sourceName = `${'A'.repeat(251)}Copy`;
+  render(<SurveyTableMenuCell row={{ id: 'survey-1', name: sourceName }} />);
+
+  await userEvent.click(screen.getByRole('button', { name: `Survey actions for ${sourceName}` }));
+  await userEvent.click(await screen.findByText('Copy Survey'));
+  const defaultName = screen.getByLabelText(/Copied survey name/).value;
+
+  expect(defaultName).toBe(`${'A'.repeat(250)}Copy2`);
+  expect(defaultName).toHaveLength(255);
+  expect(defaultName).not.toBe(sourceName);
+  expect(defaultName).toMatch(/^[A-Za-z0-9]+$/);
 });
 
 test('users without edit access do not see copy or email demo actions', async () => {

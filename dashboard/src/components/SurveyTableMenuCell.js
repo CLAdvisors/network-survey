@@ -24,11 +24,18 @@ import api from '../api/axios';
 import SendDemoDialog from './SendDemoDialog';
 import { useAuth } from '../context/AuthContext';
 
+const buildDefaultCopiedName = (name) => {
+  const sourceName = String(name || '').replace(/[^A-Za-z0-9]/g, '');
+  const baseName = sourceName.slice(0, 251) || 'Survey';
+  const candidate = `${baseName}Copy`;
+  return candidate === sourceName ? `${sourceName.slice(0, 250)}Copy2` : candidate;
+};
+
 const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [startConfirmOpen, setStartConfirmOpen] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
-  const [copiedName, setCopiedName] = useState(`${row.name} Copy`);
+  const [copiedName, setCopiedName] = useState(buildDefaultCopiedName(row.name));
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState('');
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -98,7 +105,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
 
   const handleCopyClick = (event) => {
     event.stopPropagation();
-    setCopiedName(`${row.name} Copy`);
+    setCopiedName(buildDefaultCopiedName(row.name));
     setCopyError('');
     setCopyDialogOpen(true);
     handleClose();
@@ -111,9 +118,13 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
   };
 
   const handleCopyConfirm = async () => {
-    const name = copiedName.trim();
-    if (!name) {
+    const name = copiedName;
+    if (!name.trim()) {
       setCopyError('Enter a name for the copied survey.');
+      return;
+    }
+    if (!/^[A-Za-z0-9]+$/.test(name)) {
+      setCopyError('Only letters and numbers are allowed.');
       return;
     }
 
@@ -303,12 +314,15 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
               label="Copied survey name"
               value={copiedName}
               onChange={(event) => {
-                setCopiedName(event.target.value);
-                setCopyError('');
+                const nextName = event.target.value;
+                setCopiedName(nextName);
+                setCopyError(nextName && !/^[A-Za-z0-9]*$/.test(nextName)
+                  ? 'Only letters and numbers are allowed.'
+                  : '');
               }}
               error={Boolean(copyError)}
               helperText={copyError || 'The survey title and invitation templates will be preserved.'}
-              inputProps={{ maxLength: 255 }}
+              inputProps={{ maxLength: 255, pattern: '[A-Za-z0-9]*' }}
             />
           </DialogContent>
           <DialogActions>

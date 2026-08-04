@@ -23,6 +23,7 @@ const {
   hasAnyRole,
   resolveSurveyForUser,
   copySurveyForUser,
+  surveyNameValidationError,
   getDefaultOrganizationForUser,
   getDashboardBaseUrl,
   buildDashboardUrl,
@@ -2015,7 +2016,7 @@ test('survey copy transaction preserves configuration and roster while resetting
       }
       if (/SELECT 1 FROM Survey/.test(sql)) return { rows: [] };
       if (/INSERT INTO Survey/.test(sql)) return { rows: [{
-        id: '22222222-2222-4222-8222-222222222222', name: 'Copied Survey',
+        id: '22222222-2222-4222-8222-222222222222', name: 'CopiedSurvey',
         title: 'Configured title', organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       }] };
       return { rows: [], rowCount: 2 };
@@ -2026,9 +2027,9 @@ test('survey copy transaction preserves configuration and roster while resetting
   const copied = await copySurveyForUser({
     actor: { id: 7, isPlatformAdmin: false },
     sourceSurveyId: '11111111-1111-4111-8111-111111111111',
-    name: '  Copied Survey  ',
+    name: 'CopiedSurvey',
   });
-  assert.equal(copied.name, 'Copied Survey');
+  assert.equal(copied.name, 'CopiedSurvey');
   assert.equal(copied.title, 'Configured title');
   assert.equal(copied.organizationId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
   assert.equal(copied.respondentStateReset, true);
@@ -2040,9 +2041,10 @@ test('survey copy transaction preserves configuration and roster while resetting
   assert.equal(calls.at(-1).sql, 'COMMIT');
 
   const surveyInsert = calls.find(({ sql }) => /INSERT INTO Survey/.test(sql));
+  assert.match(surveyInsert.sql, /VALUES \(\$1, \$2, NOW\(\), \$3, \$4, \$5, \$6, \$7\)/);
   assert.deepEqual(surveyInsert.values, [
-    'Copied Survey', 'Configured title', sourceQuestions,
-    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 7, 'copied-survey',
+    'CopiedSurvey', 'Configured title', sourceQuestions,
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 7, 'CopiedSurvey', 'copiedsurvey',
   ]);
   const emailCopy = calls.find(({ sql }) => /INSERT INTO EMAIL/.test(sql));
   assert.match(emailCopy.sql, /lang, text, invitation_subject/);
@@ -2053,6 +2055,23 @@ test('survey copy transaction preserves configuration and roster while resetting
   assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*\bresponse\b[\s\S]*FROM Respondent/);
   assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*r?\.uuid[\s\S]*FROM Respondent/);
   assert.ok(calls.some(({ sql, values }) => /survey\.copied/.test(sql) && values[0] === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'));
+});
+
+test('create and copy survey names share alphanumeric and length validation', async () => {
+  assert.equal(surveyNameValidationError('A'.repeat(255)), null);
+  assert.match(surveyNameValidationError('A'.repeat(256)), /255 characters or fewer/);
+  assert.match(surveyNameValidationError('A'.repeat(256), { copied: true }), /255 characters or fewer/);
+
+  for (const name of ['Copy Name', 'Copy-Name', 'Copy_Name', 'Copy.Name', ' CopiedSurvey ']) {
+    await assert.rejects(
+      copySurveyForUser({ actor: { id: 7 }, sourceSurveyId: 'source-id', name }),
+      (error) => error.statusCode === 400 && /Only letters and numbers/.test(error.message)
+    );
+  }
+  await assert.rejects(
+    copySurveyForUser({ actor: { id: 7 }, sourceSurveyId: 'source-id', name: 'A'.repeat(256) }),
+    (error) => error.statusCode === 400 && /255 characters or fewer/.test(error.message)
+  );
 });
 
 test('survey copy rejects collisions and cross-org/non-editor access without writes', async (t) => {
@@ -2088,7 +2107,7 @@ test('survey copy rejects collisions and cross-org/non-editor access without wri
   sourceRole = null;
   collision = false;
   await assert.rejects(
-    copySurveyForUser({ actor: { id: 8 }, sourceSurveyId: 'source-id', name: 'Cross Org Copy' }),
+    copySurveyForUser({ actor: { id: 8 }, sourceSurveyId: 'source-id', name: 'CrossOrgCopy' }),
     (error) => error.statusCode === 404
   );
   assert.equal(calls.at(-1), 'ROLLBACK');

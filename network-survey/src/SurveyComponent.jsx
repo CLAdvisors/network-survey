@@ -41,32 +41,32 @@ function SurveyComponent({setTitle}) {
     const [json, setJson] = React.useState(null);
     const [survey, setSurvey] = React.useState(null);
     const [hasResponse, setHasResponse] = React.useState(false);
+    const [loadError, setLoadError] = React.useState(null);
     const [submissionError, setSubmissionError] = React.useState(null);
     const submissionInProgressRef = React.useRef(false);
     const submissionAcceptedRef = React.useRef(false);
     const searchParams = new URLSearchParams(window.location.search);
-    const userId = searchParams.get("userId"); 
-    const surveyName = searchParams.get("surveyName"); 
+    const userId = searchParams.get("userId");
+    const demoToken = searchParams.get("demoToken");
+    const surveyName = searchParams.get("surveyName");
+    const isDemo = Boolean(demoToken);
 
     React.useEffect(() => {
-      if (!userId || !surveyName) return;
-      if (userId === 'demo') {
-        setHasResponse(true);
-        return;
-      }
+      if (!userId || !surveyName || isDemo) return;
       const statusUrl = buildApiUrl('/user/status', { userId, surveyName });
       sendRequest(statusUrl, data => setHasResponse(data.hasResponse));
-    }, [userId, surveyName]);
+    }, [userId, surveyName, isDemo]);
 
     React.useEffect(() => {
-      if (!userId || !surveyName) return;
-      
-      const url = buildApiUrl('/questions', { surveyName, userId });
-      sendRequest(url, (data) => { 
-        setJson(data.questions); 
-        setTitle(data.title); 
-      });
-    }, [surveyName, setTitle, userId]);
+      if ((!userId && !demoToken) || !surveyName) return;
+
+      const url = buildApiUrl('/questions', { surveyName, userId, demoToken });
+      setLoadError(null);
+      sendRequest(url, (data) => {
+        setJson(data.questions);
+        setTitle(data.title);
+      }, setLoadError);
+    }, [surveyName, setTitle, userId, demoToken]);
 
     React.useEffect(() => {
       if (!json) return;
@@ -84,7 +84,7 @@ function SurveyComponent({setTitle}) {
       // Submit before completing. This keeps respondents on the form if the API
       // rejects a stale or malformed response instead of showing a false success.
       newSurvey.onCompleting.add((sender, options) => {
-        if (userId === 'demo') return;
+        if (isDemo) return;
         if (submissionAcceptedRef.current) {
           submissionAcceptedRef.current = false;
           return;
@@ -117,6 +117,7 @@ function SurveyComponent({setTitle}) {
           filter: options.filter,
           surveyName,
           userId,
+          demoToken,
         });
         sendRequest(url, (data) => {
           const names = Array.isArray(data?.names) ? data.names : [];
@@ -184,18 +185,27 @@ function SurveyComponent({setTitle}) {
         roots.clear();
         newSurvey.dispose();
       };
-    }, [json, userId, surveyName]);
+    }, [json, userId, surveyName, demoToken, isDemo]);
 
     // API handlers
-    function sendRequest(url, onloadSuccessCallback) {
+    function sendRequest(url, onloadSuccessCallback, onError) {
       const xhr = new XMLHttpRequest();
       xhr.open("GET", url);
       xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
       xhr.onload = () => {
         if (xhr.status === 200) {
           onloadSuccessCallback(JSON.parse(xhr.response));
+          return;
+        }
+        if (onError) {
+          try {
+            onError(JSON.parse(xhr.response).message || 'Unable to load this survey.');
+          } catch {
+            onError('Unable to load this survey.');
+          }
         }
       };
+      xhr.onerror = () => onError?.('Unable to load this survey.');
       xhr.send();
     }
 
@@ -221,8 +231,12 @@ function SurveyComponent({setTitle}) {
         }
     }
 
-    if (!userId || !surveyName) {
+    if ((!userId && !demoToken) || !surveyName) {
       return <h1>Invalid URL, please use the unique url provided by email.</h1>;
+    }
+
+    if (loadError) {
+      return <Alert severity="error">{loadError}</Alert>;
     }
 
     if (!survey) {
@@ -231,6 +245,11 @@ function SurveyComponent({setTitle}) {
 
     return (
       <div className={PRODUCTION_SURVEY_CLASS_NAME}>
+        {isDemo && (
+          <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>
+            Demo mode: completing this survey will not save any answers or results.
+          </Alert>
+        )}
         {submissionError && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {submissionError}

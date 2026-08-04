@@ -15,13 +15,17 @@ import {
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayCircle from '@mui/icons-material/PlayCircle';
+import EmailIcon from '@mui/icons-material/Email';
 import api from '../api/axios';
+import SendDemoDialog from './SendDemoDialog';
 import { useAuth } from '../context/AuthContext';
 
 const MenuCell = ({ row, onSurveyDeleted }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [startConfirmOpen, setStartConfirmOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [demoDialogOpen, setDemoDialogOpen] = useState(false);
+  const [demoSending, setDemoSending] = useState(false);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: '',
@@ -82,6 +86,33 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
       event.stopPropagation();
     }
     setStartConfirmOpen(false);
+  };
+
+  const handleDemoClick = (event) => {
+    event.stopPropagation();
+    setDemoDialogOpen(true);
+    handleClose();
+  };
+
+  const handleDemoSubmit = async (email, language) => {
+    setDemoSending(true);
+    try {
+      const response = await api.post(`/surveys/${row.id || row.name}/demo-email`, { email, language });
+      setDemoDialogOpen(false);
+      setSnackbar({
+        open: true,
+        message: response.data?.message || 'Demo survey email sent successfully',
+        severity: 'success'
+      });
+    } catch (error) {
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.message || 'Failed to send demo survey email. Please try again.',
+        severity: 'error'
+      });
+    } finally {
+      setDemoSending(false);
+    }
   };
 
   const handleDeleteClick = (event) => {
@@ -164,6 +195,12 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
             Start Survey
           </MenuItem>
         )}
+        {canEditSurvey(row) && (
+          <MenuItem onClick={handleDemoClick}>
+            <EmailIcon fontSize="small" />
+            Send Email Demo
+          </MenuItem>
+        )}
         {canArchiveSurvey(row) && (
           <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
             <DeleteIcon fontSize="small" />
@@ -190,6 +227,14 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <SendDemoDialog
+        open={demoDialogOpen}
+        onClose={() => setDemoDialogOpen(false)}
+        onSubmit={handleDemoSubmit}
+        surveyName={row.name}
+        loading={demoSending}
+      />
 
       <Dialog
         open={deleteConfirmOpen}

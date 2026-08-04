@@ -105,21 +105,24 @@ async function sendAccountEmail({ to, subject, html, text }) {
   }
 }
 
+function buildSurveyEmailHtml(text, link) {
+  const formattedText = (`<p>${text.replace(/"/g, '')}</p>`)
+    .replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
+  return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + link + EMAIL_HTML[2];
+}
+
 async function sendMail(email, id, surveyName, text) {
   try {
     if (!resend) {
       throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
     }
 
-    text = "<p>" + text.replace(/"/g, '') + "</p>";
-    text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
-    let customLink = `${process.env.SURVEY_URL}/?surveyName=${surveyName}&userId=${id}`;
-
+    const customLink = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(surveyName)}&userId=${encodeURIComponent(id)}`;
     const emailData = {
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
       subject: 'CLA Network Survey',
-      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2],
+      html: buildSurveyEmailHtml(text, customLink),
       surveyName
     };
 
@@ -130,6 +133,24 @@ async function sendMail(email, id, surveyName, text) {
     console.error(`Failed to send email to ${email}:`, error);
     throw error;
   }
+}
+
+async function sendDemoMail(email, survey, text, demoToken) {
+  if (!resend) {
+    throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
+  }
+  if (!process.env.SURVEY_URL) {
+    throw new Error('Missing SURVEY_URL environment variable');
+  }
+
+  const link = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(survey.name)}&demoToken=${encodeURIComponent(demoToken)}`;
+  const result = await resend.emails.send({
+    from: 'CLA Survey <survey@cladvisors.com>',
+    to: email,
+    subject: '[Demo] CLA Network Survey',
+    html: buildSurveyEmailHtml(text, link),
+  });
+  if (result?.error) throw new Error(result.error.message || 'Email delivery failed');
 }
 
 // Queue for managing email sending with rate limiting
@@ -302,6 +323,41 @@ function buildDashboardUrl(path) {
   return `${baseUrl}${normalizedPath}`;
 }
 
+const DEMO_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
+function createDemoToken(surveyId, surveyName, now = Date.now()) {
+  const payload = Buffer.from(JSON.stringify({
+    type: 'survey-demo',
+    surveyId,
+    surveyName,
+    expiresAt: now + DEMO_TOKEN_TTL_MS,
+    nonce: crypto.randomBytes(12).toString('base64url'),
+  })).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', process.env.DEMO_TOKEN_SECRET || process.env.SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return `d1.${payload}.${signature}`;
+}
+
+function verifyDemoToken(token, now = Date.now()) {
+  try {
+    const [version, payload, signature, extra] = String(token || '').split('.');
+    if (version !== 'd1' || !payload || !signature || extra) return null;
+    const expected = crypto
+      .createHmac('sha256', process.env.DEMO_TOKEN_SECRET || process.env.SESSION_SECRET)
+      .update(payload)
+      .digest();
+    const actual = Buffer.from(signature, 'base64url');
+    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (claims.type !== 'survey-demo' || !claims.surveyId || !claims.surveyName || !Number.isFinite(claims.expiresAt) || claims.expiresAt <= now) return null;
+    return claims;
+  } catch {
+    return null;
+  }
+}
+
 app.use(express.json());
 
 app.use(cors({
@@ -367,6 +423,15 @@ const respondentRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
+});
+
+const demoEmailRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.DEMO_EMAIL_RATE_LIMIT_MAX) || 10,
+  keyGenerator: (req) => `user:${req.user.id}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many demo emails, please try again later.' },
 });
 
 const schemaCapabilityCache = new Map();
@@ -1930,6 +1995,39 @@ app.post('/api/testEmail', express.json(), requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoEmailRateLimiter, async (req, res) => {
+  const { email, language } = req.body;
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ message: 'A valid email address is required.' });
+  }
+  if (!language) {
+    return res.status(400).json({ message: 'Language is required.' });
+  }
+
+  try {
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: req.params.surveyId,
+      allowedRoles: EDITOR_ROLES,
+    });
+    if (!survey) return;
+
+    const templateResult = await pool.query(
+      `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3 LIMIT 1`,
+      [survey.id, survey.name, language]
+    );
+    if (templateResult.rows.length === 0) {
+      return res.status(404).json({ message: `No ${language} email template is configured for this survey.` });
+    }
+
+    const demoToken = createDemoToken(survey.id, survey.name);
+    await sendDemoMail(email.trim(), survey, templateResult.rows[0].text, demoToken);
+    res.status(200).json({ message: `Demo survey sent to ${email.trim()}.` });
+  } catch (error) {
+    console.error('Failed to send demo survey:', error);
+    res.status(500).json({ message: 'Failed to send demo survey email.' });
+  }
+});
+
 app.post('/api/startSurvey', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
@@ -2488,13 +2586,24 @@ function formatRespondentChoice(respondent) {
 
 // GET API endpoint for lazy loading the names list
 app.get('/api/names', respondentRateLimiter, async (req, res) => {
-  const { skip = 0, take = 10, filter = '', surveyName = '', userId = '' } = req.query;
+  const { skip = 0, take = 10, filter = '', surveyName = '', userId = '', demoToken = '' } = req.query;
+
+  const demoClaims = demoToken ? verifyDemoToken(demoToken) : null;
+  if (demoToken && (!demoClaims || demoClaims.surveyName !== surveyName)) {
+    return res.status(403).json({ message: 'This demo link is invalid or has expired.' });
+  }
+  // Demo recipients may be outside the organization. Never expose the
+  // respondent-backed lazy-choice directory through a forwarded demo link.
+  if (demoClaims) {
+    return res.status(200).json({ names: [], total: 0 });
+  }
 
   const validation = await validateRespondentToken(surveyName, userId);
   if (!validation.ok) {
     return res.status(validation.status).json({ message: validation.message });
   }
 
+  const surveyId = validation.respondent.survey_id;
   const client = await pool.connect();
   
   try {
@@ -2509,7 +2618,7 @@ app.get('/api/names', respondentRateLimiter, async (req, res) => {
       LIMIT $6;
     `;
 
-    const values = [validation.respondent.survey_id, surveyName, userId, `%${filter}%`, skip, take];
+    const values = [surveyId, surveyName, userId, `%${filter}%`, skip, take];
     const result = await client.query(query, values);
 
     const filteredNames = result.rows.map(formatRespondentChoice);
@@ -2603,23 +2712,29 @@ app.get('/api/admin/questions', requireAuth, async (req, res) => {
 
 // GET API endpoint for survey questions
 app.get('/api/questions', respondentRateLimiter, async (req, res) => {
-  const { surveyName = '', userId = '' } = req.query;
+  const { surveyName = '', userId = '', demoToken = '' } = req.query;
 
-  const validation = await validateRespondentToken(surveyName, userId);
-  if (!validation.ok) {
+  const demoClaims = demoToken ? verifyDemoToken(demoToken) : null;
+  if (demoToken && (!demoClaims || demoClaims.surveyName !== surveyName)) {
+    return res.status(403).json({ message: 'This demo link is invalid or has expired.' });
+  }
+  const validation = demoClaims ? null : await validateRespondentToken(surveyName, userId);
+  if (validation && !validation.ok) {
     return res.status(validation.status).json({ message: validation.message });
   }
 
+  const surveyId = demoClaims?.surveyId || validation.respondent.survey_id;
   const client = await pool.connect();
 
   try {
     const query = `
       SELECT questions, title
       FROM Survey
-      WHERE name = $1;
+      WHERE (id = $1 OR ($1::uuid IS NULL AND name = $2))
+        AND archived_at IS NULL;
     `;
 
-    const result = await client.query(query, [surveyName]);
+    const result = await client.query(query, [surveyId, surveyName]);
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Survey not found.' });
     }
@@ -2997,6 +3112,8 @@ module.exports = {
   getActiveOwnerCount,
   getDashboardBaseUrl,
   buildDashboardUrl,
+  createDemoToken,
+  verifyDemoToken,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,

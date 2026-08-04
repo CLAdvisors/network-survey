@@ -25,6 +25,8 @@ const {
   getDefaultOrganizationForUser,
   getDashboardBaseUrl,
   buildDashboardUrl,
+  createDemoToken,
+  verifyDemoToken,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
@@ -1347,10 +1349,54 @@ test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL',
   assert.equal(buildDashboardUrl('reset-password?token=abc'), 'https://admin.example.com/reset-password?token=abc');
 });
 
+test('demo links are signed, survey-bound, and expire without database state', () => {
+  const surveyId = '11111111-1111-4111-8111-111111111111';
+  const issuedAt = Date.now();
+  const token = createDemoToken(surveyId, 'Survey A', issuedAt);
+
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(verifyDemoToken(token, issuedAt + 1)).filter(([key]) => key !== 'nonce')),
+    { type: 'survey-demo', surveyId, surveyName: 'Survey A', expiresAt: issuedAt + (24 * 60 * 60 * 1000) }
+  );
+  assert.equal(verifyDemoToken(`${token.slice(0, -1)}x`, issuedAt + 1), null);
+  assert.equal(verifyDemoToken(token, issuedAt + (24 * 60 * 60 * 1000)), null);
+});
+
+test('signed demo links load survey questions but cannot be used for a different survey', async (t) => {
+  const originalConnect = pool.connect;
+  t.after(() => { pool.connect = originalConnect; });
+
+  const surveyId = '11111111-1111-4111-8111-111111111111';
+  const token = createDemoToken(surveyId, 'Survey A');
+  let queryCount = 0;
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      queryCount += 1;
+      assert.match(sql, /WHERE \(id = \$1/);
+      assert.deepEqual(values, [surveyId, 'Survey A']);
+      return { rows: [{ title: 'Configured title', questions: { elements: [{ type: 'text', name: 'q1' }] } }] };
+    },
+    release() {},
+  });
+
+  const valid = await request(app).get('/api/questions').query({ surveyName: 'Survey A', demoToken: token });
+  assert.equal(valid.status, 200);
+  assert.equal(valid.body.title, 'Configured title');
+
+  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token });
+  assert.equal(names.status, 200);
+  assert.deepEqual(names.body, { names: [], total: 0 }, 'demo links must not expose respondent PII');
+
+  const wrongSurvey = await request(app).get('/api/questions').query({ surveyName: 'Survey B', demoToken: token });
+  assert.equal(wrongSurvey.status, 403);
+  assert.equal(queryCount, 1);
+});
+
 test('dashboard/admin endpoints require authentication', async () => {
   const endpoints = [
     ['post', '/api/survey', { surveyName: 'S' }],
     ['post', '/api/testEmail', { surveyName: 'S', language: 'English', email: 'a@example.com' }],
+    ['post', '/api/surveys/survey-id/demo-email', { language: 'English', email: 'a@example.com' }],
     ['post', '/api/startSurvey', { surveyName: 'S' }],
     ['post', '/api/updateEmails', { surveyName: 'S', csvData: 'English,Hello' }],
     ['post', '/api/updateTarget', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],

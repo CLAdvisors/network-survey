@@ -105,7 +105,7 @@ async function sendAccountEmail({ to, subject, html, text }) {
   }
 }
 
-async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {
+async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey', options = {}) {
   try {
     if (!resend) {
       throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
@@ -119,12 +119,15 @@ async function sendMail(email, id, surveyName, text, subject = 'CLA Network Surv
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
       subject: subject || 'CLA Network Survey',
-      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2],
-      surveyName
+      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2]
     };
 
-    // Add delay to respect rate limit
-    await rateLimitedSend(emailData);
+    await rateLimitedSend(emailData, {
+      surveyId: options.surveyId,
+      surveyName,
+      respondentToken: id,
+      trackDelivery: options.trackDelivery !== false,
+    });
 
   } catch (error) {
     console.error(`Failed to send email to ${email}:`, error);
@@ -132,81 +135,131 @@ async function sendMail(email, id, surveyName, text, subject = 'CLA Network Surv
   }
 }
 
-// Queue for managing email sending with rate limiting
-const emailQueue = [];
-let isProcessing = false;
+// Queue for managing email sending with rate limiting. Each enqueue call owns a
+// promise, so callers observe the result of their provider request rather than
+// merely observing that the message was added to the queue.
 const RATE_LIMIT = 10; // emails per second
 const DELAY = 1000; // 1 second delay between batches
 
-function rateLimitedSend(emailData) {
-  emailQueue.push(emailData);
+function createEmailQueueProcessor({
+  sendEmail,
+  markSuccessful = async () => {},
+  rateLimit = RATE_LIMIT,
+  delay = DELAY,
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+}) {
+  const queue = [];
+  let isProcessing = false;
 
-  if (!isProcessing) {
-    isProcessing = true;
-    void processEmailQueue().catch((error) => {
-      console.error('Unexpected email queue processing failure:', error);
-    });
-  }
-}
+  const processQueue = async () => {
+    let activeBatch = [];
+    try {
+      while (queue.length > 0) {
+        const batch = queue.splice(0, rateLimit);
+        activeBatch = batch;
+        const results = await Promise.all(batch.map(async (item) => {
+          try {
+            const result = await sendEmail(item.emailData);
+            return { success: true, item, result };
+          } catch (error) {
+            console.error(`Failed to send email to ${item.emailData.to}:`, error);
+            return { success: false, item, error };
+          }
+        }));
 
-async function processEmailQueue() {
-  while (emailQueue.length > 0) {
-    // Process up to RATE_LIMIT emails at once
-    const batch = emailQueue.splice(0, RATE_LIMIT);
-    
-    // Send batch of emails and track successful sends
-    const results = await Promise.all(batch.map(async (emailData) => {
-      try {
-        await resend.emails.send(emailData);
-        // Extract recipient email from emailData
-        return { success: true, email: emailData.to };
-      } catch (error) {
-        console.error(`Failed to send email to ${emailData.to}:`, error);
-        return { success: false, email: emailData.to };
-      }
-    }));
-
-    // Update email_sent status for successful sends
-    const successfulBySurvey = results.reduce((grouped, result) => {
-      if (!result.success) return grouped;
-      const surveyName = batch.find(emailData => emailData.to === result.email)?.surveyName;
-      if (!surveyName) return grouped;
-      grouped[surveyName] = grouped[surveyName] || [];
-      grouped[surveyName].push(result.email);
-      return grouped;
-    }, {});
-    for (const [surveyName, successfulEmails] of Object.entries(successfulBySurvey)) {
-      if (successfulEmails.length > 0) {
-        try {
-          await pool.query(
-            'UPDATE Respondent SET email_sent = true WHERE contact_info = ANY($1) AND survey_name = $2',
-            [successfulEmails, surveyName]
-          );
-        } catch (error) {
-          console.error('Failed to update email_sent status:', error);
+        const successfulBySurvey = new Map();
+        for (const result of results) {
+          if (!result.success || result.item.metadata.trackDelivery === false) continue;
+          const { surveyId, surveyName, respondentToken } = result.item.metadata;
+          if (!surveyName || !respondentToken) continue;
+          const surveyKey = surveyId || `legacy:${surveyName}`;
+          if (!successfulBySurvey.has(surveyKey)) {
+            successfulBySurvey.set(surveyKey, { surveyId, surveyName, respondentTokens: [] });
+          }
+          successfulBySurvey.get(surveyKey).respondentTokens.push(respondentToken);
         }
-      }
-    }
+        for (const delivery of successfulBySurvey.values()) {
+          try {
+            await markSuccessful(delivery);
+          } catch (error) {
+            // A bookkeeping failure must not turn a successful provider send
+            // into a delivery failure, but it must remain visible operationally.
+            console.error('Failed to update email_sent status:', error);
+          }
+        }
 
-    // Wait for rate limit window if more emails remain
-    if (emailQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, DELAY));
+        // Settle all items in the batch, including every provider failure.
+        for (const result of results) {
+          if (result.success) result.item.resolve(result.result);
+          else result.item.reject(result.error);
+        }
+        activeBatch = [];
+
+        if (queue.length > 0) await wait(delay);
+      }
+    } catch (error) {
+      // Defensive drain: an injected helper failure cannot strand either the
+      // currently spliced batch or items still waiting in the queue.
+      const stranded = [...activeBatch, ...queue.splice(0)];
+      stranded.forEach((item) => item.reject(error));
+      console.error('Unexpected email queue processing failure:', error);
+    } finally {
+      isProcessing = false;
+      // Normally no task can interleave here, but this also makes the helper
+      // robust to unusual thenables or test schedulers.
+      if (queue.length > 0) startProcessing();
     }
-  }
-  
-  isProcessing = false;
+  };
+
+  const startProcessing = () => {
+    if (isProcessing) return;
+    isProcessing = true;
+    void processQueue();
+  };
+
+  const enqueue = (emailData, metadata = {}) => new Promise((resolve, reject) => {
+    queue.push({ emailData, metadata, resolve, reject });
+    startProcessing();
+  });
+
+  return { queue, enqueue, processQueue, isProcessing: () => isProcessing };
 }
+
+async function sendEmailWithResend(emailData, resendClient = resend) {
+  const result = await resendClient.emails.send(emailData);
+  if (result?.error) {
+    const error = new Error(result.error.message || 'Email provider rejected the message.');
+    error.providerError = result.error;
+    throw error;
+  }
+  return result;
+}
+
+const emailQueueProcessor = createEmailQueueProcessor({
+  sendEmail: sendEmailWithResend,
+  markSuccessful: ({ surveyId, surveyName, respondentTokens }) => pool.query(
+    `UPDATE Respondent SET email_sent = true
+     WHERE uuid = ANY($1)
+       AND (survey_id = $2 OR (survey_id IS NULL AND survey_name = $3))`,
+    [respondentTokens, surveyId || null, surveyName]
+  ),
+});
+const emailQueue = emailQueueProcessor.queue;
+const rateLimitedSend = emailQueueProcessor.enqueue;
+const processEmailQueue = emailQueueProcessor.processQueue;
 
 // User test email function (allow admin user to send test email to themselves)
 async function sendTestMail(email, survey, lang, mailer = sendMail) {
   const client = await pool.connect();
+  let template;
+  let respondentToken;
   try {
     const response = await client.query(
       `SELECT lang, text, subject FROM email WHERE ${legacySurveyPredicate()}`,
       [survey.id, survey.name]
     );
     const language = normalizeLanguage(lang);
-    const template = language ? buildNotificationMaps(response.rows).templates[language] : null;
+    template = language ? buildNotificationMaps(response.rows).templates[language] : null;
 
     if (!template) {
       throw new Error(`Email template not found for survey '${survey.name}' in language '${lang}'`);
@@ -226,26 +279,34 @@ async function sendTestMail(email, survey, lang, mailer = sendMail) {
        LIMIT 1`,
       [survey.id, survey.name, email]
     );
-    const respondentToken = respondentResult.rows[0]?.uuid;
+    respondentToken = respondentResult.rows[0]?.uuid;
     if (!respondentToken) {
       const error = new Error(`No active respondent token found for '${email}' on survey '${survey.name}'. Reminders can only be sent to that respondent's own email address.`);
       error.statusCode = 404;
       throw error;
     }
-
-    await mailer(email, respondentToken, survey.name, template.text, template.subject);
   } finally {
     client.release();
   }
+
+  // Do not hold a scarce database connection while waiting in the rate-limit
+  // queue or on the external provider.
+  await mailer(email, respondentToken, survey.name, template.text, template.subject, {
+    surveyId: survey.id,
+    trackDelivery: false,
+  });
 }
 
-async function startSurvey(survey) {
+async function startSurvey(survey, mailer = sendMail) {
   const client = await pool.connect();
   let respondents;
   let templates;
   try {
     const respondentResult = await client.query(
-      `SELECT name, contact_info, uuid, lang FROM Respondent WHERE ${legacySurveyPredicate()} AND can_respond = true`,
+      `SELECT name, contact_info, uuid, lang FROM Respondent
+       WHERE ${legacySurveyPredicate()}
+         AND can_respond = true
+         AND email_sent IS NOT TRUE`,
       [survey.id, survey.name]
     );
     const emailResult = await client.query(
@@ -268,9 +329,14 @@ async function startSurvey(survey) {
     return { respondent, template };
   });
 
-  await Promise.all(pendingEmails.map(({ respondent, template }) =>
-    sendMail(respondent.contact_info, respondent.uuid, survey.name, template.text, template.subject)
+  const results = await Promise.allSettled(pendingEmails.map(({ respondent, template }) =>
+    mailer(respondent.contact_info, respondent.uuid, survey.name, template.text, template.subject, {
+      surveyId: survey.id,
+      trackDelivery: true,
+    })
   ));
+  const failure = results.find((result) => result.status === 'rejected');
+  if (failure) throw failure.reason;
 }
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
@@ -3152,6 +3218,11 @@ module.exports = {
   LANGUAGE_LABELS,
   normalizeLanguage,
   buildNotificationMaps,
+  createEmailQueueProcessor,
+  sendEmailWithResend,
+  rateLimitedSend,
+  processEmailQueue,
+  sendMail,
   sendTestMail,
   startSurvey,
   emailQueue,

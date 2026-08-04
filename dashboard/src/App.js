@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { AppProvider, DashboardLayout } from '@toolpad/core';
 import Dashboard from './components/Dashboard';
 import Settings from './components/Settings';
@@ -127,10 +127,10 @@ const AppContent = () => {
     );
   };
 
-const App = () => (
-  <Router>
-    <AppContent />
-  </Router>
-);
+const router = createBrowserRouter([
+  { path: '*', element: <AppContent /> },
+]);
+
+const App = () => <RouterProvider router={router} />;
 
 export default App;

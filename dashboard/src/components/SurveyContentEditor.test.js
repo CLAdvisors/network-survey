@@ -35,8 +35,17 @@ test('loads, resets, and saves multiline survey instructions', async () => {
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 });
 
-test('shows a load error without throwing on a missing response', async () => {
+test('disables editing from an unknown baseline after load failure and safely retries', async () => {
   api.get.mockRejectedValueOnce(new Error('network'));
   render(<SurveyContentEditor surveyId="survey-2" />);
-  expect(await screen.findByText('Failed to load survey instructions.')).toBeInTheDocument();
+
+  expect(await screen.findByText(/Failed to load survey instructions/i)).toBeInTheDocument();
+  expect(screen.getByLabelText('Instructions shown to respondents')).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  expect(api.put).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(screen.getByLabelText('Instructions shown to respondents')).toHaveValue('First line\nSecond line'));
+  await waitFor(() => expect(screen.getByLabelText('Instructions shown to respondents')).not.toBeDisabled());
+  expect(api.get).toHaveBeenCalledTimes(2);
 });

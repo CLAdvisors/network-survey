@@ -11,6 +11,7 @@ import EmailNotificationEditor from "./EmailNotificationEditor";
 import SurveyContentEditor from "./SurveyContentEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
+import { useBlocker } from "react-router-dom";
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -25,6 +26,37 @@ const Dashboard = () => {
   const [contentBusy, setContentBusy] = React.useState(false);
   const [notificationBusy, setNotificationBusy] = React.useState(false);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
+  const hasBusyEdits = contentBusy || notificationBusy;
+  const hasDirtyEdits = contentDirty || notificationDirty;
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
+    (hasBusyEdits || hasDirtyEdits)
+    && `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}`
+      !== `${nextLocation.pathname}${nextLocation.search}${nextLocation.hash}`
+  ));
+
+  React.useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    if (hasBusyEdits) {
+      setSnackbar({
+        severity: 'warning',
+        message: 'Please wait for the current save or CSV import to finish before leaving the dashboard.',
+      });
+      blocker.reset();
+      return;
+    }
+    if (window.confirm('Discard unsaved changes and leave the dashboard?')) blocker.proceed();
+    else blocker.reset();
+  }, [blocker.state, blocker.proceed, blocker.reset, hasBusyEdits]);
+
+  React.useEffect(() => {
+    const handleBeforeUnload = (event) => {
+      if (!hasBusyEdits && !hasDirtyEdits) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasBusyEdits, hasDirtyEdits]);
 
   const fetchSurveyData = async () => {
     try {
@@ -108,6 +140,20 @@ const Dashboard = () => {
     setContentDirty(false);
     setNotificationDirty(false);
     setSelectSurvey(childData);
+  };
+
+  const guardSelectedSurveyAction = (survey) => {
+    const selectedId = selectSurvey?.id || selectSurvey?.name;
+    const actionSurveyId = survey?.id || survey?.name;
+    if (!selectedId || selectedId !== actionSurveyId || (!hasBusyEdits && !hasDirtyEdits)) return true;
+
+    setSnackbar({
+      severity: 'warning',
+      message: hasBusyEdits
+        ? 'Please wait for the current save or CSV import to finish before starting or archiving this survey.'
+        : 'Save or reset unsaved changes before starting or archiving this survey.',
+    });
+    return false;
   };
 
   const handleCreateSurvey = async (surveyName, organizationId) => {
@@ -194,6 +240,7 @@ const Dashboard = () => {
           selectRow={handleSelectRow}
           onSurveyDeleted={handleSurveyDeleted}
           selectedSurvey={selectSurvey}
+          guardSurveyAction={guardSelectedSurveyAction}
         />
       </CollapsibleSection>
 

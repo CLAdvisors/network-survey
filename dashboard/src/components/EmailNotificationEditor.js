@@ -35,6 +35,18 @@ const valueForHeader = (row, aliases) => {
 
 const hasHeader = (row, aliases) => Object.keys(row).some((key) => aliases.includes(normalizedHeader(key)));
 
+export const buildNotificationDownloadRows = (notifications = {}, subjects = {}) => LANGUAGES
+  .filter((language) => (
+    Object.prototype.hasOwnProperty.call(notifications, language.label)
+    || Object.prototype.hasOwnProperty.call(subjects, language.label)
+  ))
+  .map((language) => ({
+    Language: language.label,
+    Subject: subjects[language.label] ?? LEGACY_EMAIL_SUBJECT,
+    // An explicitly persisted empty string must remain a row in the export.
+    Text: notifications[language.label] ?? '',
+  }));
+
 const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
   const theme = useTheme();
   const uploadInputRef = useRef(null);
@@ -48,6 +60,8 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
   const [draft, setDraft] = useState(EMPTY_MESSAGE);
   const [original, setOriginal] = useState(EMPTY_MESSAGE);
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
 
@@ -75,6 +89,7 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
     setDraft(EMPTY_MESSAGE);
     setOriginal(EMPTY_MESSAGE);
     setAlert(null);
+    setLoadFailed(false);
 
     if (!surveyId) {
       setLoading(false);
@@ -103,7 +118,7 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
         setDraft(nextDraft);
         setOriginal(nextDraft);
       } catch (error) {
-        if (isCurrent()) setAlert({ severity: 'error', message: 'Failed to load email notifications.' });
+        if (isCurrent()) setLoadFailed(true);
       } finally {
         if (isCurrent()) setLoading(false);
       }
@@ -115,7 +130,7 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
       requestControllerRef.current?.abort();
       requestControllerRef.current = null;
     };
-  }, [surveyId]);
+  }, [surveyId, loadAttempt]);
 
   const selectLanguage = (_, language) => {
     if (!language || dirty) return;
@@ -130,7 +145,7 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
   };
 
   const handleSave = async () => {
-    if (!surveyId || !selectedLanguage || !dirty) return;
+    if (!surveyId || loadFailed || !selectedLanguage || !dirty) return;
     const operationSurveyId = surveyId;
     const generation = generationRef.current;
     const controller = new AbortController();
@@ -166,11 +181,10 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
     setAlert(null);
   };
 
-  const downloadRows = useMemo(() => LANGUAGES.map((language) => ({
-    Language: language.label,
-    Subject: subjects[language.label] ?? LEGACY_EMAIL_SUBJECT,
-    Text: notifications[language.label] ?? '',
-  })), [notifications, subjects]);
+  const downloadRows = useMemo(
+    () => buildNotificationDownloadRows(notifications, subjects),
+    [notifications, subjects]
+  );
 
   const handleDownload = () => {
     const csv = Papa.unparse(downloadRows, { columns: ['Language', 'Subject', 'Text'] });
@@ -187,7 +201,7 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
   const handleFileUpload = (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || dirty || !surveyId) return;
+    if (!file || dirty || !surveyId || loadFailed) return;
 
     const operationSurveyId = surveyId;
     const generation = generationRef.current;
@@ -278,14 +292,14 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
           Survey Email Notification
         </Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownload} disabled={loading}>
+          <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownload} disabled={loading || saving || loadFailed || !surveyId}>
             Download CSV
           </Button>
           <Button
             variant="contained"
             startIcon={<UploadFileIcon />}
             onClick={() => uploadInputRef.current?.click()}
-            disabled={loading || saving || dirty || !surveyId}
+            disabled={loading || saving || loadFailed || dirty || !surveyId}
             title={dirty ? 'Save or reset the current changes before importing.' : undefined}
           >
             Upload CSV
@@ -293,6 +307,16 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
           <input ref={uploadInputRef} type="file" hidden accept=".csv,text/csv" onChange={handleFileUpload} />
         </Box>
       </Box>
+
+      {loadFailed && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={<Button color="inherit" size="small" onClick={() => setLoadAttempt((value) => value + 1)}>Retry</Button>}
+        >
+          Failed to load email notifications. Editing and CSV actions are disabled until the content is reloaded.
+        </Alert>
+      )}
 
       {alert && <Alert severity={alert.severity} onClose={() => setAlert(null)} sx={{ mb: 2 }}>{alert.message}</Alert>}
 
@@ -306,7 +330,7 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
             options={LANGUAGES}
             getOptionLabel={(option) => option?.label || ''}
             isOptionEqualToValue={(option, value) => option.code === value?.code}
-            disabled={dirty || saving}
+            disabled={loadFailed || dirty || saving}
             renderInput={(params) => <TextField {...params} label="Language" helperText={dirty ? 'Save or reset changes before switching languages.' : ' '} />}
             sx={{ maxWidth: 320 }}
           />
@@ -315,7 +339,7 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
             label="Email subject"
             value={draft.subject}
             onChange={(event) => setDraft((current) => ({ ...current, subject: event.target.value }))}
-            disabled={!surveyId || saving}
+            disabled={!surveyId || loadFailed || saving}
           />
           <TextField
             fullWidth
@@ -324,11 +348,11 @@ const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
             label="Notification text"
             value={draft.text}
             onChange={(event) => setDraft((current) => ({ ...current, text: event.target.value }))}
-            disabled={!surveyId || saving}
+            disabled={!surveyId || loadFailed || saving}
           />
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-            <Button onClick={handleReset} disabled={!dirty || saving}>Reset</Button>
-            <Button variant="contained" onClick={handleSave} disabled={!dirty || saving}>
+            <Button onClick={handleReset} disabled={loadFailed || !dirty || saving}>Reset</Button>
+            <Button variant="contained" onClick={handleSave} disabled={loadFailed || !dirty || saving}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
           </Box>

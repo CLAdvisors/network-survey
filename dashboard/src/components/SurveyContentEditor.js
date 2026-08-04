@@ -16,6 +16,8 @@ const SurveyContentEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
   const [instructions, setInstructions] = useState('');
   const [originalInstructions, setOriginalInstructions] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState(null);
 
@@ -25,6 +27,7 @@ const SurveyContentEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
     setInstructions('');
     setOriginalInstructions('');
     setAlert(null);
+    setLoadFailed(false);
 
     if (!surveyId) {
       setLoading(false);
@@ -43,7 +46,7 @@ const SurveyContentEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
         setOriginalInstructions(value);
       } catch (error) {
         if (!active) return;
-        setAlert({ severity: 'error', message: 'Failed to load survey instructions.' });
+        setLoadFailed(true);
       } finally {
         if (active) setLoading(false);
       }
@@ -51,7 +54,7 @@ const SurveyContentEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
 
     loadContent();
     return () => { active = false; };
-  }, [surveyId]);
+  }, [surveyId, loadAttempt]);
 
   const dirty = instructions !== originalInstructions;
 
@@ -66,7 +69,7 @@ const SurveyContentEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
   }, [saving, onBusyChange]);
 
   const handleSave = async () => {
-    if (!surveyId || !dirty) return;
+    if (!surveyId || loadFailed || !dirty) return;
     setSaving(true);
     setAlert(null);
     try {
@@ -91,6 +94,16 @@ const SurveyContentEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
         Survey Instructions
       </Typography>
 
+      {loadFailed && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={<Button color="inherit" size="small" onClick={() => setLoadAttempt((value) => value + 1)}>Retry</Button>}
+        >
+          Failed to load survey instructions. Editing is disabled until the content is reloaded.
+        </Alert>
+      )}
+
       {alert && (
         <Alert severity={alert.severity} onClose={() => setAlert(null)} sx={{ mb: 2 }}>
           {alert.message}
@@ -113,14 +126,14 @@ const SurveyContentEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
               setInstructions(event.target.value);
               if (alert?.severity === 'success') setAlert(null);
             }}
-            disabled={!surveyId || saving}
+            disabled={!surveyId || loading || loadFailed || saving}
             helperText="Plain text only. Line breaks will be preserved. Leave empty to hide the instructions block."
           />
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 2 }}>
-            <Button onClick={handleReset} disabled={!dirty || saving}>
+            <Button onClick={handleReset} disabled={loadFailed || !dirty || saving}>
               Reset
             </Button>
-            <Button variant="contained" onClick={handleSave} disabled={!dirty || saving}>
+            <Button variant="contained" onClick={handleSave} disabled={loadFailed || !dirty || saving}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
           </Box>

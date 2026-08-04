@@ -35,6 +35,8 @@ const {
   insertEmails,
   normalizeLanguage,
   buildNotificationMaps,
+  createEmailQueueProcessor,
+  sendEmailWithResend,
   sendTestMail,
   startSurvey,
   emailQueue,
@@ -1421,16 +1423,123 @@ test('sendTestMail selects current localized subjects and bodies for legacy resp
     },
     release() { released += 1; },
   });
-  const mailer = async (...args) => { sent.push(args); };
+  const mailer = async (...args) => {
+    assert.equal(released > sent.length, true, 'database client is released before provider work starts');
+    sent.push(args);
+  };
 
   await sendTestMail('english@example.com', { id: 'survey-id', name: 'Survey A' }, 'en', mailer);
   await sendTestMail('spanish@example.com', { id: 'survey-id', name: 'Survey A' }, '"Spanish"', mailer);
 
   assert.deepEqual(sent, [
-    ['english@example.com', 'respondent-token', 'Survey A', "Current English body — don't alter", 'Current English subject'],
-    ['spanish@example.com', 'respondent-token', 'Survey A', 'Cuerpo actual', 'Asunto actual'],
+    ['english@example.com', 'respondent-token', 'Survey A', "Current English body — don't alter", 'Current English subject', {
+      surveyId: 'survey-id', trackDelivery: false,
+    }],
+    ['spanish@example.com', 'respondent-token', 'Survey A', 'Cuerpo actual', 'Asunto actual', {
+      surveyId: 'survey-id', trackDelivery: false,
+    }],
   ]);
   assert.equal(released, 2);
+});
+
+test('Resend response errors are treated as provider failures', async () => {
+  const providerError = { message: 'invalid recipient', statusCode: 422 };
+  const resendClient = {
+    emails: { send: async () => ({ data: null, error: providerError }) },
+  };
+
+  await assert.rejects(
+    sendEmailWithResend({ to: 'bad@example.com' }, resendClient),
+    (error) => error.message === providerError.message && error.providerError === providerError
+  );
+});
+
+test('email queue books successful respondent tokens without conflating duplicate addresses', async () => {
+  const marked = [];
+  const providerError = new Error('provider rejected message');
+  let releaseFirst;
+  const firstSend = new Promise((resolve) => { releaseFirst = resolve; });
+  const processor = createEmailQueueProcessor({
+    rateLimit: 3,
+    delay: 0,
+    wait: async () => {},
+    sendEmail: async (emailData) => {
+      if (emailData.subject === 'first') await firstSend;
+      if (emailData.subject === 'duplicate-failed') throw providerError;
+      return { id: emailData.subject };
+    },
+    markSuccessful: async (delivery) => {
+      marked.push(delivery);
+    },
+  });
+  const survey = { surveyId: 'survey-id', surveyName: 'Survey A' };
+
+  const first = processor.enqueue(
+    { to: 'duplicate@example.com', subject: 'first' },
+    { ...survey, respondentToken: 'respondent-one' }
+  );
+  const failed = processor.enqueue(
+    { to: 'duplicate@example.com', subject: 'duplicate-failed' },
+    { ...survey, respondentToken: 'respondent-two' }
+  );
+  const second = processor.enqueue(
+    { to: 'second@example.com', subject: 'second' },
+    { ...survey, respondentToken: 'respondent-three' }
+  );
+  const duplicateSuccess = processor.enqueue(
+    { to: 'duplicate@example.com', subject: 'duplicate-success' },
+    { ...survey, respondentToken: 'respondent-four' }
+  );
+  releaseFirst();
+
+  assert.deepEqual(await first, { id: 'first' });
+  await assert.rejects(failed, (error) => error === providerError);
+  assert.deepEqual(await second, { id: 'second' });
+  assert.deepEqual(await duplicateSuccess, { id: 'duplicate-success' });
+  assert.deepEqual(marked, [
+    { ...survey, respondentTokens: ['respondent-one'] },
+    { ...survey, respondentTokens: ['respondent-three', 'respondent-four'] },
+  ]);
+  assert.equal(processor.queue.length, 0);
+  assert.equal(processor.isProcessing(), false);
+});
+
+test('test and reminder queue sends await providers without marking initial invitation delivery', async () => {
+  const marked = [];
+  let releaseProvider;
+  const providerResult = new Promise((resolve) => { releaseProvider = resolve; });
+  const processor = createEmailQueueProcessor({
+    sendEmail: async () => providerResult,
+    markSuccessful: async (delivery) => { marked.push(delivery); },
+  });
+
+  let settled = false;
+  const send = processor.enqueue(
+    { to: 'reminder@example.com' },
+    { surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'token', trackDelivery: false }
+  ).then((result) => {
+    settled = true;
+    return result;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false, 'enqueue promise still waits for the provider');
+  releaseProvider({ id: 'reminder' });
+
+  assert.deepEqual(await send, { id: 'reminder' });
+  assert.deepEqual(marked, []);
+});
+
+test('email queue settles successful sends even when email_sent bookkeeping fails', async () => {
+  const processor = createEmailQueueProcessor({
+    sendEmail: async () => ({ id: 'sent' }),
+    markSuccessful: async () => { throw new Error('database unavailable'); },
+  });
+
+  assert.deepEqual(await processor.enqueue(
+    { to: 'sent@example.com' },
+    { surveyId: 'survey-id', surveyName: 'Survey A', respondentToken: 'respondent-token' }
+  ), { id: 'sent' });
+  assert.equal(processor.isProcessing(), false);
 });
 
 test('startSurvey releases its client and prevalidates every canonicalized template before enqueueing', async (t) => {
@@ -1457,6 +1566,46 @@ test('startSurvey releases its client and prevalidates every canonicalized templ
   await assert.rejects(startSurvey({ id: 'survey-id', name: 'Survey A' }), /Spanish/);
   assert.equal(released, true);
   assert.equal(emailQueue.length, initialQueueLength, 'no recipient is queued when any template is missing');
+});
+
+test('startSurvey awaits every provider send and rejects delivery failures after releasing its client', async (t) => {
+  const originalConnect = pool.connect;
+  let released = false;
+  let respondentSql = '';
+  const sent = [];
+  t.after(() => { pool.connect = originalConnect; });
+  pool.connect = async () => ({
+    async query(sql) {
+      if (/FROM Respondent/i.test(sql)) {
+        respondentSql = sql;
+        return { rows: [
+          { contact_info: 'one@example.com', uuid: 'one', lang: 'English' },
+          { contact_info: 'two@example.com', uuid: 'two', lang: 'English' },
+        ] };
+      }
+      return { rows: [{ lang: 'English', text: 'Hello', subject: 'Subject' }] };
+    },
+    release() { released = true; },
+  });
+  const providerError = new Error('Resend failed');
+  const mailer = async (email, token, surveyName, text, subject, options) => {
+    assert.equal(released, true);
+    sent.push({ email, token, surveyName, text, subject, options });
+    if (email === 'two@example.com') throw providerError;
+  };
+
+  await assert.rejects(startSurvey({ id: 'survey-id', name: 'Survey A' }, mailer), (error) => error === providerError);
+  assert.match(respondentSql, /email_sent\s+IS\s+NOT\s+TRUE/i, 'retry query excludes already-successful recipients');
+  assert.deepEqual(sent, [
+    {
+      email: 'one@example.com', token: 'one', surveyName: 'Survey A', text: 'Hello', subject: 'Subject',
+      options: { surveyId: 'survey-id', trackDelivery: true },
+    },
+    {
+      email: 'two@example.com', token: 'two', surveyName: 'Survey A', text: 'Hello', subject: 'Subject',
+      options: { surveyId: 'survey-id', trackDelivery: true },
+    },
+  ], 'all eligible unsent respondents are attempted with exact delivery metadata');
 });
 
 test('notification validation enforces language, safe nonblank subjects, and text bounds', () => {
@@ -2133,7 +2282,10 @@ test('survey create organization defaulting handles none, one, multiple, and pla
 
 test('startSurvey email_sent update and survey archive implementation are scoped and non-destructive', () => {
   const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
-  assert.match(serverSource, /UPDATE Respondent SET email_sent = true WHERE contact_info = ANY\(\$1\) AND survey_name = \$2/);
+  assert.match(serverSource, /UPDATE Respondent SET email_sent = true[\s\S]*WHERE uuid = ANY\(\$1\)[\s\S]*survey_id = \$2 OR \(survey_id IS NULL AND survey_name = \$3\)/);
+  assert.doesNotMatch(serverSource, /email_sent = true WHERE contact_info = ANY/);
+  assert.match(serverSource, /respondentToken: id/);
+  assert.match(serverSource, /trackDelivery: false/);
   assert.match(serverSource, /UPDATE survey SET archived_at = CURRENT_TIMESTAMP, archived_by_user_id = \$1 WHERE id = \$2/);
   assert.doesNotMatch(serverSource, /DELETE FROM email WHERE survey_name[\s\S]+DELETE FROM respondent WHERE survey_name[\s\S]+DELETE FROM survey WHERE name/);
 });

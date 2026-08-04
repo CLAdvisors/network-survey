@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import MenuCell from './SurveyTableMenuCell';
 
@@ -14,12 +14,25 @@ const columns = [
     width: 100,
     sortable: false,
     filterable: false,
-    renderCell: (params) => <MenuCell row={params.row} onSurveyDeleted={params.row.onSurveyDeleted} />
   },
 ];
 
-const SurveyTable = ({ rows, selectRow, onSurveyDeleted, selectedSurvey }) => {
+const SurveyTable = ({ rows, selectRow, onSurveyDeleted, selectedSurvey, guardSurveyAction }) => {
   const [tableRows, setTableRows] = useState([]);
+  const tableColumns = useMemo(() => columns.map((column) => (
+    column.field === 'actions'
+      ? {
+          ...column,
+          renderCell: (params) => (
+            <MenuCell
+              row={params.row}
+              onSurveyDeleted={onSurveyDeleted}
+              guardSurveyAction={guardSurveyAction}
+            />
+          ),
+        }
+      : column
+  )), [guardSurveyAction, onSurveyDeleted]);
 
   useEffect(() => {
     if (rows) {
@@ -40,7 +53,7 @@ const SurveyTable = ({ rows, selectRow, onSurveyDeleted, selectedSurvey }) => {
     <div style={{ height: '100%', width: '100%' }}>
       <DataGrid
         rows={tableRows}
-        columns={columns}
+        columns={tableColumns}
         initialState={{
           pagination: { paginationModel: { pageSize: 10 } },
           columns: {

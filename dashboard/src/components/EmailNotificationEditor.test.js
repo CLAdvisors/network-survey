@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import EmailNotificationEditor from './EmailNotificationEditor';
+import EmailNotificationEditor, { buildNotificationDownloadRows } from './EmailNotificationEditor';
 import api from '../api/axios';
 
 vi.mock('../api/axios', () => ({
@@ -17,6 +17,18 @@ beforeEach(() => {
     },
   });
   api.post.mockResolvedValue({ data: { success: true } });
+});
+
+test('CSV export includes only persisted languages and retains explicitly blank bodies', () => {
+  expect(buildNotificationDownloadRows(
+    { English: 'Hello', Spanish: '' },
+    { English: 'Invitation', Spanish: 'Invitación' }
+  )).toEqual([
+    { Language: 'English', Subject: 'Invitation', Text: 'Hello' },
+    { Language: 'Spanish', Subject: 'Invitación', Text: '' },
+  ]);
+
+  expect(buildNotificationDownloadRows({}, {})).toEqual([]);
 });
 
 test('loads subject and text, protects language changes while dirty, and saves JSON unchanged', async () => {
@@ -48,6 +60,24 @@ test('handles absent notification maps without undefined errors', async () => {
   render(<EmailNotificationEditor surveyId="empty-survey" />);
   expect(await screen.findByLabelText('Email subject')).toHaveValue('');
   expect(screen.getByLabelText('Notification text')).toHaveValue('');
+});
+
+test('disables editing and CSV actions after load failure and safely retries', async () => {
+  api.get.mockRejectedValueOnce(new Error('network'));
+  render(<EmailNotificationEditor surveyId="survey-1" />);
+
+  expect(await screen.findByText(/Failed to load email notifications/i)).toBeInTheDocument();
+  expect(screen.getByLabelText('Email subject')).toBeDisabled();
+  expect(screen.getByLabelText('Notification text')).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /Download CSV/i })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /Upload CSV/i })).toBeDisabled();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(screen.getByLabelText('Email subject')).toHaveValue('You’re invited!'));
+  await waitFor(() => expect(screen.getByLabelText('Email subject')).not.toBeDisabled());
+  expect(screen.getByRole('button', { name: /Download CSV/i })).not.toBeDisabled();
+  expect(api.get).toHaveBeenCalledTimes(2);
 });
 
 test('rejects a CSV without a recognized text or message header before saving', async () => {

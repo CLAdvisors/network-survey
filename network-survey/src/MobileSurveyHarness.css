@@ -1,0 +1,52 @@
+.respondent-survey-frame {
+  container-type: inline-size;
+}
+
+.respondent-survey-frame .harness-survey-layout {
+  padding: 12px;
+}
+
+@media (max-width: 599.95px) {
+  .respondent-survey-frame .harness-survey-layout {
+    padding: 8px;
+  }
+
+  .respondent-survey-frame .harness-survey-surface {
+    border-inline: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
+@container (max-width: 599.95px) {
+  .respondent-survey-frame .harness-survey-layout {
+    padding: 8px;
+  }
+
+  .respondent-survey-frame .harness-survey-surface {
+    border-inline: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .respondent-survey-frame .survey-instructions,
+  .respondent-survey-frame .survey-content {
+    padding: 16px;
+  }
+}
+
+/* Explicit fallback for framed browsers without container-query support. */
+.respondent-survey-frame--phone .harness-survey-layout {
+  padding: 8px;
+}
+
+.respondent-survey-frame--phone .harness-survey-surface {
+  border-inline: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.respondent-survey-frame--phone .survey-instructions,
+.respondent-survey-frame--phone .survey-content {
+  padding: 16px;
+}

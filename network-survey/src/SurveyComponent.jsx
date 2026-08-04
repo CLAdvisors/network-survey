@@ -11,6 +11,10 @@ import {
   applyProductionSurveyTheme,
   PRODUCTION_SURVEY_CLASS_NAME
 } from "@network-survey/frontend-shared";
+import {
+  disposeTagboxSearchPlaceholder,
+  restoreTagboxSearchPlaceholder
+} from "./tagboxSearchPlaceholder";
 
 const draggableQuestionRoots = new WeakMap();
 
@@ -68,6 +72,7 @@ function SurveyComponent({setTitle}) {
       if (!json) return;
 
       const newSurvey = new Model(json);
+      const roots = new Set();
       applyProductionSurveyTheme(newSurvey);
 
       // Configure survey settings
@@ -124,17 +129,24 @@ function SurveyComponent({setTitle}) {
 
       // Custom rendering for draggableranking
       newSurvey.onAfterRenderQuestion.add((survey, options) => {
+        const questionElement = options.htmlElement?.matches?.(".sd-question")
+          ? options.htmlElement
+          : options.htmlElement?.querySelector(".sd-question") || options.htmlElement;
+
+        restoreTagboxSearchPlaceholder(questionElement, options.question);
+
         if (options.question.getType() !== "draggableranking") {
           return;
         }
 
         const contentElement =
-          options.htmlElement.querySelector(".sd-question__content") ||
-          options.htmlElement;
+          questionElement?.querySelector(".sd-question__content") ||
+          questionElement;
 
         const previousRoot = draggableQuestionRoots.get(options.question);
         if (previousRoot) {
           previousRoot.unmount();
+          roots.delete(previousRoot);
           draggableQuestionRoots.delete(options.question);
         }
 
@@ -149,16 +161,29 @@ function SurveyComponent({setTitle}) {
 
         const root = ReactDOM.createRoot(container);
         draggableQuestionRoots.set(options.question, root);
+        roots.add(root);
         root.render(
           <DraggableRankingQuestion
             question={options.question}
             value={options.question.value || []}
             onChange={(val) => (options.question.value = val)}
+            availableDirection="vertical"
+            valueSource="question"
           />
         );
       });
 
       setSurvey(newSurvey);
+
+      return () => {
+        newSurvey.getAllQuestions().forEach((question) => {
+          disposeTagboxSearchPlaceholder(question);
+          draggableQuestionRoots.delete(question);
+        });
+        roots.forEach((root) => root.unmount());
+        roots.clear();
+        newSurvey.dispose();
+      };
     }, [json, userId, surveyName]);
 
     // API handlers

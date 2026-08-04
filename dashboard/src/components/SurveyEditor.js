@@ -56,6 +56,7 @@ ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
     question={props.question}
     value={props.question.value || []}
     onChange={val => props.question.value = val}
+    valueSource="question"
   />
 ));
 
@@ -365,6 +366,7 @@ const SurveyEditor = () => {
             question={options.question}
             value={options.question.value || []}
             onChange={(val) => (options.question.value = val)}
+            valueSource="question"
           />
         );
       };

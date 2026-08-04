@@ -49,7 +49,9 @@ const getChoiceText = (choice, value) => {
 };
 
 const normalizeChoice = (choice) => {
-  const value = choice && typeof choice === "object" && Object.prototype.hasOwnProperty.call(choice, "value")
+  // SurveyJS ItemValue exposes value through its prototype rather than as an
+  // own property, so hasOwnProperty() leaves choices wrapped as objects.
+  const value = choice && typeof choice === "object" && "value" in choice
     ? extractValue(choice.value)
     : extractValue(choice);
   return {
@@ -76,42 +78,93 @@ const parseMaxSelected = (value) => {
   return Math.max(1, Math.floor(num));
 };
 
-function Item({ item, provided, snapshot }) {
+function Item({
+  item,
+  provided,
+  snapshot,
+  actionLabel,
+  onAction,
+  actionButtonRef,
+  actionDisabled = false
+}) {
+  const text = item.text ?? (item.value !== undefined ? String(item.value) : "");
   return (
     <div
       ref={provided.innerRef}
       {...provided.draggableProps}
-      {...provided.dragHandleProps}
       style={{
         userSelect: "none",
-        padding: 8,
         margin: "0 0 8px 0",
         width: "100%",
         background: snapshot.isDragging ? colors.primaryLight : colors.surface,
         border: `1px solid ${colors.primaryBorder}`,
         borderRadius: 4,
         minWidth: 80,
-        textAlign: "center",
+        display: "flex",
+        alignItems: "stretch",
         ...provided.draggableProps.style
       }}
     >
-      {item.text ?? (item.value !== undefined ? String(item.value) : "")}
+      <div
+        {...provided.dragHandleProps}
+        style={{
+          flex: "1 1 auto",
+          minWidth: 0,
+          padding: 8,
+          textAlign: "center",
+          overflowWrap: "anywhere"
+        }}
+      >
+        {text}
+      </div>
+      <button
+        ref={actionButtonRef}
+        type="button"
+        onClick={onAction}
+        disabled={actionDisabled}
+        aria-label={`${actionLabel}: ${text}`}
+        style={{
+          flex: "0 0 auto",
+          minWidth: 52,
+          border: 0,
+          borderInlineStart: `1px solid ${colors.primaryBorder}`,
+          background: "transparent",
+          color: actionDisabled ? colors.disabled : colors.primary,
+          cursor: actionDisabled ? "not-allowed" : "pointer",
+          font: "inherit",
+          fontWeight: 600,
+          padding: "8px 10px"
+        }}
+      >
+        {actionLabel}
+      </button>
     </div>
   );
 }
 
-export default function DraggableRankingQuestion({ question, value, onChange }) {
+export default function DraggableRankingQuestion({
+  question,
+  value,
+  onChange,
+  availableDirection = "horizontal",
+  valueSource = "prop"
+}) {
   const [ranked, setRanked] = React.useState([]);
   const [available, setAvailable] = React.useState([]);
+  const [dragSourceId, setDragSourceId] = React.useState(null);
+  const actionButtonRefs = React.useRef(new Map());
+  const pendingFocusKey = React.useRef(null);
+  const isAvailableVertical = availableDirection === "vertical";
+  const isQuestionValueSource = valueSource === "question";
 
   const maxSelected = React.useMemo(
     () => parseMaxSelected(question?.maxSelectedChoices),
     [question?.maxSelectedChoices]
   );
 
-  const syncFromProps = React.useCallback(() => {
+  const syncFromValue = React.useCallback((currentValue) => {
     const baseChoices = (question?.choices || []).map(normalizeChoice);
-    const rankedRaw = Array.isArray(value) ? value : [];
+    const rankedRaw = Array.isArray(currentValue) ? currentValue : [];
     const rankedValues = rankedRaw.map(extractValue);
 
     let overflowValues = [];
@@ -145,18 +198,32 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
     if (overflowValues.length) {
       onChange?.(rankedChoices.map((item) => item.value));
     }
-  }, [question?.choices, value, maxSelected, onChange]);
+  }, [question?.choices, maxSelected, onChange]);
 
   React.useEffect(() => {
-    syncFromProps();
-  }, [syncFromProps]);
+    syncFromValue(isQuestionValueSource ? question?.value : value);
+  }, [isQuestionValueSource, question, syncFromValue, value]);
 
   React.useEffect(() => {
     const choices = Array.isArray(question?.choices) ? question.choices : [];
-    if (choices.length === 0) return;
     const disposers = [];
+
+    const questionHandler = (_, options) => {
+      if (options?.name === "value") {
+        // SurveyJS owns question.value and can update it without rerendering
+        // this independent React root.
+        syncFromValue(question?.value);
+      }
+    };
+    if (isQuestionValueSource && question?.onPropertyChanged?.add) {
+      question.onPropertyChanged.add(questionHandler);
+      disposers.push(() => question.onPropertyChanged.remove(questionHandler));
+    }
+
     choices.forEach((choice) => {
-      const handler = () => syncFromProps();
+      const handler = () => syncFromValue(
+        isQuestionValueSource ? question?.value : value
+      );
       if (choice?.onPropertyChanged?.add) {
         choice.onPropertyChanged.add(handler);
         disposers.push(() => choice.onPropertyChanged.remove(handler));
@@ -165,9 +232,47 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
     return () => {
       disposers.forEach((dispose) => dispose());
     };
-  }, [question?.choices, syncFromProps]);
+  }, [isQuestionValueSource, question, question?.choices, syncFromValue, value]);
+
+  React.useEffect(() => {
+    if (!pendingFocusKey.current) return;
+    actionButtonRefs.current.get(pendingFocusKey.current)?.focus();
+    pendingFocusKey.current = null;
+  }, [available, ranked]);
+
+  const setActionButtonRef = (list, key, node) => {
+    const refKey = `${list}:${key}`;
+    if (node) {
+      actionButtonRefs.current.set(refKey, node);
+    } else {
+      actionButtonRefs.current.delete(refKey);
+    }
+  };
+
+  const rankAvailableItem = (index) => {
+    if (maxSelected && ranked.length >= maxSelected) return;
+    const newAvailable = Array.from(available);
+    const [moved] = newAvailable.splice(index, 1);
+    if (!moved) return;
+    pendingFocusKey.current = `ranked:${moved.key}`;
+    const newRanked = [...ranked, moved];
+    setAvailable(newAvailable);
+    setRanked(newRanked);
+    onChange?.(newRanked.map((item) => item.value));
+  };
+
+  const unrankItem = (index) => {
+    const newRanked = Array.from(ranked);
+    const [moved] = newRanked.splice(index, 1);
+    if (!moved) return;
+    pendingFocusKey.current = `available:${moved.key}`;
+    setRanked(newRanked);
+    setAvailable([...available, moved]);
+    onChange?.(newRanked.map((item) => item.value));
+  };
 
   const handleDragEnd = (result) => {
+    setDragSourceId(null);
     const { source, destination } = result;
     if (!destination) return;
 
@@ -205,14 +310,17 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
   const isLimitReached = Boolean(maxSelected) && ranked.length >= (maxSelected ?? 0);
 
   return (
-    <DragDropContext onDragEnd={handleDragEnd}>
+    <DragDropContext
+      onDragStart={({ source }) => setDragSourceId(source.droppableId)}
+      onDragEnd={handleDragEnd}
+    >
       <div style={{ display: "flex", flexDirection: "column" }}>
         <div style={{ marginBottom: 16 }}>
           <strong>Ranked (drag items here to rank):</strong>
           <Droppable
             droppableId="ranked"
             direction="vertical"
-            isDropDisabled={isLimitReached}
+            isDropDisabled={isLimitReached && dragSourceId !== "ranked"}
           >
             {(provided, snapshot) => (
               <div
@@ -243,7 +351,14 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                 {ranked.map((item, index) => (
                   <Draggable key={item.key} draggableId={item.key} index={index}>
                     {(provided2, snapshot2) => (
-                      <Item item={item} provided={provided2} snapshot={snapshot2} />
+                      <Item
+                        item={item}
+                        provided={provided2}
+                        snapshot={snapshot2}
+                        actionLabel="Unrank"
+                        actionButtonRef={(node) => setActionButtonRef("ranked", item.key, node)}
+                        onAction={() => unrankItem(index)}
+                      />
                     )}
                   </Draggable>
                 ))}
@@ -265,7 +380,7 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
         </div>
         <div>
           <strong>Available options:</strong>
-          <Droppable droppableId="available" direction="horizontal">
+          <Droppable droppableId="available" direction={availableDirection}>
             {(provided, snapshot) => (
               <div
                 ref={provided.innerRef}
@@ -277,13 +392,22 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                   borderRadius: 4,
                   background: snapshot.isDraggingOver ? colors.primaryLight : undefined,
                   display: "flex",
-                  flexWrap: "wrap"
+                  flexDirection: isAvailableVertical ? "column" : "row",
+                  flexWrap: isAvailableVertical ? "nowrap" : "wrap"
                 }}
               >
                 {available.map((item, index) => (
                   <Draggable key={item.key} draggableId={item.key} index={index}>
                     {(provided2, snapshot2) => (
-                      <Item item={item} provided={provided2} snapshot={snapshot2} />
+                      <Item
+                        item={item}
+                        provided={provided2}
+                        snapshot={snapshot2}
+                        actionLabel="Rank"
+                        actionButtonRef={(node) => setActionButtonRef("available", item.key, node)}
+                        actionDisabled={isLimitReached}
+                        onAction={() => rankAvailableItem(index)}
+                      />
                     )}
                   </Draggable>
                 ))}

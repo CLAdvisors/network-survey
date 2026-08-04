@@ -6,6 +6,11 @@ import { AppThemeProvider } from '@network-survey/frontend-react';
 
 import Survey from './Survey';
 
+const isMobileHarness = import.meta.env.DEV
+  && new URLSearchParams(window.location.search).get('mobileHarness') === '1';
+const MobileSurveyHarness = isMobileHarness
+  ? React.lazy(() => import('./MobileSurveyHarness'))
+  : null;
 
 // TODO for MVP
 // - Add privacy policy
@@ -15,11 +20,16 @@ import Survey from './Survey';
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <AppThemeProvider>
-    <React.StrictMode>
-      <Survey />
-    </React.StrictMode>
+    {isMobileHarness ? (
+      <React.Suspense fallback={<div>Loading mobile review harness…</div>}>
+        <MobileSurveyHarness />
+      </React.Suspense>
+    ) : (
+      <React.StrictMode>
+        <Survey />
+      </React.StrictMode>
+    )}
   </AppThemeProvider>
-  
 );
 
 // If you want to start measuring performance in your app, pass a function

@@ -363,25 +363,73 @@ function verifyDemoToken(token, now = Date.now()) {
 }
 
 function sanitizeSurveyForDemo(value) {
-  if (Array.isArray(value)) {
-    return value.map(sanitizeSurveyForDemo);
-  }
-  if (!value || typeof value !== 'object') {
-    return value;
+  const namedDefinitions = new Map();
+  const peopleChoiceSources = new Set();
+
+  const inspect = (node) => {
+    if (Array.isArray(node)) {
+      node.forEach(inspect);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.name === 'string') namedDefinitions.set(node.name, node);
+    if (
+      (node.type === 'tagbox' || node.cellType === 'tagbox')
+      && typeof node.choicesFromQuestion === 'string'
+    ) {
+      peopleChoiceSources.add(node.choicesFromQuestion);
+    }
+    Object.values(node).forEach(inspect);
+  };
+  inspect(value);
+
+  // Follow chained choicesFromQuestion references so an indirect source cannot
+  // leak persisted respondent values into an externally forwarded demo.
+  const pendingSources = [...peopleChoiceSources];
+  while (pendingSources.length > 0) {
+    const source = namedDefinitions.get(pendingSources.pop());
+    if (
+      source
+      && typeof source.choicesFromQuestion === 'string'
+      && !peopleChoiceSources.has(source.choicesFromQuestion)
+    ) {
+      peopleChoiceSources.add(source.choicesFromQuestion);
+      pendingSources.push(source.choicesFromQuestion);
+    }
   }
 
-  const sanitized = Object.fromEntries(
-    Object.entries(value).map(([key, nestedValue]) => [key, sanitizeSurveyForDemo(nestedValue)])
-  );
-  if (value.type === 'tagbox' || value.cellType === 'tagbox') {
-    sanitized.choices = [];
-    sanitized.choicesLazyLoadEnabled = true;
-    sanitized.choicesLazyLoadPageSize = Number(value.choicesLazyLoadPageSize) > 0
-      ? value.choicesLazyLoadPageSize
-      : 25;
-    sanitized.allowAddNewTag = false;
-  }
-  return sanitized;
+  const sanitize = (node, inheritedTagbox = false) => {
+    if (Array.isArray(node)) {
+      return node.map((entry) => sanitize(entry, inheritedTagbox));
+    }
+    if (!node || typeof node !== 'object') return node;
+
+    const isTagbox = inheritedTagbox || node.type === 'tagbox' || node.cellType === 'tagbox';
+    const sanitized = Object.fromEntries(
+      Object.entries(node).map(([key, nestedValue]) => [
+        key,
+        sanitize(nestedValue, node.cellType === 'tagbox' && key === 'columns'),
+      ])
+    );
+
+    if (isTagbox) {
+      sanitized.choices = [];
+      sanitized.choicesLazyLoadEnabled = true;
+      sanitized.choicesLazyLoadPageSize = Number(node.choicesLazyLoadPageSize) > 0
+        ? node.choicesLazyLoadPageSize
+        : 25;
+      sanitized.allowAddNewTag = false;
+      delete sanitized.choicesFromQuestion;
+      delete sanitized.choicesFromQuestionMode;
+    } else if (typeof node.name === 'string' && peopleChoiceSources.has(node.name)) {
+      sanitized.choices = [...DEMO_RESPONDENT_CHOICES];
+      delete sanitized.choicesFromQuestion;
+      delete sanitized.choicesFromQuestionMode;
+    }
+    return sanitized;
+  };
+
+  return sanitize(value);
 }
 
 app.use(express.json());

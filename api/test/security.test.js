@@ -1374,19 +1374,30 @@ test('demo schema sanitization recursively replaces legacy people choices', () =
         elements: [{ type: 'tagbox', name: 'nested', choices: privateChoices }],
       }, {
         type: 'paneldynamic',
-        templateElements: [{ type: 'matrixdropdown', columns: [{ cellType: 'tagbox', choices: privateChoices }] }],
+        templateElements: [{ type: 'matrixdropdown', cellType: 'tagbox', columns: [{ name: 'person', choices: privateChoices }] }],
+      }, {
+        type: 'dropdown', name: 'private_source', choices: privateChoices,
+      }, {
+        type: 'tagbox', name: 'from_source', choicesFromQuestion: 'private_source',
       }],
     }],
   };
 
   const sanitized = sanitizeSurveyForDemo(schema);
-  const nestedTagbox = sanitized.pages[0].elements[0].elements[0];
-  const matrixTagbox = sanitized.pages[0].elements[1].templateElements[0].columns[0];
-  for (const question of [nestedTagbox, matrixTagbox]) {
+  const elements = sanitized.pages[0].elements;
+  const nestedTagbox = elements[0].elements[0];
+  const matrixTagbox = elements[1].templateElements[0].columns[0];
+  const sourceQuestion = elements[2];
+  const sourceTagbox = elements[3];
+  for (const question of [nestedTagbox, matrixTagbox, sourceTagbox]) {
     assert.deepEqual(question.choices, []);
     assert.equal(question.choicesLazyLoadEnabled, true);
     assert.equal(question.allowAddNewTag, false);
+    assert.equal(question.choicesFromQuestion, undefined);
   }
+  assert.equal(sourceQuestion.choices.length, 100);
+  assert.equal(sourceQuestion.choices[0], 'Demo Person 001 (demo-person-001@example.com)');
+  assert.equal(sourceQuestion.choices.includes(privateChoices[0]), false);
   assert.deepEqual(schema.pages[0].elements[0].elements[0].choices, privateChoices, 'persisted schema is not mutated');
 });
 

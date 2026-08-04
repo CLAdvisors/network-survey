@@ -8,6 +8,7 @@ import api from "../api/axios";
 import QuestionTable from "./QuestionTable";
 import CreateSurveyDialog from "./CreateSurveyDialog";
 import EmailNotificationEditor from "./EmailNotificationEditor";
+import InvitationSubjectEditor from "./InvitationSubjectEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 
@@ -106,6 +107,10 @@ const Dashboard = () => {
     }
   };
 
+  const handleSurveyCopied = async () => {
+    await fetchSurveyData();
+  };
+
   const handleSurveyDeleted = async (deletedSurveyName) => {
     await fetchSurveyData();
     if (selectSurvey && selectSurvey.name === deletedSurveyName) {
@@ -173,6 +178,7 @@ const Dashboard = () => {
           rows={surveyData} 
           selectRow={handleSelectRow}
           onSurveyDeleted={handleSurveyDeleted}
+          onSurveyCopied={handleSurveyCopied}
           selectedSurvey={selectSurvey}
         />
       </CollapsibleSection>
@@ -195,6 +201,7 @@ const Dashboard = () => {
 
       {canEditSurvey(selectSurvey) && (
         <CollapsibleSection title="Email Notifications">
+          <InvitationSubjectEditor surveyId={selectSurvey?.id || selectSurvey?.name} />
           <EmailNotificationEditor surveyId={selectSurvey?.id || selectSurvey?.name} />
         </CollapsibleSection>
       )}

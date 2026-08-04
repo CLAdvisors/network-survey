@@ -22,6 +22,7 @@ const {
   tableExists,
   hasAnyRole,
   resolveSurveyForUser,
+  copySurveyForUser,
   getDefaultOrganizationForUser,
   getDashboardBaseUrl,
   buildDashboardUrl,
@@ -1472,12 +1473,14 @@ test('dashboard/admin endpoints require authentication', async () => {
     ['post', '/api/survey', { surveyName: 'S' }],
     ['post', '/api/testEmail', { surveyName: 'S', language: 'English', email: 'a@example.com' }],
     ['post', '/api/surveys/survey-id/demo-email', { language: 'English', email: 'a@example.com' }],
+    ['post', '/api/surveys/survey-id/copy', { name: 'Copied survey' }],
     ['post', '/api/startSurvey', { surveyName: 'S' }],
     ['post', '/api/updateEmails', { surveyName: 'S', csvData: 'English,Hello' }],
     ['post', '/api/updateTarget', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],
     ['post', '/api/updateTargets', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],
     ['post', '/api/updateQuestions', { surveyName: 'S', questions: { elements: [] } }],
     ['get', '/api/survey-notifications/S'],
+    ['put', '/api/survey-notifications/S/subject', { language: 'English', subject: 'Invitation' }],
     ['get', '/api/admin/names?surveyName=S'],
     ['get', '/api/admin/questions?surveyName=S'],
     ['get', '/api/listQuestions?surveyName=S'],
@@ -1905,7 +1908,9 @@ test('/api/testEmail rejects arbitrary recipients instead of falling back to ano
   pool.connect = async () => ({
     query: async (sql, values) => {
       sendTestQueries.push({ sql, values });
-      if (/SELECT text FROM email/.test(sql)) return { rows: [{ text: 'Hello {{link}}' }] };
+      if (/SELECT text, invitation_subject FROM email/.test(sql)) {
+        return { rows: [{ text: 'Hello {{link}}', invitation_subject: 'Invitation' }] };
+      }
       if (/SELECT uuid FROM Respondent/.test(sql)) {
         assert.match(sql, /lower\(contact_info\) = lower\(\$3\)/);
         assert.deepEqual(values, ['11111111-1111-4111-8111-111111111111', 'Survey A', 'attacker@example.com']);
@@ -1990,6 +1995,134 @@ test('role policy matrix matches org-scoped authorization decisions', () => {
   assert.equal(hasAnyRole('editor', ADMIN_ROLES), false);
   assert.equal(hasAnyRole('admin', ADMIN_ROLES), true);
   assert.equal(hasAnyRole('owner', ADMIN_ROLES), true);
+});
+
+test('survey copy transaction preserves configuration and roster while resetting respondent state', async (t) => {
+  const originalConnect = pool.connect;
+  t.after(() => { pool.connect = originalConnect; });
+
+  const calls = [];
+  const sourceQuestions = { title: 'Instructions', completedHtml: 'Thank you', elements: [{ type: 'text', name: 'question_1' }] };
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      calls.push({ sql, values });
+      if (/SELECT s\.id, s\.name, s\.title/.test(sql)) {
+        return { rows: [{
+          id: '11111111-1111-4111-8111-111111111111',
+          name: 'Source Survey', title: 'Configured title', questions: sourceQuestions,
+          organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'editor',
+        }] };
+      }
+      if (/SELECT 1 FROM Survey/.test(sql)) return { rows: [] };
+      if (/INSERT INTO Survey/.test(sql)) return { rows: [{
+        id: '22222222-2222-4222-8222-222222222222', name: 'Copied Survey',
+        title: 'Configured title', organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      }] };
+      return { rows: [], rowCount: 2 };
+    },
+    release() {},
+  });
+
+  const copied = await copySurveyForUser({
+    actor: { id: 7, isPlatformAdmin: false },
+    sourceSurveyId: '11111111-1111-4111-8111-111111111111',
+    name: '  Copied Survey  ',
+  });
+  assert.equal(copied.name, 'Copied Survey');
+  assert.equal(copied.title, 'Configured title');
+  assert.equal(copied.organizationId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(copied.respondentStateReset, true);
+  assert.equal(calls[0].sql, 'BEGIN ISOLATION LEVEL REPEATABLE READ');
+  assert.match(calls[1].sql, /JOIN organization_memberships/);
+  assert.match(calls[1].sql, /om\.role = ANY\(\$3::text\[\]\)/);
+  assert.match(calls[1].sql, /FOR SHARE OF s, om/);
+  assert.deepEqual(calls[1].values, [7, '11111111-1111-4111-8111-111111111111', EDITOR_ROLES]);
+  assert.equal(calls.at(-1).sql, 'COMMIT');
+
+  const surveyInsert = calls.find(({ sql }) => /INSERT INTO Survey/.test(sql));
+  assert.deepEqual(surveyInsert.values, [
+    'Copied Survey', 'Configured title', sourceQuestions,
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 7, 'copied-survey',
+  ]);
+  const emailCopy = calls.find(({ sql }) => /INSERT INTO EMAIL/.test(sql));
+  assert.match(emailCopy.sql, /lang, text, invitation_subject/);
+  assert.match(emailCopy.sql, /SELECT \$1, \$2, lang, text, invitation_subject/);
+  const rosterCopy = calls.find(({ sql }) => /INSERT INTO Respondent/.test(sql));
+  assert.match(rosterCopy.sql, /gen_random_uuid\(\)::text/);
+  assert.match(rosterCopy.sql, /lang, NULL, FALSE/);
+  assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*\bresponse\b[\s\S]*FROM Respondent/);
+  assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*r?\.uuid[\s\S]*FROM Respondent/);
+  assert.ok(calls.some(({ sql, values }) => /survey\.copied/.test(sql) && values[0] === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'));
+});
+
+test('survey copy rejects collisions and cross-org/non-editor access without writes', async (t) => {
+  const originalConnect = pool.connect;
+  t.after(() => { pool.connect = originalConnect; });
+
+  let sourceRole = 'editor';
+  let collision = true;
+  const calls = [];
+  pool.connect = async () => ({
+    query: async (sql) => {
+      calls.push(sql);
+      if (/SELECT s\.id, s\.name, s\.title/.test(sql)) {
+        return { rows: sourceRole ? [{
+          id: 'source-id', name: 'Source', organization_id: 'org-b', role: sourceRole,
+          title: 'Title', questions: { elements: [] },
+        }] : [] };
+      }
+      if (/SELECT 1 FROM Survey/.test(sql)) return { rows: collision ? [{ '?column?': 1 }] : [] };
+      return { rows: [] };
+    },
+    release() {},
+  });
+
+  await assert.rejects(
+    copySurveyForUser({ actor: { id: 8 }, sourceSurveyId: 'source-id', name: 'Existing' }),
+    (error) => error.statusCode === 409 && /already exists/.test(error.message)
+  );
+  assert.equal(calls.at(-1), 'ROLLBACK');
+  assert.equal(calls.some(sql => /INSERT INTO Survey/.test(sql)), false);
+
+  calls.length = 0;
+  sourceRole = null;
+  collision = false;
+  await assert.rejects(
+    copySurveyForUser({ actor: { id: 8 }, sourceSurveyId: 'source-id', name: 'Cross Org Copy' }),
+    (error) => error.statusCode === 404
+  );
+  assert.equal(calls.at(-1), 'ROLLBACK');
+  assert.equal(calls.some(sql => /INSERT INTO/.test(sql)), false);
+});
+
+test('survey copy rolls back every write when roster copying fails', async (t) => {
+  const originalConnect = pool.connect;
+  t.after(() => { pool.connect = originalConnect; });
+
+  const calls = [];
+  pool.connect = async () => ({
+    query: async (sql) => {
+      calls.push(sql);
+      if (/SELECT s\.id, s\.name, s\.title/.test(sql)) {
+        return { rows: [{ id: 'source-id', name: 'Source', organization_id: 'org-a', role: 'owner' }] };
+      }
+      if (/SELECT 1 FROM Survey/.test(sql)) return { rows: [] };
+      if (/INSERT INTO Survey/.test(sql)) {
+        return { rows: [{ id: 'copy-id', name: 'Copy', title: null, organization_id: 'org-a' }] };
+      }
+      if (/INSERT INTO Respondent/.test(sql)) throw new Error('roster copy failed');
+      return { rows: [] };
+    },
+    release() {},
+  });
+
+  await assert.rejects(
+    copySurveyForUser({ actor: { id: 9 }, sourceSurveyId: 'source-id', name: 'Copy' }),
+    /roster copy failed/
+  );
+  assert.ok(calls.some(sql => /INSERT INTO Survey/.test(sql)));
+  assert.equal(calls.includes('COMMIT'), false);
+  assert.equal(calls.at(-1), 'ROLLBACK');
 });
 
 test('resolveSurveyForUser denies cross-org guessed surveyName before downstream reads', async (t) => {

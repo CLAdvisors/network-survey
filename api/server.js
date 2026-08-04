@@ -111,7 +111,7 @@ function buildSurveyEmailHtml(text, link) {
   return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + link + EMAIL_HTML[2];
 }
 
-async function sendMail(email, id, surveyName, text) {
+async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {
   try {
     if (!resend) {
       throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
@@ -121,7 +121,7 @@ async function sendMail(email, id, surveyName, text) {
     const emailData = {
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
-      subject: 'CLA Network Survey',
+      subject,
       html: buildSurveyEmailHtml(text, customLink),
       surveyName
     };
@@ -135,7 +135,7 @@ async function sendMail(email, id, surveyName, text) {
   }
 }
 
-async function sendDemoMail(email, survey, text, demoToken) {
+async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Network Survey') {
   if (!resend) {
     throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
   }
@@ -147,7 +147,7 @@ async function sendDemoMail(email, survey, text, demoToken) {
   const result = await resend.emails.send({
     from: 'CLA Survey <survey@cladvisors.com>',
     to: email,
-    subject: '[Demo] CLA Network Survey',
+    subject: `[Demo] ${subject}`,
     html: buildSurveyEmailHtml(text, link),
   });
   if (result?.error) throw new Error(result.error.message || 'Email delivery failed');
@@ -222,7 +222,7 @@ async function processEmailQueue() {
 async function sendTestMail(email, survey, lang) {
   const client = await pool.connect();
   try {
-    const query = `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
+    const query = `SELECT text, invitation_subject FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
     const values = [survey.id, survey.name, lang];
     const response = await client.query(query, values);
     
@@ -252,7 +252,7 @@ async function sendTestMail(email, survey, lang) {
       throw error;
     }
 
-    await sendMail(email, respondentToken, survey.name, text);
+    await sendMail(email, respondentToken, survey.name, text, response.rows[0].invitation_subject);
   } finally {
     client.release();
   }
@@ -276,24 +276,44 @@ async function startSurvey(survey){
     });
 
   // Pull the email text from the database for each language
-  const emailQuery = `SELECT lang, text FROM email WHERE ${legacySurveyPredicate()}`;
+  const emailQuery = `SELECT lang, text, invitation_subject FROM email WHERE ${legacySurveyPredicate()}`;
   const emailValues = [survey.id, survey.name];
   await client.query(emailQuery, emailValues)
     .then(response => {
         emails = response.rows.map(row => ({
             language: row.lang,
-            text: row.text
+            text: row.text,
+            subject: row.invitation_subject
         }));
     });
     // Create a map from language to email text
     const emailMap = emails.reduce((map, email) => {
-      map[email.language.replace(/"/g, "").replace(/'/g, "")] = '<p>' + email.text + '</p>';
+      map[email.language.replace(/"/g, "").replace(/'/g, "")] = {
+        text: '<p>' + email.text + '</p>',
+        subject: email.subject,
+      };
       return map;
     }, {});
     
+    const missingLanguages = [...new Set(
+      respondents
+        .filter(respondent => !emailMap[respondent.language])
+        .map(respondent => respondent.language)
+    )];
+    if (missingLanguages.length > 0) {
+      throw new Error(`Invitation templates are missing for: ${missingLanguages.join(', ')}`);
+    }
+
     // Send the emails
     respondents.forEach(respondent => {
-      sendMail(respondent.email, respondent.userId, survey.name, emailMap[respondent.language].replace(/"/g, "").replace(/'/g, ""));
+      const invitation = emailMap[respondent.language];
+      sendMail(
+        respondent.email,
+        respondent.userId,
+        survey.name,
+        invitation.text.replace(/"/g, "").replace(/'/g, ""),
+        invitation.subject
+      );
     });
   }
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
@@ -1238,6 +1258,128 @@ app.post('/api/password-reset/complete', express.json(), authRateLimiter, async 
   finally { client.release(); }
 });
 
+function surveySlug(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'survey';
+}
+
+async function copySurveyForUser({ actor, sourceSurveyId, name }) {
+  const copiedName = typeof name === 'string' ? name.trim() : '';
+  if (!copiedName) {
+    const error = new Error('Copied survey name is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (copiedName.length > 255) {
+    const error = new Error('Copied survey name must be 255 characters or fewer.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+    const platformAdmin = isPlatformAdmin(actor);
+    const sourceResult = await client.query(
+      platformAdmin
+        ? `SELECT s.id, s.name, s.title, s.questions, s.organization_id, s.display_name,
+                  'owner'::text AS role
+           FROM Survey s
+           WHERE (s.id::text = $1 OR s.name = $1)
+             AND s.archived_at IS NULL
+           ORDER BY (s.id::text = $1) DESC
+           LIMIT 1
+           FOR SHARE OF s`
+        : `SELECT s.id, s.name, s.title, s.questions, s.organization_id,
+                  s.display_name, om.role
+           FROM Survey s
+           JOIN organization_memberships om
+             ON om.organization_id = s.organization_id
+            AND om.user_id = $1
+            AND om.role = ANY($3::text[])
+           WHERE (s.id::text = $2 OR s.name = $2)
+             AND s.archived_at IS NULL
+           ORDER BY (s.id::text = $2) DESC
+           LIMIT 1
+           FOR SHARE OF s, om`,
+      platformAdmin ? [sourceSurveyId] : [actor.id, sourceSurveyId, EDITOR_ROLES]
+    );
+    const source = sourceResult.rows[0];
+    if (!source) {
+      const error = new Error('Survey not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    // Survey.name remains a legacy global primary key, while slug uniqueness is
+    // organization-scoped. Check both so callers get a stable collision response.
+    const collision = await client.query(
+      `SELECT 1 FROM Survey
+       WHERE name = $1
+          OR (organization_id = $2 AND slug = $3 AND archived_at IS NULL)
+       LIMIT 1`,
+      [copiedName, source.organization_id, surveySlug(copiedName)]
+    );
+    if (collision.rows.length > 0) {
+      const error = new Error('A survey with that name already exists.');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO Survey
+         (name, title, creation_date, questions, organization_id, created_by_user_id, display_name, slug)
+       VALUES ($1, $2, NOW(), $3, $4, $5, $1, $6)
+       RETURNING id, name, title, organization_id`,
+      [copiedName, source.title, source.questions, source.organization_id, actor.id, surveySlug(copiedName)]
+    );
+    const copied = inserted.rows[0];
+
+    await client.query(
+      `INSERT INTO EMAIL (survey_name, survey_id, lang, text, invitation_subject)
+       SELECT $1, $2, lang, text, invitation_subject
+       FROM EMAIL
+       WHERE survey_id = $3 OR (survey_id IS NULL AND survey_name = $4)`,
+      [copied.name, copied.id, source.id, source.name]
+    );
+    await client.query(
+      `INSERT INTO Respondent
+         (name, contact_info, survey_name, survey_id, can_respond, uuid, lang, response, email_sent)
+       SELECT name, contact_info, $1, $2, can_respond, gen_random_uuid()::text, lang, NULL, FALSE
+       FROM Respondent
+       WHERE survey_id = $3 OR (survey_id IS NULL AND survey_name = $4)`,
+      [copied.name, copied.id, source.id, source.name]
+    );
+    await client.query(
+      `INSERT INTO audit_events
+         (organization_id, actor_user_id, survey_id, event_type, metadata)
+       VALUES ($1, $2, $3, 'survey.copied', $4::jsonb)`,
+      [source.organization_id, actor.id, copied.id, JSON.stringify({ sourceSurveyId: source.id, sourceSurveyName: source.name, copiedSurveyName: copied.name })]
+    );
+    await client.query('COMMIT');
+    return {
+      id: copied.id,
+      name: copied.name,
+      title: copied.title,
+      organizationId: copied.organization_id,
+      sourceSurveyId: source.id,
+      respondentStateReset: true,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.code === '23505' && !error.statusCode) {
+      error.statusCode = 409;
+      error.message = 'A survey with that name already exists.';
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRoles = READ_SURVEY_ROLES } = {}) {
   if (!surveyId && surveyName && UUID_RE.test(surveyName)) {
     surveyId = surveyName;
@@ -1358,28 +1500,33 @@ async function insertEmails(data, survey = null) {
     // Iterate through the emails and insert or update them
     for (const email of data) {
       const query = `
-        INSERT INTO email (survey_name, survey_id, lang, text)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO email (survey_name, survey_id, lang, text, invitation_subject)
+        VALUES ($1, $2, $3, $4, COALESCE($5, 'CLA Network Survey'))
         ON CONFLICT (survey_name, lang) DO UPDATE
         SET text = EXCLUDED.text,
-            survey_id = EXCLUDED.survey_id
+            survey_id = EXCLUDED.survey_id,
+            invitation_subject = CASE
+              WHEN $5 IS NULL THEN email.invitation_subject
+              ELSE EXCLUDED.invitation_subject
+            END
       `;
-      const values = [survey?.name || email.surveyName, survey?.id || email.surveyId || null, email.language, email.text.replace(/"/g, "").replace(/'/g, "")];
+      const values = [
+        survey?.name || email.surveyName,
+        survey?.id || email.surveyId || null,
+        email.language,
+        email.text.replace(/"/g, "").replace(/'/g, ""),
+        typeof email.subject === 'string' ? email.subject.trim() : null,
+      ];
       await client.query(query, values);
     }
 
-    // Commit the transaction
     await client.query('COMMIT');
-
-    // Release the client back to the pool
-    client.release();
-
     console.log('Email data inserted or updated successfully!');
   } catch (error) {
-    // If an error occurs, rollback the transaction
-    console.log(error);
     await client.query('ROLLBACK');
     console.error('Error inserting or updating emails:', error);
+    throw error;
+  } finally {
     client.release();
   }
 }
@@ -2052,6 +2199,25 @@ app.post('/api/survey', express.json(), requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/surveys/:surveyId/copy', express.json(), requireAuth, async (req, res) => {
+  try {
+    const survey = await copySurveyForUser({
+      actor: req.user,
+      sourceSurveyId: req.params.surveyId,
+      name: req.body?.name,
+    });
+    res.status(201).json({
+      message: `Survey copied successfully as "${survey.name}".`,
+      survey,
+    });
+  } catch (error) {
+    if ((error.statusCode || 500) >= 500) console.error('Failed to copy survey:', error);
+    res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : 'Failed to copy survey.',
+    });
+  }
+});
+
 app.post('/api/testEmail', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
@@ -2099,7 +2265,7 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
     if (!survey) return;
 
     const templateResult = await pool.query(
-      `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3 LIMIT 1`,
+      `SELECT text, invitation_subject FROM email WHERE ${legacySurveyPredicate()} AND lang = $3 LIMIT 1`,
       [survey.id, survey.name, language]
     );
     if (templateResult.rows.length === 0) {
@@ -2107,7 +2273,10 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
     }
 
     const demoToken = createDemoToken(survey.id, survey.name);
-    await sendDemoMail(email.trim(), survey, templateResult.rows[0].text, demoToken);
+    await sendDemoMail(
+      email.trim(), survey, templateResult.rows[0].text, demoToken,
+      templateResult.rows[0].invitation_subject
+    );
     res.status(200).json({ message: `Demo survey sent to ${email.trim()}.` });
   } catch (error) {
     console.error('Failed to send demo survey:', error);
@@ -2145,15 +2314,16 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     return;
   }
 
-  if (!csvData) {
-    res.status(400).json({ message: 'CSV data is required.' });
+  const templates = data.templates;
+  if (!csvData && !Array.isArray(templates)) {
+    res.status(400).json({ message: 'CSV data or invitation templates are required.' });
     return;
   }
 
-  let csvArray = csvData.split('\n');
-  const header = csvArray.shift().split(',');
+  let csvArray = csvData ? csvData.split('\n') : [];
+  if (csvData) csvArray.shift();
 
-  csvArray = csvArray.map((row, index) => {
+  csvArray = csvArray.map((row) => {
     const columns = row.split(',');
     // combine all strings after index 0
     columns[1] = columns.slice(1).join(',');
@@ -2164,10 +2334,19 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     }
   });
 
+  const emailTemplates = Array.isArray(templates) ? templates : csvArray;
+  if (emailTemplates.length === 0 || emailTemplates.some(template => (
+    !template || typeof template.language !== 'string' || !template.language.trim()
+    || typeof template.text !== 'string'
+    || (template.subject !== undefined && (typeof template.subject !== 'string' || !template.subject.trim()))
+  ))) {
+    return res.status(400).json({ message: 'Each invitation template requires a language, subject, and body.' });
+  }
+
   try {
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
-    await insertEmails(csvArray, survey);
+    await insertEmails(emailTemplates, survey);
     res.status(200).json({ message: 'Email data updated successfully.' });
   } catch (error) {
     console.error('Error updating email templates:', error);
@@ -2257,6 +2436,40 @@ app.post('/api/updateTarget', requireAuth, async (req, res) => {
     });
   }
 });
+app.put('/api/survey-notifications/:surveyId/subject', express.json(), requireAuth, async (req, res) => {
+  const { language, subject } = req.body || {};
+  if (typeof language !== 'string' || !language.trim() || typeof subject !== 'string' || !subject.trim()) {
+    return res.status(400).json({ message: 'Language and invitation email subject are required.' });
+  }
+  if (subject.trim().length > 255) {
+    return res.status(400).json({ message: 'Invitation email subject must be 255 characters or fewer.' });
+  }
+
+  try {
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: req.params.surveyId,
+      surveyId: UUID_RE.test(req.params.surveyId) ? req.params.surveyId : null,
+      allowedRoles: EDITOR_ROLES,
+    });
+    if (!survey) return;
+    const updated = await pool.query(
+      `UPDATE EMAIL
+       SET survey_id = $2, invitation_subject = $4
+       WHERE (survey_id = $2 OR (survey_id IS NULL AND survey_name = $1))
+         AND lang = $3
+       RETURNING lang`,
+      [survey.name, survey.id, language.trim(), subject.trim()]
+    );
+    if (updated.rowCount === 0) {
+      return res.status(404).json({ message: 'Create the invitation body for this language before setting its subject.' });
+    }
+    res.json({ message: 'Invitation email subject saved.' });
+  } catch (error) {
+    console.error('Failed to update invitation email subject:', error);
+    res.status(500).json({ message: 'Failed to save invitation email subject.' });
+  }
+});
+
 // GET API endpoint for retrieving email texts and available languages
 app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => {
   const surveyId = req.params.surveyId;
@@ -2271,19 +2484,21 @@ app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => 
     const survey = await resolveSurveyForUser(req, res, { surveyName: surveyId, surveyId: UUID_RE.test(surveyId) ? surveyId : null, allowedRoles: ANALYST_ROLES });
     if (!survey) return;
     const query = `
-      SELECT lang, text
+      SELECT lang, text, invitation_subject
       FROM EMAIL
       WHERE ${legacySurveyPredicate()}
     `;
 
     const result = await client.query(query, [survey.id, survey.name]);
 
-    const notifications = result.rows.reduce((acc, row) => {
-      acc[row.lang] = row.text;
-      return acc;
-    }, {});
+    const notifications = {};
+    const notificationSubjects = {};
+    for (const row of result.rows) {
+      notifications[row.lang] = row.text;
+      notificationSubjects[row.lang] = row.invitation_subject;
+    }
 
-    res.status(200).json({ notifications });
+    res.status(200).json({ notifications, notificationSubjects });
   } catch (error) {
     console.error('Error retrieving email texts:', error);
     res.status(500).json({ message: 'Failed to retrieve email texts.' });
@@ -3203,6 +3418,8 @@ module.exports = {
   hasAnyRole,
   isPlatformAdmin,
   resolveSurveyForUser,
+  copySurveyForUser,
+  surveySlug,
   requireOrgAccess,
   getDefaultOrganizationForUser,
   hashToken,

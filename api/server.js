@@ -1266,15 +1266,19 @@ function surveySlug(name) {
     .replace(/^-+|-+$/g, '') || 'survey';
 }
 
+function surveyNameValidationError(name, { copied = false } = {}) {
+  const value = typeof name === 'string' ? name : '';
+  if (!value.trim()) return copied ? 'Copied survey name is required.' : 'Survey name is required.';
+  if (!/^[A-Za-z0-9]+$/.test(value)) return 'Only letters and numbers are allowed in survey names.';
+  if (value.length > 255) return `${copied ? 'Copied survey name' : 'Survey name'} must be 255 characters or fewer.`;
+  return null;
+}
+
 async function copySurveyForUser({ actor, sourceSurveyId, name }) {
-  const copiedName = typeof name === 'string' ? name.trim() : '';
-  if (!copiedName) {
-    const error = new Error('Copied survey name is required.');
-    error.statusCode = 400;
-    throw error;
-  }
-  if (copiedName.length > 255) {
-    const error = new Error('Copied survey name must be 255 characters or fewer.');
+  const copiedName = typeof name === 'string' ? name : '';
+  const validationError = surveyNameValidationError(copiedName, { copied: true });
+  if (validationError) {
+    const error = new Error(validationError);
     error.statusCode = 400;
     throw error;
   }
@@ -1332,9 +1336,9 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
     const inserted = await client.query(
       `INSERT INTO Survey
          (name, title, creation_date, questions, organization_id, created_by_user_id, display_name, slug)
-       VALUES ($1, $2, NOW(), $3, $4, $5, $1, $6)
+       VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7)
        RETURNING id, name, title, organization_id`,
-      [copiedName, source.title, source.questions, source.organization_id, actor.id, surveySlug(copiedName)]
+      [copiedName, source.title, source.questions, source.organization_id, actor.id, copiedName, surveySlug(copiedName)]
     );
     const copied = inserted.rows[0];
 
@@ -2175,10 +2179,11 @@ function csvToJson(csvString, title) {
 // PUT API endpoint for creating a new survey
 app.post('/api/survey', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
-  const surveyName = data.surveyName;
+  const surveyName = typeof data.surveyName === 'string' ? data.surveyName : '';
 
-  if (!surveyName) {
-    res.status(400).json({ message: 'Survey name is required.' });
+  const validationError = surveyNameValidationError(surveyName);
+  if (validationError) {
+    res.status(400).json({ message: validationError });
     return;
   }
 
@@ -3420,6 +3425,7 @@ module.exports = {
   resolveSurveyForUser,
   copySurveyForUser,
   surveySlug,
+  surveyNameValidationError,
   requireOrgAccess,
   getDefaultOrganizationForUser,
   hashToken,

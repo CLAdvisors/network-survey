@@ -26,6 +26,10 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit, memberships = [] }) => {
       setError('Only letters and numbers are allowed');
       return;
     }
+    if (surveyName.length > 255) {
+      setError('Survey name must be 255 characters or fewer');
+      return;
+    }
     if (creatableMemberships.length > 1 && !organizationId) {
       setError('Choose an organization for this survey');
       return;
@@ -85,6 +89,7 @@ const CreateSurveyDialog = ({ open, onClose, onSubmit, memberships = [] }) => {
           onChange={handleInputChange}
           error={!!error}
           helperText={error}
+          inputProps={{ maxLength: 255, pattern: '[A-Za-z0-9]*' }}
           sx={{ mt: 1 }}
         />
         {creatableMemberships.length > 1 && (

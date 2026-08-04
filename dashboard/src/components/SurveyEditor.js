@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { SurveyCreator, SurveyCreatorComponent } from 'survey-creator-react';
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
+import "@network-survey/frontend-shared/src/surveyRuntime.css";
 // SurveyJS runtime themes are applied to each model via applyTheme().
 import { Alert, Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import api from '../api/axios';
@@ -10,8 +11,9 @@ import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
 import { DraggableRankingQuestion } from '@network-survey/frontend-react';
 import {
-  applyBrandedPanellessSurveyTheme,
-  BRANDED_SURVEY_WRAPPER_SX,
+  applyProductionSurveyTheme,
+  PRODUCTION_SURVEY_CLASS_NAME,
+  PRODUCTION_SURVEY_WRAPPER_SX,
   TAGBOX_PAGE_SIZE,
   TAGBOX_PLACEHOLDER
 } from '@network-survey/frontend-shared';
@@ -465,7 +467,7 @@ const SurveyEditor = () => {
         configureSurveyModel(options.survey, 'designer');
       }
       if (options.area === 'preview-tab') {
-        applyBrandedPanellessSurveyTheme(options.survey);
+        applyProductionSurveyTheme(options.survey);
         configureSurveyModel(options.survey, 'preview');
       }
     };
@@ -561,7 +563,7 @@ const SurveyEditor = () => {
     try {
       const questions = buildNormalizedSurveySchema();
       const model = new Model(questions);
-      applyBrandedPanellessSurveyTheme(model);
+      applyProductionSurveyTheme(model);
       model.showQuestionNumbers = false;
       model.showProgressBar = 'bottom';
       model.progressBarType = 'questions';
@@ -666,7 +668,11 @@ const SurveyEditor = () => {
             </Box>
           )}
           {!previewError && previewSurveyModel && (
-            <Box data-testid="branded-survey-wrapper" sx={BRANDED_SURVEY_WRAPPER_SX}>
+            <Box
+              className={PRODUCTION_SURVEY_CLASS_NAME}
+              data-testid="branded-survey-wrapper"
+              sx={PRODUCTION_SURVEY_WRAPPER_SX}
+            >
               <Survey model={previewSurveyModel} />
             </Box>
           )}

@@ -1,54 +1,68 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Model } from 'survey-core';
-import { DefaultLightPanelless } from 'survey-core/themes';
+import { DefaultLight } from 'survey-core/themes';
 import {
-  applyBrandedPanellessSurveyTheme,
-  BRANDED_PANELLESS_SURVEY_THEME,
-  BRANDED_SURVEY_WRAPPER_SX
+  applyProductionSurveyTheme,
+  PRODUCTION_SURVEY_CLASS_NAME,
+  PRODUCTION_SURVEY_THEME,
+  PRODUCTION_SURVEY_WRAPPER_SX
 } from '@network-survey/frontend-shared';
 
-describe('shared SurveyJS theme', () => {
-  it('extends the supported panelless theme with the exact brand tokens', () => {
-    expect(BRANDED_PANELLESS_SURVEY_THEME).toMatchObject({
-      themeName: DefaultLightPanelless.themeName,
-      colorPalette: DefaultLightPanelless.colorPalette,
-      isPanelless: true,
+const runtimeCss = readFileSync(
+  resolve(process.cwd(), '../frontend-shared/src/surveyRuntime.css'),
+  'utf8'
+);
+
+describe('production SurveyJS styling', () => {
+  it('uses SurveyJS framed questions and the historical brand tokens', () => {
+    expect(PRODUCTION_SURVEY_THEME).toMatchObject({
+      themeName: DefaultLight.themeName,
+      colorPalette: DefaultLight.colorPalette,
+      isPanelless: false,
       cssVariables: {
         '--sjs-general-backcolor-dim': 'transparent',
         '--sjs-primary-backcolor': '#42B4AF',
         '--sjs-primary-backcolor-dark': '#3B9F9B',
-        '--sjs-primary-backcolor-light': 'rgba(66, 180, 175, 0.1)',
-        '--sjs-general-forecolor': '#333',
-        '--sjs-border-default': '#e4e9e8',
-        '--sjs-question-background': 'transparent',
-        '--survey-primary-border': 'rgba(66, 180, 175, 0.4)',
-        '--survey-surface': '#ffffff'
+        '--sjs-border-default': '#e8e8e8',
+        '--sjs-question-background': '#ffffff',
+        '--sjs-questionpanel-backcolor': '#ffffff'
       }
     });
-    expect(BRANDED_PANELLESS_SURVEY_THEME.cssVariables).toEqual({
-      ...DefaultLightPanelless.cssVariables,
-      ...BRANDED_PANELLESS_SURVEY_THEME.cssVariables
-    });
-  });
 
-  it('applies the one exported theme object through the model instance API', () => {
-    const survey = { applyTheme: vi.fn() };
-
-    expect(applyBrandedPanellessSurveyTheme(survey)).toBe(survey);
-    expect(survey.applyTheme).toHaveBeenCalledOnce();
-    expect(survey.applyTheme).toHaveBeenCalledWith(BRANDED_PANELLESS_SURVEY_THEME);
-  });
-
-  it('renders questions without the framed-card class that caused the staging regression', () => {
     const survey = new Model({ elements: [{ type: 'text', name: 'question_1' }] });
-    applyBrandedPanellessSurveyTheme(survey);
+    applyProductionSurveyTheme(survey);
 
-    expect(survey.getQuestionByName('question_1').getRootCss()).not.toContain('sd-element--with-frame');
+    expect(survey.getQuestionByName('question_1').getRootCss()).toContain('sd-element--with-frame');
     expect(survey.cssVariables['--sjs-primary-backcolor']).toBe('#42B4AF');
   });
 
-  it('keeps both runtime entry points wired to the shared instance helper', () => {
+  it('ports the historical 1000px layout and teal question-frame rule', () => {
+    expect(runtimeCss).toMatch(/\.cla-survey-runtime\s*\{[\s\S]*?max-width:\s*1000px;[\s\S]*?margin:\s*0 auto;/);
+    expect(runtimeCss).toMatch(/\.cla-survey-runtime \.sd-question\.sd-element--with-frame\s*\{[\s\S]*?padding:\s*40px;[\s\S]*?margin-bottom:\s*1rem;[\s\S]*?box-shadow:\s*0 0 0 1px rgba\(49, 201, 166, 0\.4\);/);
+    expect(runtimeCss).not.toContain('.cla-survey-runtime .sd-title,');
+  });
+
+  it('retains historical progress, rating, button, and input rules', () => {
+    expect(runtimeCss).toContain('.cla-survey-runtime .sd-progress__bar');
+    expect(runtimeCss).toMatch(/\.cla-survey-runtime \.sd-progress\s*\{\s*height:\s*2px;/);
+    expect(runtimeCss).toContain('.cla-survey-runtime .sd-rating__item--selected');
+    expect(runtimeCss).toContain('.cla-survey-runtime .sd-navigation__complete-btn');
+    expect(runtimeCss).toContain('.cla-survey-runtime .sd-input:not(.sd-tagbox)');
+    expect(runtimeCss).toMatch(/background:\s*#42b4af !important;/);
+    expect(runtimeCss).toMatch(/min-height:\s*42px;/);
+  });
+
+  it('keeps mobile tagbox and custom ranking safeguards in the shared scope', () => {
+    expect(runtimeCss).toContain('@media (max-width: 599.95px)');
+    expect(runtimeCss).toContain('.cla-survey-runtime .draggable-ranking-host [data-rbd-draggable-id]');
+    expect(runtimeCss).toContain('white-space: normal;');
+    expect(runtimeCss).toContain('overflow-wrap: anywhere;');
+    expect(runtimeCss).toContain('--respondent-tag-value-width: 100%;');
+    expect(runtimeCss).not.toMatch(/@media[\s\S]*?\.sd-question\.sd-element--with-frame\s*\{[\s\S]*?box-shadow:\s*none;/);
+  });
+
+  it('opts in only the respondent runtime and dashboard Demo Survey', () => {
     const dashboardPreview = readFileSync(
       resolve(process.cwd(), 'src/components/SurveyEditor.js'),
       'utf8'
@@ -59,26 +73,18 @@ describe('shared SurveyJS theme', () => {
     );
 
     for (const source of [dashboardPreview, respondentRuntime]) {
-      expect(source).toContain('applyBrandedPanellessSurveyTheme');
+      expect(source).toContain('applyProductionSurveyTheme');
+      expect(source).toContain('PRODUCTION_SURVEY_CLASS_NAME');
+      expect(source).toContain('surveyRuntime.css');
       expect(source).not.toMatch(/Model\.cssType|cssType\s*=/);
     }
+    expect(dashboardPreview).toContain('data-testid="branded-survey-wrapper"');
+    expect(PRODUCTION_SURVEY_CLASS_NAME).toBe('cla-survey-runtime');
+    expect(PRODUCTION_SURVEY_WRAPPER_SX['--survey-primary']).toBe('#42B4AF');
   });
 
-  it('shares the transparent panelless wrapper bridge', () => {
-    expect(BRANDED_SURVEY_WRAPPER_SX).toEqual({
-      '--survey-primary': '#42B4AF',
-      '--survey-primary-hover': '#3B9F9B',
-      '--survey-primary-light': 'rgba(66, 180, 175, 0.1)',
-      '--survey-primary-border': 'rgba(66, 180, 175, 0.4)',
-      '--survey-surface': '#ffffff',
-      '--survey-text': '#333',
-      '--survey-muted-text': 'rgba(51, 51, 51, 0.7)',
-      '--survey-disabled-text': 'rgba(0, 0, 0, 0.38)',
-      '--survey-error': '#d32f2f',
-      '--survey-error-surface': 'rgba(211, 47, 47, 0.04)',
-      '& .sd-root-modern, & .sd-body, & .sd-container-modern': {
-        backgroundColor: 'transparent'
-      }
-    });
+  it('does not expose unscoped SurveyJS selectors that can style Creator', () => {
+    expect(runtimeCss).not.toMatch(/^\s*\.(?:sd|sv)-/m);
+    expect(runtimeCss).not.toContain('.svc-');
   });
 });

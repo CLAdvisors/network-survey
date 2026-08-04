@@ -4,9 +4,13 @@ import { Model, Serializer, Question } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { Alert, useTheme } from '@mui/material';
 import "survey-core/survey-core.min.css";
+import "@network-survey/frontend-shared/src/surveyRuntime.css";
 import { buildApiUrl } from "./api";
 import { DraggableRankingQuestion } from "@network-survey/frontend-react";
-import { applyBrandedPanellessSurveyTheme } from "@network-survey/frontend-shared";
+import {
+  applyProductionSurveyTheme,
+  PRODUCTION_SURVEY_CLASS_NAME
+} from "@network-survey/frontend-shared";
 
 const draggableQuestionRoots = new WeakMap();
 
@@ -64,7 +68,7 @@ function SurveyComponent({setTitle}) {
       if (!json) return;
 
       const newSurvey = new Model(json);
-      applyBrandedPanellessSurveyTheme(newSurvey);
+      applyProductionSurveyTheme(newSurvey);
 
       // Configure survey settings
       newSurvey.showQuestionNumbers = false;
@@ -201,7 +205,7 @@ function SurveyComponent({setTitle}) {
     }
 
     return (
-      <div className="modern-survey-container">
+      <div className={PRODUCTION_SURVEY_CLASS_NAME}>
         {submissionError && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {submissionError}

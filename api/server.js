@@ -366,20 +366,20 @@ function sanitizeSurveyForDemo(value) {
   const namedDefinitions = new Map();
   const peopleChoiceSources = new Set();
 
-  const inspect = (node) => {
+  const inspect = (node, inheritedTagbox = false) => {
     if (Array.isArray(node)) {
-      node.forEach(inspect);
+      node.forEach((entry) => inspect(entry, inheritedTagbox));
       return;
     }
     if (!node || typeof node !== 'object') return;
     if (typeof node.name === 'string') namedDefinitions.set(node.name, node);
-    if (
-      (node.type === 'tagbox' || node.cellType === 'tagbox')
-      && typeof node.choicesFromQuestion === 'string'
-    ) {
+    const isTagbox = inheritedTagbox || node.type === 'tagbox' || node.cellType === 'tagbox';
+    if (isTagbox && typeof node.choicesFromQuestion === 'string') {
       peopleChoiceSources.add(node.choicesFromQuestion);
     }
-    Object.values(node).forEach(inspect);
+    Object.entries(node).forEach(([key, nestedValue]) => {
+      inspect(nestedValue, node.cellType === 'tagbox' && key === 'columns');
+    });
   };
   inspect(value);
 
@@ -421,10 +421,14 @@ function sanitizeSurveyForDemo(value) {
       sanitized.allowAddNewTag = false;
       delete sanitized.choicesFromQuestion;
       delete sanitized.choicesFromQuestionMode;
+      delete sanitized.defaultValue;
+      delete sanitized.defaultValueExpression;
     } else if (typeof node.name === 'string' && peopleChoiceSources.has(node.name)) {
       sanitized.choices = [...DEMO_RESPONDENT_CHOICES];
       delete sanitized.choicesFromQuestion;
       delete sanitized.choicesFromQuestionMode;
+      delete sanitized.defaultValue;
+      delete sanitized.defaultValueExpression;
     }
     return sanitized;
   };

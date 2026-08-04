@@ -6,7 +6,8 @@ import { Alert, useTheme } from '@mui/material';
 import "survey-core/survey-core.min.css";
 import "./Survey.css";
 import { buildApiUrl } from "./api";
-import RespondentDraggableRankingQuestion from "./RespondentDraggableRankingQuestion";
+import { DraggableRankingQuestion } from "@network-survey/frontend-react";
+import { restoreTagboxSearchPlaceholder } from "./tagboxSearchPlaceholder";
 
 const draggableQuestionRoots = new WeakMap();
 
@@ -106,6 +107,8 @@ function SurveyComponent({setTitle}) {
           ? options.htmlElement
           : options.htmlElement?.querySelector(".sd-question") || options.htmlElement;
 
+        restoreTagboxSearchPlaceholder(questionElement, options.question);
+
         if (options.question.getType() !== "draggableranking") {
           return;
         }
@@ -132,10 +135,11 @@ function SurveyComponent({setTitle}) {
         const root = ReactDOM.createRoot(container);
         draggableQuestionRoots.set(options.question, root);
         root.render(
-          <RespondentDraggableRankingQuestion
+          <DraggableRankingQuestion
             question={options.question}
             value={options.question.value || []}
             onChange={(val) => (options.question.value = val)}
+            availableDirection="vertical"
           />
         );
       });

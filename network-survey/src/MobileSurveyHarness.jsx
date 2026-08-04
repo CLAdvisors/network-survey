@@ -3,10 +3,11 @@ import ReactDOM from 'react-dom/client';
 import { Box, Button, Chip, Paper, Stack, Typography } from '@mui/material';
 import { Model, Question, Serializer } from 'survey-core';
 import { Survey as SurveyJs } from 'survey-react-ui';
-import RespondentDraggableRankingQuestion from './RespondentDraggableRankingQuestion';
+import { DraggableRankingQuestion } from '@network-survey/frontend-react';
 import { BRAND_COLORS } from '@network-survey/frontend-shared';
 import Header from './Header';
 import Logo from './logo.svg?react';
+import { restoreTagboxSearchPlaceholder } from './tagboxSearchPlaceholder';
 import './Survey.css';
 
 const VIEWPORTS = [
@@ -117,6 +118,7 @@ function HarnessSurvey() {
       const questionElement = options.htmlElement?.matches?.('.sd-question')
         ? options.htmlElement
         : options.htmlElement?.querySelector('.sd-question') || options.htmlElement;
+      restoreTagboxSearchPlaceholder(questionElement, options.question);
       if (options.question?.getType() !== 'draggableranking') return;
       const content = questionElement?.querySelector('.sd-question__content') || questionElement;
       if (!content) return;
@@ -132,10 +134,11 @@ function HarnessSurvey() {
       draggableRoots.set(options.question, root);
       rootsRef.current.add(root);
       root.render(
-        <RespondentDraggableRankingQuestion
+        <DraggableRankingQuestion
           question={options.question}
           value={options.question.value || []}
           onChange={(value) => { options.question.value = value; }}
+          availableDirection="vertical"
         />
       );
     });

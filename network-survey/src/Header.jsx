@@ -1,10 +1,12 @@
 import React from 'react';
 import { Box, Typography } from '@mui/material';
+import { isMobile } from 'react-device-detect';
 import { appShadows } from '@network-survey/frontend-react';
 import { BRAND } from '@network-survey/frontend-shared';
 
 const Header = ({ svgComponent: SvgComponent, title, forceMobile = false }) => {
-  const compactTitleSx = forceMobile
+  const useCompactHeader = forceMobile || isMobile;
+  const compactTitleSx = useCompactHeader
     ? {
       m: 0,
       minWidth: 0,
@@ -45,14 +47,14 @@ const Header = ({ svgComponent: SvgComponent, title, forceMobile = false }) => {
         zIndex: (theme) => theme.zIndex.appBar,
         display: 'flex',
         alignItems: 'center',
-        minHeight: forceMobile ? 52 : { xs: 52, sm: 64 },
-        px: forceMobile ? 2 : { xs: 2, sm: 3 },
-        py: forceMobile ? 0.5 : { xs: 0.5, sm: 1.5 },
+        minHeight: useCompactHeader ? 52 : { xs: 52, sm: 64 },
+        px: useCompactHeader ? 2 : { xs: 2, sm: 3 },
+        py: useCompactHeader ? 0.5 : { xs: 0.5, sm: 1.5 },
         bgcolor: 'background.paper',
         boxShadow: appShadows.surface,
       }}
     >
-      {forceMobile ? (
+      {useCompactHeader ? (
         titleElement
       ) : (
         <>

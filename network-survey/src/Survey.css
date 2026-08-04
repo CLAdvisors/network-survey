@@ -77,21 +77,6 @@
   padding-inline: 12px 0;
 }
 
-.survey-content .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint::before {
-  content: var(--respondent-tag-search-prompt, none);
-  position: absolute;
-  inset-inline-start: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--survey-muted-text, var(--sjs-general-forecolor-light, #777));
-  font-size: 14px;
-  pointer-events: none;
-}
-
-.survey-content .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint:focus-within::before {
-  content: none;
-}
-
 .survey-content .sd-question .sv-tagbox__item {
   flex: var(--respondent-tag-flex, 0 1 auto);
   min-width: 0;
@@ -115,10 +100,16 @@
 .survey-content .sd-question .sd-tagbox-item_clean-button {
   width: var(--respondent-tag-remove-size, auto);
   min-height: var(--respondent-tag-remove-size, auto);
-  padding: var(--respondent-tag-remove-padding, 0 0 0 calc(4 * var(--sjs-base-unit, 8px)));
+  padding: 0;
+  padding-inline-start: var(--respondent-tag-remove-padding-inline-start, calc(4 * var(--sjs-base-unit, 8px)));
   inset-inline-end: var(--respondent-tag-remove-inset, calc(1.5 * var(--sjs-base-unit, 8px)));
-  /* Invalid until mobile defines the variable, preserving SurveyJS hover/focus behavior on desktop. */
-  opacity: var(--respondent-tag-remove-opacity);
+  opacity: var(--respondent-tag-remove-opacity, 0);
+}
+
+.survey-content .sd-question .sv-tagbox__item:focus .sd-tagbox-item_clean-button,
+.survey-content .sd-question .sv-tagbox__item:focus-within .sd-tagbox-item_clean-button,
+.survey-content .sd-question .sv-tagbox__item:hover .sd-tagbox-item_clean-button {
+  opacity: 1;
 }
 
 .survey-content .sd-question .sd-element__title span {
@@ -145,7 +136,6 @@
     --sjs-font-questiondescription-size: 14px;
     --respondent-tagbox-min-height: 44px;
     --respondent-tag-search-height: 40px;
-    --respondent-tag-search-prompt: "Search and add another…";
     --respondent-tag-value-width: 100%;
     --respondent-tag-flex: 0 0 100%;
     --respondent-tag-min-height: 40px;
@@ -155,7 +145,7 @@
     --respondent-tag-text-align: start;
     --respondent-tag-text-ellipsis: ellipsis;
     --respondent-tag-remove-size: 40px;
-    --respondent-tag-remove-padding: 0;
+    --respondent-tag-remove-padding-inline-start: 0;
     --respondent-tag-remove-inset: 0;
     --respondent-tag-remove-opacity: 1;
   }
@@ -221,7 +211,6 @@
     --sjs-font-questiondescription-size: 14px;
     --respondent-tagbox-min-height: 44px;
     --respondent-tag-search-height: 40px;
-    --respondent-tag-search-prompt: "Search and add another…";
     --respondent-tag-value-width: 100%;
     --respondent-tag-flex: 0 0 100%;
     --respondent-tag-min-height: 40px;
@@ -231,7 +220,7 @@
     --respondent-tag-text-align: start;
     --respondent-tag-text-ellipsis: ellipsis;
     --respondent-tag-remove-size: 40px;
-    --respondent-tag-remove-padding: 0;
+    --respondent-tag-remove-padding-inline-start: 0;
     --respondent-tag-remove-inset: 0;
     --respondent-tag-remove-opacity: 1;
   }
@@ -280,7 +269,6 @@
   --sjs-font-questiondescription-size: 14px;
   --respondent-tagbox-min-height: 44px;
   --respondent-tag-search-height: 40px;
-  --respondent-tag-search-prompt: "Search and add another…";
   --respondent-tag-value-width: 100%;
   --respondent-tag-flex: 0 0 100%;
   --respondent-tag-min-height: 40px;
@@ -290,7 +278,7 @@
   --respondent-tag-text-align: start;
   --respondent-tag-text-ellipsis: ellipsis;
   --respondent-tag-remove-size: 40px;
-  --respondent-tag-remove-padding: 0;
+  --respondent-tag-remove-padding-inline-start: 0;
   --respondent-tag-remove-inset: 0;
   --respondent-tag-remove-opacity: 1;
 }

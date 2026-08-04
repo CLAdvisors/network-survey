@@ -13,6 +13,10 @@ export default defineConfig({
     port: 3002,
     strictPort: true
   },
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/testSetup.js'
+  },
   resolve: {
     dedupe: ['react', 'react-dom']
   }

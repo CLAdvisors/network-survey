@@ -100,18 +100,25 @@ function Item({ item, provided, snapshot }) {
   );
 }
 
-export default function DraggableRankingQuestion({ question, value, onChange }) {
+export default function DraggableRankingQuestion({
+  question,
+  value,
+  onChange,
+  availableDirection = "horizontal"
+}) {
   const [ranked, setRanked] = React.useState([]);
   const [available, setAvailable] = React.useState([]);
+  const [dragSourceId, setDragSourceId] = React.useState(null);
+  const isAvailableVertical = availableDirection === "vertical";
 
   const maxSelected = React.useMemo(
     () => parseMaxSelected(question?.maxSelectedChoices),
     [question?.maxSelectedChoices]
   );
 
-  const syncFromProps = React.useCallback(() => {
+  const syncFromValue = React.useCallback((currentValue) => {
     const baseChoices = (question?.choices || []).map(normalizeChoice);
-    const rankedRaw = Array.isArray(value) ? value : [];
+    const rankedRaw = Array.isArray(currentValue) ? currentValue : [];
     const rankedValues = rankedRaw.map(extractValue);
 
     let overflowValues = [];
@@ -145,18 +152,32 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
     if (overflowValues.length) {
       onChange?.(rankedChoices.map((item) => item.value));
     }
-  }, [question?.choices, value, maxSelected, onChange]);
+  }, [question?.choices, maxSelected, onChange]);
 
   React.useEffect(() => {
-    syncFromProps();
-  }, [syncFromProps]);
+    // Preserve controlled-component behavior when a React parent updates the
+    // value prop, even if it supplies a separate question-like object.
+    syncFromValue(value);
+  }, [syncFromValue, value]);
 
   React.useEffect(() => {
     const choices = Array.isArray(question?.choices) ? question.choices : [];
-    if (choices.length === 0) return;
     const disposers = [];
+
+    const questionHandler = (_, options) => {
+      if (options?.name === "value") {
+        // SurveyJS owns question.value and can update it without rerendering
+        // this independent React root.
+        syncFromValue(question?.value);
+      }
+    };
+    if (question?.onPropertyChanged?.add) {
+      question.onPropertyChanged.add(questionHandler);
+      disposers.push(() => question.onPropertyChanged.remove(questionHandler));
+    }
+
     choices.forEach((choice) => {
-      const handler = () => syncFromProps();
+      const handler = () => syncFromValue(question ? question.value : value);
       if (choice?.onPropertyChanged?.add) {
         choice.onPropertyChanged.add(handler);
         disposers.push(() => choice.onPropertyChanged.remove(handler));
@@ -165,9 +186,10 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
     return () => {
       disposers.forEach((dispose) => dispose());
     };
-  }, [question?.choices, syncFromProps]);
+  }, [question, question?.choices, syncFromValue, value]);
 
   const handleDragEnd = (result) => {
+    setDragSourceId(null);
     const { source, destination } = result;
     if (!destination) return;
 
@@ -205,14 +227,17 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
   const isLimitReached = Boolean(maxSelected) && ranked.length >= (maxSelected ?? 0);
 
   return (
-    <DragDropContext onDragEnd={handleDragEnd}>
+    <DragDropContext
+      onDragStart={({ source }) => setDragSourceId(source.droppableId)}
+      onDragEnd={handleDragEnd}
+    >
       <div style={{ display: "flex", flexDirection: "column" }}>
         <div style={{ marginBottom: 16 }}>
           <strong>Ranked (drag items here to rank):</strong>
           <Droppable
             droppableId="ranked"
             direction="vertical"
-            isDropDisabled={isLimitReached}
+            isDropDisabled={isLimitReached && dragSourceId !== "ranked"}
           >
             {(provided, snapshot) => (
               <div
@@ -265,7 +290,7 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
         </div>
         <div>
           <strong>Available options:</strong>
-          <Droppable droppableId="available" direction="horizontal">
+          <Droppable droppableId="available" direction={availableDirection}>
             {(provided, snapshot) => (
               <div
                 ref={provided.innerRef}
@@ -277,7 +302,8 @@ export default function DraggableRankingQuestion({ question, value, onChange }) 
                   borderRadius: 4,
                   background: snapshot.isDraggingOver ? colors.primaryLight : undefined,
                   display: "flex",
-                  flexWrap: "wrap"
+                  flexDirection: isAvailableVertical ? "column" : "row",
+                  flexWrap: isAvailableVertical ? "nowrap" : "wrap"
                 }}
               >
                 {available.map((item, index) => (

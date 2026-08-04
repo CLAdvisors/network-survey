@@ -118,6 +118,47 @@ variable "bootstrap_admin_password_parameter_name" {
   default     = null
 }
 
+variable "bootstrap_admin_email" {
+  description = "Optional email for the deploy-time bootstrap administrator."
+  type        = string
+  default     = null
+}
+
+variable "bootstrap_organization_name" {
+  description = "Organization name for the deploy-time bootstrap administrator."
+  type        = string
+  default     = "Default / Imported"
+}
+
+variable "bootstrap_organization_slug" {
+  description = "Organization slug for the deploy-time bootstrap administrator."
+  type        = string
+  default     = "default-imported"
+}
+
+variable "bootstrap_platform_admin" {
+  description = "Whether the deploy-time bootstrap administrator receives global platform-administrator access."
+  type        = bool
+  default     = true
+}
+
+variable "bootstrap_account_mode" {
+  description = "Bootstrap account behavior: ensure preserves an existing password; create-or-verify is retry-safe and requires exact credentials/identity."
+  type        = string
+  default     = "ensure"
+
+  validation {
+    condition     = contains(["ensure", "create-or-verify"], var.bootstrap_account_mode)
+    error_message = "bootstrap_account_mode must be ensure or create-or-verify."
+  }
+}
+
+variable "cla_production_cutover" {
+  description = "Select the one-time CLA production cutover changelog. Must remain false outside the reviewed production cutover."
+  type        = bool
+  default     = false
+}
+
 variable "frontend_url" {
   description = "Dashboard/frontend URL written to API runtime config."
   type        = string

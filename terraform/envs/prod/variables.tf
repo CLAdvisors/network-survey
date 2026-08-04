@@ -48,6 +48,25 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "api_config_db_host_override" {
+  description = "Emergency runtime DB host override for snapshot-restore rollback. Null uses the Terraform-managed production RDS address."
+  type        = string
+  default     = null
+  nullable    = true
+}
+
+variable "enable_cla_production_cutover" {
+  description = "Explicitly select the one-time CLA production cutover changelog. Keep false for normal deploys and rollback."
+  type        = bool
+  default     = false
+}
+
+variable "enable_cla_owner_bootstrap" {
+  description = "Temporarily expose the one-time CLA owner bootstrap config and secret permission to the API instance."
+  type        = bool
+  default     = false
+}
+
 variable "allocated_storage" {
   description = "Allocated storage in GB"
   default     = 20

@@ -122,6 +122,12 @@ resource "aws_s3_object" "api_config" {
     resend_api_key_parameter_name           = var.resend_api_key_parameter_name
     bootstrap_admin_username                = var.bootstrap_admin_username
     bootstrap_admin_password_parameter_name = var.bootstrap_admin_password_parameter_name
+    bootstrap_admin_email                   = var.bootstrap_admin_email
+    bootstrap_organization_name             = var.bootstrap_organization_name
+    bootstrap_organization_slug             = var.bootstrap_organization_slug
+    bootstrap_platform_admin                = var.bootstrap_platform_admin
+    bootstrap_account_mode                  = var.bootstrap_account_mode
+    cla_production_cutover                  = var.cla_production_cutover
   })
 }
 

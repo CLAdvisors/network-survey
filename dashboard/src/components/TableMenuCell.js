@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { IconButton, Menu, MenuItem } from '@mui/material';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -6,10 +6,14 @@ import EditIcon from '@mui/icons-material/Edit';
 import SendIcon from '@mui/icons-material/Send';
 import EmailIcon from '@mui/icons-material/Email';
 
-const TableMenuCell = ({ row, actions }) => {
+const TableMenuCell = ({ row, actions, disabled = false }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
-  
+
+  useEffect(() => {
+    if (disabled) setAnchorEl(null);
+  }, [disabled]);
+
   const handleClick = (event) => {
     event.stopPropagation();
     setAnchorEl(event.currentTarget);
@@ -24,6 +28,7 @@ const TableMenuCell = ({ row, actions }) => {
 
   const handleAction = (action, event) => {
     event.stopPropagation();
+    if (disabled) return;
     action.handler(row);
     handleClose();
   };
@@ -33,6 +38,7 @@ const TableMenuCell = ({ row, actions }) => {
       <IconButton
         onClick={handleClick}
         size="small"
+        disabled={disabled}
         sx={{
           '&:hover': {
             backgroundColor: 'rgba(66, 179, 175, 0.1)',
@@ -63,6 +69,7 @@ const TableMenuCell = ({ row, actions }) => {
         {actions.map((action) => (
           <MenuItem
             key={action.label}
+            disabled={disabled}
             onClick={(e) => handleAction(action, e)}
             sx={action.color ? { color: action.color } : {}}
           >

@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const { Resend } = require('resend');
-const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
@@ -44,6 +43,15 @@ const pool = new Pool({
 });
 
 const resend = resendApiKey ? new Resend(resendApiKey) : null;
+const DEFAULT_RESEND_FETCH_TIMEOUT_MS = 30_000;
+
+function getResendFetchTimeoutMs(value = process.env.RESEND_FETCH_TIMEOUT_MS) {
+  if (value === undefined || value === null || value === '') return DEFAULT_RESEND_FETCH_TIMEOUT_MS;
+  const timeoutMs = Number(value);
+  return Number.isSafeInteger(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_RESEND_FETCH_TIMEOUT_MS;
+}
 
 const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
@@ -85,19 +93,23 @@ const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//
 const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem.</p> 
 <p>Morbi sed erat non ex mollis pulvinar ut eu nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed gravida cursus pellentesque. Aliquam in lectus et ex ultricies sodales a.</p>`; 
 
-async function sendAccountEmail({ to, subject, html, text }) {
-  if (!resend) {
+async function sendAccountEmail(
+  { to, subject, html, text },
+  resendClient = resend,
+  timeoutMs = getResendFetchTimeoutMs()
+) {
+  if (!resendClient) {
     return { sent: false, message: 'Email delivery is not configured; deliver the returned link manually.' };
   }
 
   try {
-    await resend.emails.send({
+    await sendEmailWithResend({
       from: 'CLA Survey <survey@cladvisors.com>',
       to,
       subject,
       html,
       text,
-    });
+    }, undefined, resendClient, timeoutMs);
     return { sent: true };
   } catch (error) {
     console.error(`Failed to send account email to ${to}:`, error.message);
@@ -105,112 +117,393 @@ async function sendAccountEmail({ to, subject, html, text }) {
   }
 }
 
-async function sendMail(email, id, surveyName, text) {
+async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey', options = {}) {
+  let providerRequestEnqueued = false;
   try {
     if (!resend) {
       throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
     }
 
-    text = "<p>" + text.replace(/"/g, '') + "</p>";
+    text = "<p>" + text + "</p>";
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
     let customLink = `${process.env.SURVEY_URL}/?surveyName=${surveyName}&userId=${id}`;
 
     const emailData = {
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
-      subject: 'CLA Network Survey',
-      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2],
-      surveyName
+      subject: subject || 'CLA Network Survey',
+      html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2]
     };
 
-    // Add delay to respect rate limit
-    await rateLimitedSend(emailData);
+    const queuedSend = rateLimitedSend(emailData, {
+      surveyId: options.surveyId,
+      surveyName,
+      respondentToken: id,
+      trackDelivery: options.trackDelivery !== false,
+      invitationClaimToken: options.invitationClaimToken,
+      invitationDeliveryId: options.invitationDeliveryId,
+      idempotencyKey: options.invitationDeliveryId
+        ? `survey-invitation-${options.invitationDeliveryId}`
+        : undefined,
+    });
+    providerRequestEnqueued = true;
+    await queuedSend;
 
   } catch (error) {
+    // startSurvey can safely release claims only when no provider request could
+    // have started. Queue/provider failures are reconciled by the ownership path.
+    if (!providerRequestEnqueued && error && typeof error === 'object') {
+      error.invitationKnownUnsent = true;
+    }
     console.error(`Failed to send email to ${email}:`, error);
     throw error;
   }
 }
 
-// Queue for managing email sending with rate limiting
-const emailQueue = [];
-let isProcessing = false;
+// Queue for managing email sending with rate limiting. Each enqueue call owns a
+// promise, so callers observe the result of their provider request rather than
+// merely observing that the message was added to the queue.
 const RATE_LIMIT = 10; // emails per second
 const DELAY = 1000; // 1 second delay between batches
 
-async function rateLimitedSend(emailData) {
-  // Add email to queue
-  emailQueue.push(emailData);
-  
-  // Start processing if not already running
-  if (!isProcessing) {
-    isProcessing = true;
-    await processEmailQueue();
-  }
-}
+function createEmailQueueProcessor({
+  sendEmail,
+  withInvitationOwnership = async (_metadata, providerRequest) => providerRequest(),
+  rateLimit = RATE_LIMIT,
+  delay = DELAY,
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+}) {
+  const queue = [];
+  let isProcessing = false;
 
-async function processEmailQueue() {
-  while (emailQueue.length > 0) {
-    // Process up to RATE_LIMIT emails at once
-    const batch = emailQueue.splice(0, RATE_LIMIT);
-    
-    // Send batch of emails and track successful sends
-    const results = await Promise.all(batch.map(async (emailData) => {
-      try {
-        await resend.emails.send(emailData);
-        // Extract recipient email from emailData
-        return { success: true, email: emailData.to };
-      } catch (error) {
-        console.error(`Failed to send email to ${emailData.to}:`, error);
-        return { success: false, email: emailData.to };
-      }
-    }));
+  const processQueue = async () => {
+    let activeBatch = [];
+    try {
+      while (queue.length > 0) {
+        const batch = queue.splice(0, rateLimit);
+        activeBatch = batch;
+        const results = await Promise.all(batch.map(async (item) => {
+          try {
+            const providerOptions = item.metadata.idempotencyKey
+              ? { idempotencyKey: item.metadata.idempotencyKey }
+              : undefined;
+            const providerRequest = () => sendEmail(item.emailData, providerOptions);
+            // Invitation ownership is checked under a row lock immediately before
+            // the provider request. The callback retains that lock until delivery
+            // bookkeeping commits, closing the recipient-edit TOCTOU window.
+            const result = item.metadata.invitationClaimToken
+              ? await withInvitationOwnership(item.metadata, providerRequest)
+              : await providerRequest();
+            return { success: true, item, result };
+          } catch (error) {
+            console.error(`Failed to send email to ${item.emailData.to}:`, error);
+            return { success: false, item, error };
+          }
+        }));
 
-    // Update email_sent status for successful sends
-    const successfulBySurvey = results.reduce((grouped, result) => {
-      if (!result.success) return grouped;
-      const surveyName = batch.find(emailData => emailData.to === result.email)?.surveyName;
-      if (!surveyName) return grouped;
-      grouped[surveyName] = grouped[surveyName] || [];
-      grouped[surveyName].push(result.email);
-      return grouped;
-    }, {});
-    for (const [surveyName, successfulEmails] of Object.entries(successfulBySurvey)) {
-      if (successfulEmails.length > 0) {
-        try {
-          await pool.query(
-            'UPDATE Respondent SET email_sent = true WHERE contact_info = ANY($1) AND survey_name = $2',
-            [successfulEmails, surveyName]
-          );
-        } catch (error) {
-          console.error('Failed to update email_sent status:', error);
+        // Settle all items in the batch, including every provider or bookkeeping failure.
+        for (const result of results) {
+          if (result.success) result.item.resolve(result.result);
+          else result.item.reject(result.error);
         }
+        activeBatch = [];
+
+        if (queue.length > 0) await wait(delay);
       }
+    } catch (error) {
+      // Defensive drain: an injected helper failure cannot strand either the
+      // currently spliced batch or items still waiting in the queue.
+      const stranded = [...activeBatch, ...queue.splice(0)];
+      stranded.forEach((item) => item.reject(error));
+      console.error('Unexpected email queue processing failure:', error);
+    } finally {
+      isProcessing = false;
+      // Normally no task can interleave here, but this also makes the helper
+      // robust to unusual thenables or test schedulers.
+      if (queue.length > 0) startProcessing();
+    }
+  };
+
+  const startProcessing = () => {
+    if (isProcessing) return;
+    isProcessing = true;
+    void processQueue();
+  };
+
+  const enqueue = (emailData, metadata = {}) => new Promise((resolve, reject) => {
+    queue.push({ emailData, metadata, resolve, reject });
+    startProcessing();
+  });
+
+  return { queue, enqueue, processQueue, isProcessing: () => isProcessing };
+}
+
+async function sendEmailWithResend(
+  emailData,
+  options,
+  resendClient = resend,
+  timeoutMs = getResendFetchTimeoutMs()
+) {
+  // Keep the injected-client call shape usable for focused tests while the queue
+  // uses Resend's supported second-argument request options in production.
+  if (options?.emails && resendClient === resend) {
+    resendClient = options;
+    options = undefined;
+  }
+
+  // Resend forwards its runtime request options to fetch. Bound every provider
+  // request so an unavailable endpoint cannot retain an invitation row lock and
+  // pooled client indefinitely. A caller-supplied signal supports fast tests and
+  // explicit cancellation; otherwise Node 20's timeout signal enforces the limit.
+  const requestOptions = {
+    ...options,
+    signal: options?.signal || AbortSignal.timeout(getResendFetchTimeoutMs(timeoutMs)),
+  };
+  let result;
+  try {
+    result = await resendClient.emails.send(emailData, requestOptions);
+  } catch (error) {
+    // An abort can race with provider acceptance, so it must never be treated as
+    // a definitive rejection by invitation claim bookkeeping.
+    if (error && typeof error === 'object'
+      && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+      error.definitiveProviderRejection = false;
+    }
+    throw error;
+  }
+  if (result?.error) {
+    const error = new Error(result.error.message || 'Email provider rejected the message.');
+    error.providerError = result.error;
+    // Resend may return application/transport errors with no HTTP status even
+    // though delivery acceptance is uncertain. A known rejection 4xx is
+    // definitive except for request timeouts, conflicts, and idempotency errors:
+    // each can mean the original request was accepted. Normalize both provider
+    // identifiers because SDK/API versions may expose the category as name or code.
+    const { statusCode } = result.error;
+    const normalizedErrorIdentifiers = [result.error.name, result.error.code]
+      .filter((value) => typeof value === 'string')
+      .map((value) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_'));
+    const isIdempotencyConflict = normalizedErrorIdentifiers.some(
+      (value) => /idempot(?:ent|ency)/.test(value)
+    );
+    const isTimeoutOrAbort = normalizedErrorIdentifiers.some(
+      (value) => /(?:time_?out|timed_?out|abort)/.test(value)
+    );
+    const isKnownRejectionStatus = typeof statusCode === 'number'
+      && Number.isFinite(statusCode)
+      && Number.isInteger(statusCode)
+      && statusCode >= 400
+      && statusCode < 500;
+    const isAmbiguousStatus = statusCode === 408 || statusCode === 409;
+    error.definitiveProviderRejection = isKnownRejectionStatus
+      && !isAmbiguousStatus
+      && !isIdempotencyConflict
+      && !isTimeoutOrAbort;
+    throw error;
+  }
+  return result;
+}
+
+async function deliverInvitationWithOwnership(metadata, providerRequest, dbPool = pool) {
+  const {
+    surveyId,
+    surveyName,
+    respondentToken,
+    invitationClaimToken,
+    invitationDeliveryId,
+  } = metadata;
+  const ownershipValues = [
+    respondentToken,
+    invitationClaimToken,
+    invitationDeliveryId,
+    surveyId || null,
+    surveyName,
+  ];
+  const client = await dbPool.connect();
+  let transactionStarted = false;
+  let pendingError;
+
+  const lockOwnedInvitation = async (requireActiveHorizon = false) => {
+    const owned = await client.query(
+      `SELECT uuid FROM Respondent
+       WHERE uuid = $1
+         AND invitation_claim_token = $2
+         AND invitation_delivery_id = $3
+         AND email_sent IS NOT TRUE
+         AND can_respond = true
+         AND (survey_id = $4 OR (survey_id IS NULL AND survey_name = $5))
+         ${requireActiveHorizon ? `AND invitation_first_attempted_at IS NOT NULL
+         AND invitation_first_attempted_at > CURRENT_TIMESTAMP - ($6 * INTERVAL '1 hour')` : ''}
+       FOR UPDATE`,
+      requireActiveHorizon
+        ? [...ownershipValues, INVITATION_CLAIM_RETRY_CUTOFF_HOURS]
+        : ownershipValues
+    );
+    if (owned.rowCount !== 1) {
+      const error = new Error(requireActiveHorizon
+        ? 'Survey invitation claim was lost or quarantined before delivery.'
+        : 'Survey invitation claim was lost before delivery.');
+      error.code = 'INVITATION_CLAIM_LOST';
+      throw error;
+    }
+  };
+
+  try {
+    // Commit the at-most-once horizon before any provider I/O. If the process
+    // dies after this point, recovery quarantines the attempt rather than
+    // risking a duplicate accepted delivery.
+    await client.query('BEGIN');
+    transactionStarted = true;
+    await lockOwnedInvitation();
+    const refreshed = await client.query(
+      `UPDATE Respondent
+       SET invitation_claimed_at = CURRENT_TIMESTAMP,
+           invitation_first_attempted_at = COALESCE(invitation_first_attempted_at, CURRENT_TIMESTAMP)
+       WHERE uuid = $1
+         AND invitation_claim_token = $2
+         AND invitation_delivery_id = $3
+         AND email_sent IS NOT TRUE
+         AND can_respond = true
+         AND (survey_id = $4 OR (survey_id IS NULL AND survey_name = $5))`,
+      ownershipValues
+    );
+    if (refreshed.rowCount !== 1) throw new Error('Could not refresh owned invitation claim.');
+    await client.query('COMMIT');
+    transactionStarted = false;
+
+    // An edit may rotate the claim in the gap between transactions. Reacquire
+    // the lock and reverify every ownership/eligibility field before sending.
+    await client.query('BEGIN');
+    transactionStarted = true;
+    await lockOwnedInvitation(true);
+
+    let providerResult;
+    try {
+      // Hold this lock through provider I/O and its atomic bookkeeping so an
+      // edit cannot invalidate this exact delivery while it is in flight.
+      providerResult = await providerRequest();
+    } catch (providerError) {
+      const definitiveRejection = providerError?.definitiveProviderRejection === true;
+      try {
+        const bookkeeping = definitiveRejection
+          ? await client.query(
+              `UPDATE Respondent
+               SET email_sent = false,
+                   invitation_claim_token = NULL,
+                   invitation_claimed_at = NULL,
+                   invitation_first_attempted_at = NULL
+               WHERE uuid = $1
+                 AND invitation_claim_token = $2
+                 AND invitation_delivery_id = $3
+                 AND (survey_id = $4 OR (survey_id IS NULL AND survey_name = $5))`,
+              ownershipValues
+            )
+          : await client.query(
+              `UPDATE Respondent
+               SET invitation_claimed_at = CURRENT_TIMESTAMP
+               WHERE uuid = $1
+                 AND invitation_claim_token = $2
+                 AND invitation_delivery_id = $3
+                 AND email_sent IS NOT TRUE
+                 AND (survey_id = $4 OR (survey_id IS NULL AND survey_name = $5))`,
+              ownershipValues
+            );
+        if (bookkeeping.rowCount !== 1) {
+          throw new Error(definitiveRejection
+            ? 'Could not release rejected invitation claim.'
+            : 'Could not preserve ambiguous invitation claim.');
+        }
+        await client.query('COMMIT');
+        transactionStarted = false;
+      } catch (bookkeepingError) {
+        throw new AggregateError(
+          [providerError, bookkeepingError],
+          definitiveRejection
+            ? 'Invitation provider rejection and claim release failed.'
+            : 'Ambiguous invitation failure and claim preservation failed.',
+          { cause: providerError }
+        );
+      }
+      throw providerError;
     }
 
-    // Wait for rate limit window if more emails remain
-    if (emailQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, DELAY));
+    const finalized = await client.query(
+      `UPDATE Respondent
+       SET email_sent = true,
+           invitation_claim_token = NULL,
+           invitation_claimed_at = NULL,
+           invitation_first_attempted_at = NULL
+       WHERE uuid = $1
+         AND invitation_claim_token = $2
+         AND invitation_delivery_id = $3
+         AND (survey_id = $4 OR (survey_id IS NULL AND survey_name = $5))`,
+      ownershipValues
+    );
+    if (finalized.rowCount !== 1) throw new Error('Could not finalize successful invitation delivery.');
+    await client.query('COMMIT');
+    transactionStarted = false;
+    return providerResult;
+  } catch (error) {
+    pendingError = error;
+    if (transactionStarted) {
+      try {
+        await client.query('ROLLBACK');
+        transactionStarted = false;
+      } catch (rollbackError) {
+        pendingError = new AggregateError(
+          [error, rollbackError],
+          'Invitation delivery failed and its transaction could not be rolled back.',
+          { cause: error }
+        );
+      }
+    }
+    throw pendingError;
+  } finally {
+    try {
+      await client.release();
+    } catch (releaseError) {
+      if (pendingError) {
+        throw new AggregateError(
+          [pendingError, releaseError],
+          'Invitation delivery failed and its database client could not be released.',
+          { cause: pendingError }
+        );
+      }
+      throw releaseError;
     }
   }
-  
-  isProcessing = false;
 }
+
+const emailQueueProcessor = createEmailQueueProcessor({
+  sendEmail: sendEmailWithResend,
+  withInvitationOwnership: deliverInvitationWithOwnership,
+  // Invitation clients are acquired only when a rate-limited batch actually
+  // runs, never while items wait. Reserve one default-pool client when possible
+  // so unrelated work is not starved by provider-held invitation transactions.
+  rateLimit: Math.max(1, Math.min(RATE_LIMIT, (pool.options.max || 10) - 1)),
+});
+const emailQueue = emailQueueProcessor.queue;
+const rateLimitedSend = emailQueueProcessor.enqueue;
+const processEmailQueue = emailQueueProcessor.processQueue;
 
 // User test email function (allow admin user to send test email to themselves)
-async function sendTestMail(email, survey, lang) {
+async function sendTestMail(email, survey, lang, mailer = sendMail) {
   const client = await pool.connect();
+  let template;
+  let respondentToken;
   try {
-    const query = `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
-    const values = [survey.id, survey.name, lang];
-    const response = await client.query(query, values);
-    
-    if (!response.rows || response.rows.length === 0) {
+    const response = await client.query(
+      `SELECT lang, text, subject FROM email WHERE ${legacySurveyPredicate()}`,
+      [survey.id, survey.name]
+    );
+    const language = normalizeLanguage(lang);
+    template = language ? buildNotificationMaps(response.rows).templates[language] : null;
+
+    if (!template) {
       throw new Error(`Email template not found for survey '${survey.name}' in language '${lang}'`);
     }
 
-    const text = response.rows[0].text;
-    if (text === undefined || text === null) {
+    if (template.text === undefined || template.text === null) {
       throw new Error(`Email text is undefined for survey '${survey.name}'`);
     }
 
@@ -224,57 +517,170 @@ async function sendTestMail(email, survey, lang) {
        LIMIT 1`,
       [survey.id, survey.name, email]
     );
-    const respondentToken = respondentResult.rows[0]?.uuid;
+    respondentToken = respondentResult.rows[0]?.uuid;
     if (!respondentToken) {
       const error = new Error(`No active respondent token found for '${email}' on survey '${survey.name}'. Reminders can only be sent to that respondent's own email address.`);
       error.statusCode = 404;
       throw error;
     }
-
-    await sendMail(email, respondentToken, survey.name, text);
   } finally {
     client.release();
   }
+
+  // Do not hold a scarce database connection while waiting in the rate-limit
+  // queue or on the external provider.
+  await mailer(email, respondentToken, survey.name, template.text, template.subject, {
+    surveyId: survey.id,
+    trackDelivery: false,
+  });
 }
 
-async function startSurvey(survey){
-  // Pull all users from the database
+// Claims are retried only in this bounded window. Thirty minutes is longer than
+// the provider timeout; 23 hours stays conservatively inside Resend's 24-hour
+// idempotency retention. Older uncertain deliveries remain deliberately quarantined
+// for manual reconciliation rather than risking a duplicate. Truly unclaimed rows
+// remain eligible immediately, and invitation_delivery_id stays stable across retries.
+const INVITATION_CLAIM_TIMEOUT_MINUTES = 30;
+const INVITATION_CLAIM_RETRY_CUTOFF_HOURS = 23;
+
+async function startSurvey(survey, mailer = sendMail) {
+  // Fail before opening a transaction or claiming any rows. Injected mailers do
+  // not require production Resend configuration and remain independently testable.
+  if (mailer === sendMail && !resend) {
+    throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
+  }
+
   const client = await pool.connect();
-  const query = `SELECT name, contact_info, uuid, lang FROM Respondent WHERE ${legacySurveyPredicate()} AND can_respond = true`;
-  const values = [survey.id, survey.name];
-  let respondents = [];
-  let emails = [];
-  await client.query(query, values)
-    .then(response => {
-        respondents = response.rows.map(row => ({
-            userName: row.name,
-            email: row.contact_info,
-            userId: row.uuid,
-            language: row.lang
-        }));
+  const claimToken = crypto.randomUUID();
+  let pendingEmails = [];
+  let transactionStarted = false;
+  try {
+    await client.query('BEGIN');
+    transactionStarted = true;
+    const respondentResult = await client.query(
+      `SELECT name, contact_info, uuid, lang, invitation_delivery_id FROM Respondent
+       WHERE ${legacySurveyPredicate()}
+         AND can_respond = true
+         AND email_sent IS NOT TRUE
+         AND uuid IS NOT NULL
+         AND (invitation_claim_token IS NULL
+           OR (invitation_claimed_at < CURRENT_TIMESTAMP - ($3 * INTERVAL '1 minute')
+             AND (invitation_first_attempted_at IS NULL
+               OR invitation_first_attempted_at > CURRENT_TIMESTAMP - ($4 * INTERVAL '1 hour'))))
+       ORDER BY uuid
+       FOR UPDATE SKIP LOCKED`,
+      [
+        survey.id || null,
+        survey.name,
+        INVITATION_CLAIM_TIMEOUT_MINUTES,
+        INVITATION_CLAIM_RETRY_CUTOFF_HOURS,
+      ]
+    );
+    const emailResult = await client.query(
+      `SELECT lang, text, subject FROM email WHERE ${legacySurveyPredicate()}`,
+      [survey.id || null, survey.name]
+    );
+    const emailMap = buildNotificationMaps(emailResult.rows).templates;
+    const validatedEmails = respondentResult.rows.map((respondent) => {
+      const language = normalizeLanguage(respondent.lang);
+      const template = language ? emailMap[language] : null;
+      if (!template) throw new Error(`Email template not found for language '${respondent.lang}'`);
+      if (template.text === undefined || template.text === null) {
+        throw new Error(`Email text is undefined for language '${respondent.lang}'`);
+      }
+      return { respondent, template };
     });
 
-  // Pull the email text from the database for each language
-  const emailQuery = `SELECT lang, text FROM email WHERE ${legacySurveyPredicate()}`;
-  const emailValues = [survey.id, survey.name];
-  await client.query(emailQuery, emailValues)
-    .then(response => {
-        emails = response.rows.map(row => ({
-            language: row.lang,
-            text: row.text
-        }));
-    });
-    // Create a map from language to email text
-    const emailMap = emails.reduce((map, email) => {
-      map[email.language.replace(/"/g, "").replace(/'/g, "")] = '<p>' + email.text + '</p>';
-      return map;
-    }, {});
-    
-    // Send the emails
-    respondents.forEach(respondent => {
-      sendMail(respondent.email, respondent.userId, survey.name, emailMap[respondent.language].replace(/"/g, "").replace(/'/g, ""));
-    });
+    if (validatedEmails.length > 0) {
+      const claimResult = await client.query(
+        `UPDATE Respondent
+         SET invitation_claim_token = $1, invitation_claimed_at = CURRENT_TIMESTAMP
+         WHERE uuid = ANY($2)
+           AND (survey_id = $3 OR (survey_id IS NULL AND survey_name = $4))
+           AND email_sent IS NOT TRUE
+           AND (invitation_claim_token IS NULL
+             OR (invitation_claimed_at < CURRENT_TIMESTAMP - ($5 * INTERVAL '1 minute')
+               AND (invitation_first_attempted_at IS NULL
+                 OR invitation_first_attempted_at > CURRENT_TIMESTAMP - ($6 * INTERVAL '1 hour'))))
+         RETURNING uuid`,
+        [
+          claimToken,
+          validatedEmails.map(({ respondent }) => respondent.uuid),
+          survey.id || null,
+          survey.name,
+          INVITATION_CLAIM_TIMEOUT_MINUTES,
+          INVITATION_CLAIM_RETRY_CUTOFF_HOURS,
+        ]
+      );
+      const claimedUuids = new Set(claimResult.rows.map(({ uuid }) => uuid));
+      pendingEmails = validatedEmails.filter(({ respondent }) => claimedUuids.has(respondent.uuid));
+    }
+    await client.query('COMMIT');
+    transactionStarted = false;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          'Failed to claim survey invitations and roll back the transaction.',
+          { cause: error }
+        );
+      }
+    }
+    throw error;
+  } finally {
+    client.release();
   }
+
+  const results = await Promise.allSettled(pendingEmails.map(({ respondent, template }) =>
+    new Promise((resolve, reject) => {
+      let sendResult;
+      try {
+        sendResult = mailer(respondent.contact_info, respondent.uuid, survey.name, template.text, template.subject, {
+          surveyId: survey.id,
+          trackDelivery: false,
+          invitationClaimToken: claimToken,
+          invitationDeliveryId: respondent.invitation_delivery_id,
+        });
+      } catch (error) {
+        // A synchronous mailer failure occurred before it could enqueue work.
+        if (error && typeof error === 'object') error.invitationKnownUnsent = true;
+        reject(error);
+        return;
+      }
+      Promise.resolve(sendResult).then(resolve, reject);
+    })
+  ));
+  const failures = results.filter((result) => result.status === 'rejected');
+  const knownUnsentUuids = results.flatMap((result, index) =>
+    result.status === 'rejected' && result.reason?.invitationKnownUnsent
+      ? [pendingEmails[index].respondent.uuid]
+      : []
+  );
+  if (knownUnsentUuids.length > 0) {
+    try {
+      await pool.query(
+        `UPDATE Respondent
+         SET invitation_claim_token = NULL,
+             invitation_claimed_at = NULL,
+             invitation_first_attempted_at = NULL
+         WHERE uuid = ANY($1)
+           AND invitation_claim_token = $2
+           AND (survey_id = $3 OR (survey_id IS NULL AND survey_name = $4))`,
+        [knownUnsentUuids, claimToken, survey.id || null, survey.name]
+      );
+    } catch (releaseError) {
+      throw new AggregateError(
+        [failures[0].reason, releaseError],
+        'A known-unsent invitation failed and its claim could not be released.',
+        { cause: failures[0].reason }
+      );
+    }
+  }
+  if (failures.length > 0) throw failures[0].reason;
+}
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query
@@ -378,7 +784,96 @@ const EDITOR_ROLES = ['owner', 'admin', 'editor'];
 const ADMIN_ROLES = ['owner', 'admin'];
 const ORG_ROLES = ['owner', 'admin', 'editor', 'analyst', 'viewer'];
 const USER_STATUSES = ['invited', 'active', 'disabled'];
+// Keep this definition aligned with frontend-shared/src/constants.js LANGUAGES.
+const LANGUAGE_DEFINITIONS = [
+  ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'],
+  ['it', 'Italian'], ['pt', 'Portuguese'], ['nl', 'Dutch'], ['pl', 'Polish'],
+  ['ru', 'Russian'], ['ja', 'Japanese'], ['zh', 'Chinese'], ['ko', 'Korean'],
+];
+const LANGUAGE_LABELS = new Set(LANGUAGE_DEFINITIONS.map(([, label]) => label));
+const LANGUAGE_LOOKUP = new Map(LANGUAGE_DEFINITIONS.flatMap(([code, label]) => [
+  [code.toLowerCase(), label],
+  [label.toLowerCase(), label],
+]));
+const LEGACY_EMAIL_SUBJECT = 'CLA Network Survey';
+const MAX_NOTIFICATION_TEXT_LENGTH = 10000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeLanguage(value) {
+  if (typeof value !== 'string') return null;
+  const unwrapped = value.trim().replace(/^["']+|["']+$/g, '').trim().toLowerCase();
+  return LANGUAGE_LOOKUP.get(unwrapped) || null;
+}
+
+function buildNotificationMaps(rows = []) {
+  const notifications = {};
+  const subjects = {};
+  const templates = {};
+  const priorities = {};
+  for (const row of rows) {
+    const language = normalizeLanguage(row.lang);
+    if (!language) continue;
+    // Prefer a canonical-label row written by the current application over a
+    // duplicate legacy code/wrapped row, regardless of database row order.
+    const priority = row.lang.trim() === language ? 2 : 1;
+    if ((priorities[language] || 0) > priority) continue;
+    const subject = row.subject || LEGACY_EMAIL_SUBJECT;
+    priorities[language] = priority;
+    notifications[language] = row.text;
+    subjects[language] = subject;
+    templates[language] = { text: row.text, subject };
+  }
+  return { notifications, subjects, templates };
+}
+
+function validateNotification({ language, subject, text } = {}) {
+  if (!normalizeLanguage(language)) return 'Language must be a known language label.';
+  if (typeof subject !== 'string' || !subject.trim()) return 'Subject is required.';
+  if (subject.length > 255) return 'Subject must be at most 255 characters.';
+  if (/[\p{Cc}\p{Cf}]/u.test(subject)) return 'Subject cannot contain line breaks or control characters.';
+  if (typeof text !== 'string') return 'Text must be a string.';
+  if (text.length > MAX_NOTIFICATION_TEXT_LENGTH) return `Text must be at most ${MAX_NOTIFICATION_TEXT_LENGTH} characters.`;
+  return null;
+}
+
+function parseEmailCsv(csvData, surveyName) {
+  if (typeof csvData !== 'string') throw new Error('CSV data must be a string.');
+  const normalizeHeader = (header) => String(header)
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[ _-]+/g, '');
+  const parsed = Papa.parse(csvData, {
+    header: true,
+    skipEmptyLines: 'greedy',
+    transformHeader: normalizeHeader,
+  });
+  if (parsed.errors.length) throw new Error(`Invalid CSV: ${parsed.errors[0].message}`);
+
+  const fields = parsed.meta.fields || [];
+  const findField = (aliases) => fields.find((field) => aliases.includes(field));
+  const languageField = findField(['language', 'languagecode', 'lang']);
+  const textField = findField(['text', 'notificationtext', 'emailtext', 'message']);
+  const subjectField = findField(['subject', 'emailsubject']);
+  if (!languageField || !textField) {
+    throw new Error('CSV must include recognized Language and Text headers.');
+  }
+
+  return parsed.data.map((row, index) => {
+    const language = normalizeLanguage(row[languageField]);
+    const text = row[textField];
+    if (!language || typeof text !== 'string') throw new Error(`Invalid email template on row ${index + 2}.`);
+    if (text.length > MAX_NOTIFICATION_TEXT_LENGTH) throw new Error(`Row ${index + 2}: Text must be at most ${MAX_NOTIFICATION_TEXT_LENGTH} characters.`);
+    const item = { surveyName, language, text };
+    if (subjectField) {
+      const subject = row[subjectField];
+      const validationError = validateNotification({ language, subject, text });
+      if (validationError) throw new Error(`Row ${index + 2}: ${validationError}`);
+      item.subject = subject;
+    }
+    return item;
+  });
+}
 
 function hasAnyRole(role, allowedRoles) {
   return Boolean(role && allowedRoles.includes(role));
@@ -1109,7 +1604,7 @@ async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRol
   }
 
   const result = await pool.query(
-    `SELECT s.id, s.name, s.title, s.creation_date, s.questions,
+    `SELECT s.id, s.name, s.title, s.creation_date, s.questions, s.instructions,
             s.organization_id, s.created_by_user_id, om.role
      FROM Survey s
      LEFT JOIN organization_memberships om
@@ -1167,6 +1662,46 @@ async function insertUsers(users, deleteRow = null, survey = null) {
           ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (name, survey_name) 
         DO UPDATE SET
+          uuid = CASE
+            WHEN Respondent.contact_info IS DISTINCT FROM EXCLUDED.contact_info
+            THEN EXCLUDED.uuid
+            ELSE Respondent.uuid
+          END,
+          invitation_delivery_id = CASE
+            WHEN Respondent.contact_info IS DISTINCT FROM EXCLUDED.contact_info
+              OR Respondent.lang IS DISTINCT FROM EXCLUDED.lang
+              OR Respondent.can_respond IS DISTINCT FROM EXCLUDED.can_respond
+            THEN gen_random_uuid()
+            ELSE Respondent.invitation_delivery_id
+          END,
+          email_sent = CASE
+            WHEN Respondent.contact_info IS DISTINCT FROM EXCLUDED.contact_info
+              OR Respondent.lang IS DISTINCT FROM EXCLUDED.lang
+              OR Respondent.can_respond IS DISTINCT FROM EXCLUDED.can_respond
+            THEN false
+            ELSE Respondent.email_sent
+          END,
+          invitation_claim_token = CASE
+            WHEN Respondent.contact_info IS DISTINCT FROM EXCLUDED.contact_info
+              OR Respondent.lang IS DISTINCT FROM EXCLUDED.lang
+              OR Respondent.can_respond IS DISTINCT FROM EXCLUDED.can_respond
+            THEN NULL
+            ELSE Respondent.invitation_claim_token
+          END,
+          invitation_claimed_at = CASE
+            WHEN Respondent.contact_info IS DISTINCT FROM EXCLUDED.contact_info
+              OR Respondent.lang IS DISTINCT FROM EXCLUDED.lang
+              OR Respondent.can_respond IS DISTINCT FROM EXCLUDED.can_respond
+            THEN NULL
+            ELSE Respondent.invitation_claimed_at
+          END,
+          invitation_first_attempted_at = CASE
+            WHEN Respondent.contact_info IS DISTINCT FROM EXCLUDED.contact_info
+              OR Respondent.lang IS DISTINCT FROM EXCLUDED.lang
+              OR Respondent.can_respond IS DISTINCT FROM EXCLUDED.can_respond
+            THEN NULL
+            ELSE Respondent.invitation_first_attempted_at
+          END,
           contact_info = EXCLUDED.contact_info,
           can_respond = EXCLUDED.can_respond,
           survey_id = EXCLUDED.survey_id,
@@ -1176,12 +1711,13 @@ async function insertUsers(users, deleteRow = null, survey = null) {
       const values = [
         user.userName,
         user.email,
-        nanoid(),  // Generate new UUID for all rows
+        crypto.randomUUID(), // Globally unique access token; rotated on contact changes
         survey?.name || user.surveyName,
         survey?.id || user.surveyId || null,
         user.canRespond !== undefined ? user.canRespond : true, // Default to true if not specified
-        user.language || 'English' // Default to English if not specified
+        normalizeLanguage(user.language || 'English')
       ];
+      if (!values[6]) throw new Error(`Unknown respondent language '${user.language}'.`);
       
       await client.query(query, values);
     }
@@ -1196,38 +1732,35 @@ async function insertUsers(users, deleteRow = null, survey = null) {
   }
 }
 async function insertEmails(data, survey = null) {
-  // Start a PostgreSQL client from the pool
   const client = await pool.connect();
-  console.log(data);
   try {
-    // Begin a transaction
     await client.query('BEGIN');
-
-    // Iterate through the emails and insert or update them
     for (const email of data) {
-      const query = `
-        INSERT INTO email (survey_name, survey_id, lang, text)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (survey_name, lang) DO UPDATE
-        SET text = EXCLUDED.text,
-            survey_id = EXCLUDED.survey_id
-      `;
-      const values = [survey?.name || email.surveyName, survey?.id || email.surveyId || null, email.language, email.text.replace(/"/g, "").replace(/'/g, "")];
-      await client.query(query, values);
+      const surveyName = survey?.name || email.surveyName;
+      const surveyId = survey?.id || email.surveyId || null;
+      const language = normalizeLanguage(email.language);
+      if (!language) throw new Error(`Unknown email template language '${email.language}'.`);
+      if (email.subject === undefined) {
+        await client.query(`
+          INSERT INTO email (survey_name, survey_id, lang, text)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (survey_name, lang) DO UPDATE
+          SET text = EXCLUDED.text, survey_id = EXCLUDED.survey_id
+        `, [surveyName, surveyId, language, email.text]);
+      } else {
+        await client.query(`
+          INSERT INTO email (survey_name, survey_id, lang, subject, text)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (survey_name, lang) DO UPDATE
+          SET subject = EXCLUDED.subject, text = EXCLUDED.text, survey_id = EXCLUDED.survey_id
+        `, [surveyName, surveyId, language, email.subject, email.text]);
+      }
     }
-
-    // Commit the transaction
     await client.query('COMMIT');
-
-    // Release the client back to the pool
-    client.release();
-
-    console.log('Email data inserted or updated successfully!');
   } catch (error) {
-    // If an error occurs, rollback the transaction
-    console.log(error);
-    await client.query('ROLLBACK');
-    console.error('Error inserting or updating emails:', error);
+    try { await client.query('ROLLBACK'); } catch (rollbackError) { console.error('Email rollback failed:', rollbackError); }
+    throw error;
+  } finally {
     client.release();
   }
 }
@@ -1965,19 +2498,12 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     return;
   }
 
-  let csvArray = csvData.split('\n');
-  const header = csvArray.shift().split(',');
-
-  csvArray = csvArray.map((row, index) => {
-    const columns = row.split(',');
-    // combine all strings after index 0
-    columns[1] = columns.slice(1).join(',');
-    return {
-      surveyName: surveyName,
-      language: columns[0].replace(/(\r\n|\n|\r)/gm, ""),
-      text: columns[1].replace(/(\r\n|\n|\r)/gm, "")
-    }
-  });
+  let csvArray;
+  try {
+    csvArray = parseEmailCsv(csvData, surveyName);
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
 
   try {
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
@@ -1987,7 +2513,7 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Error updating email templates:', error);
     res.status(500).json({ message: 'Failed to update email data.' });
-  } 
+  }
 });
 // Modify the POST /api/updateTarget endpoint to handle the new fields
 app.post('/api/updateTarget', requireAuth, async (req, res) => {
@@ -2072,6 +2598,43 @@ app.post('/api/updateTarget', requireAuth, async (req, res) => {
     });
   }
 });
+app.get('/api/survey-content/:surveyId', requireAuth, async (req, res) => {
+  const surveyId = req.params.surveyId;
+  try {
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: UUID_RE.test(surveyId) ? null : surveyId,
+      surveyId: UUID_RE.test(surveyId) ? surveyId : null,
+      allowedRoles: READ_SURVEY_ROLES,
+    });
+    if (!survey) return;
+    res.json({ instructions: survey.instructions });
+  } catch (error) {
+    console.error('Error retrieving survey content:', error);
+    res.status(500).json({ message: 'Failed to retrieve survey content.' });
+  }
+});
+
+app.put('/api/survey-content/:surveyId', express.json(), requireAuth, async (req, res) => {
+  const { instructions } = req.body || {};
+  if (typeof instructions !== 'string') return res.status(400).json({ message: 'Instructions must be a string.' });
+  if (instructions.length > 10000) return res.status(400).json({ message: 'Instructions must be at most 10000 characters.' });
+
+  try {
+    const surveyId = req.params.surveyId;
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: UUID_RE.test(surveyId) ? null : surveyId,
+      surveyId: UUID_RE.test(surveyId) ? surveyId : null,
+      allowedRoles: EDITOR_ROLES,
+    });
+    if (!survey) return;
+    const result = await pool.query('UPDATE Survey SET instructions = $1 WHERE id = $2 RETURNING instructions', [instructions, survey.id]);
+    res.json({ instructions: result.rows[0].instructions });
+  } catch (error) {
+    console.error('Error updating survey content:', error);
+    res.status(500).json({ message: 'Failed to update survey content.' });
+  }
+});
+
 // GET API endpoint for retrieving email texts and available languages
 app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => {
   const surveyId = req.params.surveyId;
@@ -2086,24 +2649,48 @@ app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => 
     const survey = await resolveSurveyForUser(req, res, { surveyName: surveyId, surveyId: UUID_RE.test(surveyId) ? surveyId : null, allowedRoles: ANALYST_ROLES });
     if (!survey) return;
     const query = `
-      SELECT lang, text
+      SELECT lang, text, subject
       FROM EMAIL
       WHERE ${legacySurveyPredicate()}
     `;
 
     const result = await client.query(query, [survey.id, survey.name]);
 
-    const notifications = result.rows.reduce((acc, row) => {
-      acc[row.lang] = row.text;
-      return acc;
-    }, {});
-
-    res.status(200).json({ notifications });
+    const { notifications, subjects } = buildNotificationMaps(result.rows);
+    res.status(200).json({ notifications, subjects });
   } catch (error) {
     console.error('Error retrieving email texts:', error);
     res.status(500).json({ message: 'Failed to retrieve email texts.' });
   } finally {
     client.release();
+  }
+});
+
+app.post('/api/survey-notifications/:surveyId', express.json(), requireAuth, async (req, res) => {
+  const validationError = validateNotification(req.body);
+  if (validationError) return res.status(400).json({ message: validationError });
+
+  try {
+    const surveyId = req.params.surveyId;
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: UUID_RE.test(surveyId) ? null : surveyId,
+      surveyId: UUID_RE.test(surveyId) ? surveyId : null,
+      allowedRoles: EDITOR_ROLES,
+    });
+    if (!survey) return;
+    const { language, subject, text } = req.body;
+    const canonicalLanguage = normalizeLanguage(language);
+    const result = await pool.query(`
+      INSERT INTO EMAIL (survey_name, survey_id, lang, subject, text)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (survey_name, lang) DO UPDATE
+      SET survey_id = EXCLUDED.survey_id, subject = EXCLUDED.subject, text = EXCLUDED.text
+      RETURNING lang, subject, text
+    `, [survey.name, survey.id, canonicalLanguage, subject, text]);
+    res.json({ language: result.rows[0].lang, subject: result.rows[0].subject, text: result.rows[0].text });
+  } catch (error) {
+    console.error('Error updating survey notification:', error);
+    res.status(500).json({ message: 'Failed to update survey notification.' });
   }
 });
 
@@ -2614,7 +3201,7 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
 
   try {
     const query = `
-      SELECT questions, title
+      SELECT questions, title, instructions
       FROM Survey
       WHERE name = $1;
     `;
@@ -2624,7 +3211,7 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
       return res.status(404).json({ message: 'Survey not found.' });
     }
 
-    const jsonData = { title: result.rows[0].title, questions: result.rows[0].questions };
+    const jsonData = { title: result.rows[0].title, questions: result.rows[0].questions, instructions: result.rows[0].instructions };
     res.status(200).json(jsonData);
   } catch (error) {
     console.error('Error fetching survey questions:', error);
@@ -3011,4 +3598,23 @@ module.exports = {
   validateRequiredAnswers,
   normalizeQuestionNames,
   formatRespondentChoice,
+  LANGUAGE_LABELS,
+  normalizeLanguage,
+  buildNotificationMaps,
+  createEmailQueueProcessor,
+  deliverInvitationWithOwnership,
+  sendAccountEmail,
+  sendEmailWithResend,
+  getResendFetchTimeoutMs,
+  rateLimitedSend,
+  processEmailQueue,
+  sendMail,
+  sendTestMail,
+  startSurvey,
+  emailQueue,
+  LEGACY_EMAIL_SUBJECT,
+  MAX_NOTIFICATION_TEXT_LENGTH,
+  validateNotification,
+  parseEmailCsv,
+  insertEmails,
 };

@@ -18,7 +18,7 @@ import PlayCircle from '@mui/icons-material/PlayCircle';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 
-const MenuCell = ({ row, onSurveyDeleted }) => {
+const MenuCell = ({ row, onSurveyDeleted, guardSurveyAction }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [startConfirmOpen, setStartConfirmOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -53,12 +53,17 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
 
   const handleStartClick = (event) => {
     event.stopPropagation();
+    if (guardSurveyAction?.(row) === false) return;
     setStartConfirmOpen(true);
     handleClose();
   };
 
   // Modify handleStartConfirm
   const handleStartConfirm = async () => {
+    if (guardSurveyAction?.(row) === false) {
+      setStartConfirmOpen(false);
+      return;
+    }
     try {
       await api.post('/startSurvey', { surveyName: row.id || row.name });
       setStartConfirmOpen(false);
@@ -86,11 +91,16 @@ const MenuCell = ({ row, onSurveyDeleted }) => {
 
   const handleDeleteClick = (event) => {
     event.stopPropagation();
+    if (guardSurveyAction?.(row) === false) return;
     setDeleteConfirmOpen(true);
     handleClose();
   };
 
   const handleDeleteConfirm = async () => {
+    if (guardSurveyAction?.(row) === false) {
+      setDeleteConfirmOpen(false);
+      return;
+    }
     try {
       const response = await api.delete(`/survey/${row.id || row.name}`);
       if (response.status === 200) {

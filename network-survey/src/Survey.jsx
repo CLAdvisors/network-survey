@@ -6,8 +6,14 @@ import SurveyComponent from './SurveyComponent';
 import Logo from './logo.svg?react';
 import { PRODUCTION_SURVEY_WRAPPER_SX } from '@network-survey/frontend-shared';
 
+const LEGACY_INSTRUCTIONS = 'For each question below, indicate the people you interact with at work. The survey will take 10-15 minutes to complete; please plan to finish in one session.';
+
 const Survey = () => {
   const [title, setTitle] = useState('');
+  const [instructions, setInstructions] = useState(LEGACY_INSTRUCTIONS);
+  const handleInstructions = React.useCallback((value) => {
+    setInstructions(value === undefined ? LEGACY_INSTRUCTIONS : value);
+  }, []);
 
   return (
     <AppPage sx={{ pb: 4 }}>
@@ -28,22 +34,27 @@ const Survey = () => {
             boxShadow: { xs: 'none', sm: appShadows.surface },
           }}
         >
-          <Box
-            className="survey-instructions"
-            sx={{
-              p: { xs: 2, sm: 3 },
-              borderBottom: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500, mb: 1, color: 'primary.main' }}>
-              Survey Instructions
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
-              For each question below, indicate the people you interact with at work.
-              {' '}The survey will take 10-15 minutes to complete; please plan to finish in one session.
-            </Typography>
-          </Box>
+          {instructions !== '' && (
+            <Box
+              className="survey-instructions"
+              sx={{
+                p: { xs: 2, sm: 3 },
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+              }}
+            >
+              <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500, mb: 1, color: 'primary.main' }}>
+                Survey Instructions
+              </Typography>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ lineHeight: 1.5, whiteSpace: 'pre-line' }}
+              >
+                {instructions}
+              </Typography>
+            </Box>
+          )}
 
           <Box
             className="survey-content"
@@ -52,7 +63,7 @@ const Survey = () => {
               ...PRODUCTION_SURVEY_WRAPPER_SX,
             }}
           >
-            <SurveyComponent setTitle={setTitle} />
+            <SurveyComponent setTitle={setTitle} setInstructions={handleInstructions} />
           </Box>
         </Surface>
       </Container>

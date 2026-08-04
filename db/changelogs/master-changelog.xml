@@ -12,4 +12,5 @@
     <include file="v1_3_survey_archive.sql" relativeToChangelogFile="true" />
     <include file="v1_4_product_iam_remaining.sql" relativeToChangelogFile="true" />
     <include file="v1_5_question_requiredness.sql" relativeToChangelogFile="true" />
+    <include file="v1_5_editable_survey_content.sql" relativeToChangelogFile="true" />
 </databaseChangeLog>

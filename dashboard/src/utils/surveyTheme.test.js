@@ -22,6 +22,12 @@ describe('production SurveyJS styling', () => {
       isPanelless: false,
       cssVariables: {
         '--sjs-general-backcolor-dim': 'transparent',
+        '--sjs-font-family': '"Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif',
+        '--sjs-general-forecolor': '#161616',
+        '--sjs-general-forecolor-light': '#909090',
+        '--sjs-font-questiontitle-color': '#161616',
+        '--sjs-font-questiontitle-weight': '600',
+        '--sjs-font-questiondescription-color': '#909090',
         '--sjs-primary-backcolor': '#42B4AF',
         '--sjs-primary-backcolor-dark': '#3B9F9B',
         '--sjs-border-default': '#e8e8e8',
@@ -40,7 +46,13 @@ describe('production SurveyJS styling', () => {
   it('ports the historical 1000px layout and teal question-frame rule', () => {
     expect(runtimeCss).toMatch(/\.cla-survey-runtime\s*\{[\s\S]*?max-width:\s*1000px;[\s\S]*?margin:\s*0 auto;/);
     expect(runtimeCss).toMatch(/\.cla-survey-runtime \.sd-question\.sd-element--with-frame\s*\{[\s\S]*?padding:\s*40px;[\s\S]*?margin-bottom:\s*1rem;[\s\S]*?box-shadow:\s*0 0 0 1px rgba\(49, 201, 166, 0\.4\);/);
-    expect(runtimeCss).not.toContain('.cla-survey-runtime .sd-title,');
+  });
+
+  it('matches the effective DefaultV2 typography rendered by production', () => {
+    expect(runtimeCss).toMatch(/\.cla-survey-runtime \.sd-root-modern,[\s\S]*?font-family:\s*"Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;/);
+    expect(runtimeCss).toMatch(/\.cla-survey-runtime \.sd-title\.sd-element__title\s*\{[\s\S]*?color:\s*#161616;[\s\S]*?font-weight:\s*600;/);
+    expect(runtimeCss).toMatch(/\.cla-survey-runtime \.sd-element__title span\s*\{[\s\S]*?font-size:\s*16px;[\s\S]*?line-height:\s*24px;/);
+    expect(runtimeCss).toMatch(/\.cla-survey-runtime \.sd-description\s*\{[\s\S]*?color:\s*#909090;[\s\S]*?font-size:\s*16px;[\s\S]*?font-weight:\s*400;[\s\S]*?line-height:\s*24px;/);
   });
 
   it('retains historical progress, rating, button, and input rules', () => {

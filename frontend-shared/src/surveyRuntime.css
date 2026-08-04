@@ -19,8 +19,7 @@
 .cla-survey-runtime .sv-root-modern {
   --sv-element-add-padding-right: 0;
   --sv-container-reduced-width: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-    Ubuntu, Cantarell, sans-serif;
+  font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 /* Remove only the runtime page surfaces, not Creator surfaces. */
@@ -46,8 +45,21 @@
   box-shadow: 0 0 0 1px rgba(49, 201, 166, 0.4);
 }
 
-.cla-survey-runtime .sd-element__title,
-.cla-survey-runtime .sd-question__title,
+/*
+ * The legacy .sv-question__title rule did not match production's actual
+ * DefaultV2 sd-* markup. Preserve the effective production typography rather
+ * than translating that dormant selector onto current SurveyJS.
+ */
+.cla-survey-runtime .sd-title.sd-element__title {
+  color: #161616;
+  font-weight: 600;
+}
+
+.cla-survey-runtime .sd-element__title span {
+  font-size: 16px;
+  line-height: 24px;
+}
+
 .cla-survey-runtime .sv-question__title {
   color: #333;
   font-size: 0.95rem;
@@ -68,7 +80,13 @@
   font-weight: normal;
 }
 
-.cla-survey-runtime .sd-description,
+.cla-survey-runtime .sd-description {
+  color: #909090;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 24px;
+}
+
 .cla-survey-runtime .sv-description {
   color: #666;
   font-size: 0.9rem;

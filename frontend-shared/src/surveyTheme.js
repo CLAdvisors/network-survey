@@ -1,7 +1,8 @@
 import { DefaultLight } from 'survey-core/themes';
 import { BRAND_COLORS } from './constants.js';
 
-const APP_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+// The deployed CRA SurveyJS build bundled and used Open Sans for runtime text.
+const APP_FONT_FAMILY = '"Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif';
 
 /** Opt-in scope shared by the respondent runtime and dashboard Demo Survey. */
 export const PRODUCTION_SURVEY_CLASS_NAME = 'cla-survey-runtime';
@@ -19,8 +20,8 @@ export const PRODUCTION_SURVEY_THEME = Object.freeze({
     '--sjs-general-backcolor': '#ffffff',
     '--sjs-general-backcolor-dim': 'transparent',
     '--sjs-general-backcolor-dim-light': '#ffffff',
-    '--sjs-general-forecolor': BRAND_COLORS.textPrimary,
-    '--sjs-general-forecolor-light': 'rgba(51, 51, 51, 0.7)',
+    '--sjs-general-forecolor': '#161616',
+    '--sjs-general-forecolor-light': '#909090',
     '--sjs-primary-backcolor': BRAND_COLORS.primary,
     '--sjs-primary-backcolor-dark': BRAND_COLORS.primaryHover,
     '--sjs-primary-backcolor-light': 'rgba(66, 180, 175, 0.1)',
@@ -34,9 +35,9 @@ export const PRODUCTION_SURVEY_THEME = Object.freeze({
     '--sjs-question-background': '#ffffff',
     '--sjs-questionpanel-backcolor': '#ffffff',
     '--sjs-header-backcolor': 'transparent',
-    '--sjs-font-questiontitle-color': BRAND_COLORS.textPrimary,
-    '--sjs-font-questiontitle-weight': '500',
-    '--sjs-font-questiondescription-color': '#666666',
+    '--sjs-font-questiontitle-color': '#161616',
+    '--sjs-font-questiontitle-weight': '600',
+    '--sjs-font-questiondescription-color': '#909090',
     '--sjs-special-red': '#ff4d4f',
     '--sjs-special-red-light': 'rgba(255, 77, 79, 0.1)',
     // Tokens consumed by the custom draggable-ranking renderer.

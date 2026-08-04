@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Container, Typography, useTheme } from '@mui/material';
 import { alpha } from '@mui/material/styles';
-import { AppPage, Surface } from '@network-survey/frontend-react';
+import { AppPage, Surface, appShadows } from '@network-survey/frontend-react';
 import Header from './Header';
 import SurveyComponent from './SurveyComponent';
 import Logo from './logo.svg?react';
@@ -25,7 +25,8 @@ const Survey = () => {
             overflow: 'hidden',
             borderRadius: { xs: 0, sm: 1 },
             borderInline: { xs: 0, sm: '1px solid' },
-            boxShadow: { xs: 'none', sm: undefined },
+            borderInlineColor: { sm: 'divider' },
+            boxShadow: { xs: 'none', sm: appShadows.surface },
           }}
         >
           <Box className="survey-instructions" sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>

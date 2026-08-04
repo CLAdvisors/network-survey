@@ -22,12 +22,8 @@
   padding-top: 10px;
 }
 
-/*
- * This class is applied by SurveyJS's onAfterRenderQuestion hook. It limits
- * respondent card styling to rendered questions, never nested SurveyJS rows
- * or controls.
- */
-.survey-content .respondent-survey-question {
+/* Scope respondent card styling to SurveyJS question frames, not rows or controls. */
+.survey-content .sd-root-modern .sd-question {
   background: var(--respondent-question-background, var(--survey-surface, var(--sjs-general-backcolor, #fff)));
   border: var(--respondent-question-border, 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6)));
   border-bottom: var(--respondent-question-bottom-border, 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6)));
@@ -52,16 +48,51 @@
 }
 
 /* Keep tags usable without changing other SurveyJS input layouts. */
-.survey-content .respondent-survey-question .sd-tagbox__value {
+.survey-content .sd-question .sd-tagbox__value {
   width: var(--respondent-tag-value-width, auto);
   gap: 4px;
 }
 
-.survey-content .respondent-survey-question .sd-input.sd-tagbox {
+.survey-content .sd-question .sd-input.sd-tagbox {
   min-height: var(--respondent-tagbox-min-height, auto);
 }
 
-.survey-content .respondent-survey-question .sv-tagbox__item {
+/* Once tags are selected SurveyJS collapses its filter hint to zero height.
+ * Restore a dedicated row so touch users can reopen the search field. */
+.survey-content .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint {
+  position: relative;
+  flex: 0 0 100%;
+  min-height: var(--respondent-tag-search-height, 0);
+  align-items: center;
+}
+
+.survey-content .sd-question .sd-tagbox__hint-suffix-wrapper,
+.survey-content .sd-question .sd-tagbox__filter-string-input {
+  width: 100%;
+  min-height: var(--respondent-tag-search-height, 0);
+}
+
+.survey-content .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__filter-string-input {
+  box-sizing: border-box;
+  padding-inline: 12px 0;
+}
+
+.survey-content .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint::before {
+  content: var(--respondent-tag-search-prompt, none);
+  position: absolute;
+  inset-inline-start: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--survey-muted-text, var(--sjs-general-forecolor-light, #777));
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.survey-content .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint:focus-within::before {
+  content: none;
+}
+
+.survey-content .sd-question .sv-tagbox__item {
   flex: var(--respondent-tag-flex, 0 1 auto);
   min-width: 0;
   max-width: 100%;
@@ -69,53 +100,72 @@
   padding-inline-end: var(--respondent-tag-end-padding, calc(1.5 * var(--sjs-base-unit, 8px)));
 }
 
-.survey-content .respondent-survey-question .sv-tagbox__item-text {
+.survey-content .sd-question .sv-tagbox__item-text {
   flex: var(--respondent-tag-text-flex, 0 1 auto);
   min-width: 0;
   overflow: var(--respondent-tag-text-overflow, visible);
   text-align: var(--respondent-tag-text-align, center);
 }
 
-.survey-content .respondent-survey-question .sv-tagbox__item-text span {
+.survey-content .sd-question .sv-tagbox__item-text span {
   white-space: nowrap;
   text-overflow: var(--respondent-tag-text-ellipsis, clip);
 }
 
-.survey-content .respondent-survey-question .sd-tagbox-item_clean-button {
+.survey-content .sd-question .sd-tagbox-item_clean-button {
   width: var(--respondent-tag-remove-size, auto);
   min-height: var(--respondent-tag-remove-size, auto);
   padding: var(--respondent-tag-remove-padding, 0 0 0 calc(4 * var(--sjs-base-unit, 8px)));
   inset-inline-end: var(--respondent-tag-remove-inset, calc(1.5 * var(--sjs-base-unit, 8px)));
-  opacity: var(--respondent-tag-remove-opacity, 0);
+  /* Invalid until mobile defines the variable, preserving SurveyJS hover/focus behavior on desktop. */
+  opacity: var(--respondent-tag-remove-opacity);
+}
+
+.survey-content .sd-question .sd-element__title span {
+  line-height: var(--respondent-question-title-line-height, 1.5);
+}
+
+.survey-content .sd-question .sd-description {
+  line-height: var(--respondent-question-description-line-height, 1.5);
 }
 
 @media (max-width: 599.95px) {
   .survey-content {
-    --respondent-shell-padding: 12px;
+    --respondent-shell-padding: 16px;
     --respondent-survey-gutter: 0;
     --respondent-question-background: transparent;
     --respondent-question-border: 0;
     --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
     --respondent-question-radius: 0;
     --respondent-question-shadow: none;
-    --respondent-question-padding: 0 0 20px;
-    --respondent-tagbox-min-height: 48px;
+    --respondent-question-padding: 0 0 16px;
+    --respondent-question-title-line-height: 1.35;
+    --respondent-question-description-line-height: 1.4;
+    --sjs-font-questiontitle-size: 16px;
+    --sjs-font-questiondescription-size: 14px;
+    --respondent-tagbox-min-height: 44px;
+    --respondent-tag-search-height: 40px;
+    --respondent-tag-search-prompt: "Search and add another…";
     --respondent-tag-value-width: 100%;
     --respondent-tag-flex: 0 0 100%;
-    --respondent-tag-min-height: 44px;
-    --respondent-tag-end-padding: 44px;
+    --respondent-tag-min-height: 40px;
+    --respondent-tag-end-padding: 40px;
     --respondent-tag-text-flex: 1 1 auto;
     --respondent-tag-text-overflow: hidden;
     --respondent-tag-text-align: start;
     --respondent-tag-text-ellipsis: ellipsis;
-    --respondent-tag-remove-size: 44px;
+    --respondent-tag-remove-size: 40px;
     --respondent-tag-remove-padding: 0;
     --respondent-tag-remove-inset: 0;
     --respondent-tag-remove-opacity: 1;
   }
 
   .survey-content .sd-body.sd-body--static {
-    padding: 16px 0 8px;
+    padding: 12px 0 8px;
+  }
+
+  .survey-content .sd-body__page {
+    padding-top: 4px;
   }
 
   .survey-content .sd-page {
@@ -123,10 +173,10 @@
   }
 
   .survey-instructions {
-    --respondent-shell-padding: 16px;
+    --respondent-shell-padding: 14px 16px;
   }
 
-  .survey-content .sd-page__row:last-child .respondent-survey-question {
+  .survey-content .sd-page__row:last-child .sd-question {
     border-bottom: 0;
   }
 }
@@ -157,31 +207,41 @@
   }
 
   .respondent-survey-frame .survey-content {
-    --respondent-shell-padding: 12px;
+    --respondent-shell-padding: 16px;
     --respondent-survey-gutter: 0;
     --respondent-question-background: transparent;
     --respondent-question-border: 0;
     --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
     --respondent-question-radius: 0;
     --respondent-question-shadow: none;
-    --respondent-question-padding: 0 0 20px;
-    --respondent-tagbox-min-height: 48px;
+    --respondent-question-padding: 0 0 16px;
+    --respondent-question-title-line-height: 1.35;
+    --respondent-question-description-line-height: 1.4;
+    --sjs-font-questiontitle-size: 16px;
+    --sjs-font-questiondescription-size: 14px;
+    --respondent-tagbox-min-height: 44px;
+    --respondent-tag-search-height: 40px;
+    --respondent-tag-search-prompt: "Search and add another…";
     --respondent-tag-value-width: 100%;
     --respondent-tag-flex: 0 0 100%;
-    --respondent-tag-min-height: 44px;
-    --respondent-tag-end-padding: 44px;
+    --respondent-tag-min-height: 40px;
+    --respondent-tag-end-padding: 40px;
     --respondent-tag-text-flex: 1 1 auto;
     --respondent-tag-text-overflow: hidden;
     --respondent-tag-text-align: start;
     --respondent-tag-text-ellipsis: ellipsis;
-    --respondent-tag-remove-size: 44px;
+    --respondent-tag-remove-size: 40px;
     --respondent-tag-remove-padding: 0;
     --respondent-tag-remove-inset: 0;
     --respondent-tag-remove-opacity: 1;
   }
 
   .respondent-survey-frame .survey-content .sd-body.sd-body--static {
-    padding: 16px 0 8px;
+    padding: 12px 0 8px;
+  }
+
+  .respondent-survey-frame .survey-content .sd-body__page {
+    padding-top: 4px;
   }
 
   .respondent-survey-frame .survey-content .sd-page {
@@ -189,10 +249,10 @@
   }
 
   .respondent-survey-frame .survey-instructions {
-    --respondent-shell-padding: 16px;
+    --respondent-shell-padding: 14px 16px;
   }
 
-  .respondent-survey-frame .survey-content .sd-page__row:last-child .respondent-survey-question {
+  .respondent-survey-frame .survey-content .sd-page__row:last-child .sd-question {
     border-bottom: 0;
   }
 }
@@ -206,31 +266,41 @@
 }
 
 .respondent-survey-frame--phone .survey-content {
-  --respondent-shell-padding: 12px;
+  --respondent-shell-padding: 16px;
   --respondent-survey-gutter: 0;
   --respondent-question-background: transparent;
   --respondent-question-border: 0;
   --respondent-question-bottom-border: 1px solid var(--survey-border, var(--sjs-border-default, #d6d6d6));
   --respondent-question-radius: 0;
   --respondent-question-shadow: none;
-  --respondent-question-padding: 0 0 20px;
-  --respondent-tagbox-min-height: 48px;
+  --respondent-question-padding: 0 0 16px;
+  --respondent-question-title-line-height: 1.35;
+  --respondent-question-description-line-height: 1.4;
+  --sjs-font-questiontitle-size: 16px;
+  --sjs-font-questiondescription-size: 14px;
+  --respondent-tagbox-min-height: 44px;
+  --respondent-tag-search-height: 40px;
+  --respondent-tag-search-prompt: "Search and add another…";
   --respondent-tag-value-width: 100%;
   --respondent-tag-flex: 0 0 100%;
-  --respondent-tag-min-height: 44px;
-  --respondent-tag-end-padding: 44px;
+  --respondent-tag-min-height: 40px;
+  --respondent-tag-end-padding: 40px;
   --respondent-tag-text-flex: 1 1 auto;
   --respondent-tag-text-overflow: hidden;
   --respondent-tag-text-align: start;
   --respondent-tag-text-ellipsis: ellipsis;
-  --respondent-tag-remove-size: 44px;
+  --respondent-tag-remove-size: 40px;
   --respondent-tag-remove-padding: 0;
   --respondent-tag-remove-inset: 0;
   --respondent-tag-remove-opacity: 1;
 }
 
 .respondent-survey-frame--phone .survey-content .sd-body.sd-body--static {
-  padding: 16px 0 8px;
+  padding: 12px 0 8px;
+}
+
+.respondent-survey-frame--phone .survey-content .sd-body__page {
+  padding-top: 4px;
 }
 
 .respondent-survey-frame--phone .survey-content .sd-page {
@@ -238,9 +308,9 @@
 }
 
 .respondent-survey-frame--phone .survey-instructions {
-  --respondent-shell-padding: 16px;
+  --respondent-shell-padding: 14px 16px;
 }
 
-.respondent-survey-frame--phone .survey-content .sd-page__row:last-child .respondent-survey-question {
+.respondent-survey-frame--phone .survey-content .sd-page__row:last-child .sd-question {
   border-bottom: 0;
 }

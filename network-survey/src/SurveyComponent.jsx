@@ -102,16 +102,17 @@ function SurveyComponent({setTitle}) {
 
       // Custom rendering for draggableranking
       newSurvey.onAfterRenderQuestion.add((survey, options) => {
-        // Stable hook-owned class: CSS never has to infer question boundaries from rows.
-        options.htmlElement?.classList.add("respondent-survey-question");
+        const questionElement = options.htmlElement?.matches?.(".sd-question")
+          ? options.htmlElement
+          : options.htmlElement?.querySelector(".sd-question") || options.htmlElement;
 
         if (options.question.getType() !== "draggableranking") {
           return;
         }
 
         const contentElement =
-          options.htmlElement.querySelector(".sd-question__content") ||
-          options.htmlElement;
+          questionElement?.querySelector(".sd-question__content") ||
+          questionElement;
 
         const previousRoot = draggableQuestionRoots.get(options.question);
         if (previousRoot) {

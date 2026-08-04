@@ -1,6 +1,5 @@
 import React from 'react';
 import { Box, Typography } from '@mui/material';
-import { BrowserView, MobileView } from 'react-device-detect';
 import { appShadows } from '@network-survey/frontend-react';
 import { BRAND } from '@network-survey/frontend-shared';
 
@@ -15,8 +14,8 @@ const Header = ({ svgComponent: SvgComponent, title, forceMobile = false }) => {
       display: '-webkit-box',
       WebkitBoxOrient: 'vertical',
       WebkitLineClamp: 2,
-      fontSize: '1rem',
-      lineHeight: 1.35,
+      fontSize: '0.95rem',
+      lineHeight: 1.3,
     }
     : {
       m: 0,
@@ -27,8 +26,8 @@ const Header = ({ svgComponent: SvgComponent, title, forceMobile = false }) => {
       display: { xs: '-webkit-box', sm: 'block' },
       WebkitBoxOrient: 'vertical',
       WebkitLineClamp: { xs: 2, sm: 'unset' },
-      fontSize: { xs: '1rem', sm: '1.25rem' },
-      lineHeight: { xs: 1.35, sm: 1.6 },
+      fontSize: { xs: '0.95rem', sm: '1.25rem' },
+      lineHeight: { xs: 1.3, sm: 1.6 },
     };
 
   const titleElement = (
@@ -46,7 +45,7 @@ const Header = ({ svgComponent: SvgComponent, title, forceMobile = false }) => {
         zIndex: (theme) => theme.zIndex.appBar,
         display: 'flex',
         alignItems: 'center',
-        minHeight: forceMobile ? 56 : { xs: 56, sm: 64 },
+        minHeight: forceMobile ? 52 : { xs: 52, sm: 64 },
         px: forceMobile ? 2 : { xs: 2, sm: 3 },
         py: forceMobile ? 0.5 : { xs: 0.5, sm: 1.5 },
         bgcolor: 'background.paper',
@@ -57,18 +56,16 @@ const Header = ({ svgComponent: SvgComponent, title, forceMobile = false }) => {
         titleElement
       ) : (
         <>
-          <BrowserView>
-            <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-              <Box sx={{ minWidth: 150, maxWidth: 280, ml: { sm: 3 }, pr: 1 }}>
-                <a href={BRAND.websiteUrl} target="_blank" rel="noreferrer">
-                  {SvgComponent}
-                </a>
-              </Box>
+          <Box sx={{ display: { xs: 'none', sm: 'flex' }, alignItems: 'center', width: '100%' }}>
+            <Box sx={{ minWidth: 150, maxWidth: 280, ml: { sm: 3 }, pr: 1 }}>
+              <a href={BRAND.websiteUrl} target="_blank" rel="noreferrer">
+                {SvgComponent}
+              </a>
             </Box>
-          </BrowserView>
-          <MobileView>
+          </Box>
+          <Box sx={{ display: { xs: 'block', sm: 'none' }, minWidth: 0, width: '100%' }}>
             {titleElement}
-          </MobileView>
+          </Box>
         </>
       )}
     </Box>

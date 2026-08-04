@@ -114,10 +114,11 @@ function HarnessSurvey() {
     // Register before SurveyJs mounts: SurveyJS fires this event from its
     // question mount lifecycle, before a parent useEffect would run.
     instance.onAfterRenderQuestion.add((_, options) => {
-      // Match production's hook-owned class rather than relying on SurveyJS row markup.
-      options.htmlElement?.classList.add('respondent-survey-question');
+      const questionElement = options.htmlElement?.matches?.('.sd-question')
+        ? options.htmlElement
+        : options.htmlElement?.querySelector('.sd-question') || options.htmlElement;
       if (options.question?.getType() !== 'draggableranking') return;
-      const content = options.htmlElement?.querySelector('.sd-question__content') || options.htmlElement;
+      const content = questionElement?.querySelector('.sd-question__content') || questionElement;
       if (!content) return;
       const previous = draggableRoots.get(options.question);
       if (previous) {

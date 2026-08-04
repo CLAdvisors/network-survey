@@ -1689,6 +1689,43 @@ test('remaining IAM migration adds audit, invite/reset, and non-destructive surv
   assert.doesNotMatch(remaining, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|ALTER\s+TABLE[\s\S]+DROP\s+COLUMN/i);
 });
 
+test('CLA organization migration preserves survey data and enforces stable child relationships', () => {
+  const changelog = fs.readFileSync(path.join(__dirname, '../../db/changelogs/master-changelog.xml'), 'utf8');
+  const cutoverChangelog = fs.readFileSync(path.join(__dirname, '../../db/changelogs/cla-production-cutover.xml'), 'utf8');
+  const migration = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_7_cla_organization_backfill.sql'), 'utf8');
+  const bootstrap = fs.readFileSync(path.join(__dirname, '../../scripts/deploy/bootstrap-admin.js'), 'utf8');
+  const cleanup = fs.readFileSync(path.join(__dirname, '../../scripts/deploy/finalize-legacy-accounts.js'), 'utf8');
+
+  assert.doesNotMatch(changelog, /v1_7_cla_organization_backfill\.sql/);
+  assert.match(cutoverChangelog, /master-changelog\.xml/);
+  assert.match(cutoverChangelog, /v1_7_cla_organization_backfill\.sql/);
+  assert.match(migration, /VALUES \('CLA', 'cla'\)/);
+  assert.match(migration, /WHERE r\.survey_id IS NULL/);
+  assert.match(migration, /WHERE e\.survey_id IS NULL/);
+  assert.match(migration, /organization_id IS DISTINCT FROM/);
+  assert.match(migration, /Respondent contains null, orphaned, or disagreeing survey relationships/);
+  assert.match(migration, /EMAIL contains null, orphaned, or disagreeing survey relationships/);
+  assert.match(migration, /FOREIGN KEY \(survey_id\) REFERENCES Survey\(id\) NOT VALID/i);
+  assert.match(migration, /ALTER TABLE Respondent VALIDATE CONSTRAINT respondent_survey_id_fkey/i);
+  assert.match(migration, /ALTER TABLE EMAIL VALIDATE CONSTRAINT email_survey_id_fkey/i);
+  assert.doesNotMatch(migration, /UPDATE\s+Respondent[\s\S]+\b(response|uuid|respondent_id|email_sent)\s*=/i);
+  assert.doesNotMatch(migration, /UPDATE\s+EMAIL[\s\S]+\b(text|invitation_subject)\s*=/i);
+
+  assert.match(bootstrap, /BOOTSTRAP_ORGANIZATION_SLUG/);
+  assert.match(bootstrap, /BOOTSTRAP_PLATFORM_ADMIN/);
+  assert.match(bootstrap, /create-or-verify/);
+  assert.match(bootstrap, /bcrypt\.compare/);
+  assert.match(bootstrap, /created_by_user_id/);
+  assert.match(cleanup, /CLA owner-only access is not active and validated/);
+  assert.match(cleanup, /CLEANUP_MODE/);
+  assert.match(cleanup, /CONFIRM_FINAL_SNAPSHOT_ID/);
+  assert.match(cleanup, /EXPECTED_LEGACY_USER_IDS/);
+  assert.match(cleanup, /last_login_at/);
+  assert.match(cleanup, /SET status = 'disabled', is_platform_admin = false/);
+  assert.match(cleanup, /DELETE FROM sessions/);
+  assert.doesNotMatch(cleanup, /DELETE FROM users/);
+});
+
 test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {
   const originalQuery = pool.query;
   const originalReturnDevTokens = process.env.RETURN_DEV_TOKENS;

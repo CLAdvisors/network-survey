@@ -97,9 +97,10 @@ output "survey_distribution_id" {
 
 output "runtime_secret_parameter_names" {
   value = {
-    db_password    = local.db_password_parameter_name
-    session_secret = local.session_secret_parameter_name
-    resend_api_key = local.resend_api_key_parameter_name
+    db_password              = local.db_password_parameter_name
+    session_secret           = local.session_secret_parameter_name
+    resend_api_key           = local.resend_api_key_parameter_name
+    bootstrap_admin_password = local.bootstrap_admin_password_parameter_name
   }
   description = "Existing production SSM Parameter Store paths reused by the replacement app runtime."
 }

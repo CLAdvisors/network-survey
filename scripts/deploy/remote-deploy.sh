@@ -93,15 +93,19 @@ DB_PORT=$(read_runtime_env DB_PORT)
 DB_NAME=$(read_runtime_env DB_NAME)
 DB_USER=$(read_runtime_env DB_USER)
 DB_PASSWORD=$(read_runtime_env DB_PASSWORD)
-# changeLogFile must stay "changelogs/..." — that path is the changeset
-# identity recorded in DATABASECHANGELOG by all prior runs (local dev and the
-# old liquibase-prod.sh both ran from db/). Changing it would make Liquibase
-# re-run every migration.
+# changeLogFile must stay under "changelogs/..." — included changeset paths are
+# the identities recorded in DATABASECHANGELOG by all prior runs. The dedicated
+# cutover root is selected only by explicit production runtime configuration;
+# local, CI, and staging use the universal non-data-moving master changelog.
+CHANGELOG_FILE=changelogs/master-changelog.xml
+if [ "$(get_env_value CLA_PRODUCTION_CUTOVER)" = "true" ]; then
+  CHANGELOG_FILE=changelogs/cla-production-cutover.xml
+fi
 liquibase \
   --url="jdbc:postgresql://$DB_HOST:$DB_PORT/${DB_NAME:-ONA}?sslmode=verify-full&sslrootcert=$SERVICE_DIR/certs/rds-global-bundle.pem" \
   --username="$DB_USER" \
   --password="$DB_PASSWORD" \
-  --changeLogFile=changelogs/master-changelog.xml \
+  --changeLogFile="$CHANGELOG_FILE" \
   --searchPath="$RELEASE_DIR/db" \
   update
 
@@ -109,6 +113,11 @@ if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
   echo "==> Ensuring bootstrap dashboard administrator"
   BOOTSTRAP_ADMIN_PASSWORD=$(get_secret_from_ssm BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)
   BOOTSTRAP_ADMIN_USERNAME=$(get_env_value BOOTSTRAP_ADMIN_USERNAME) \
+    BOOTSTRAP_ADMIN_EMAIL=$(get_env_value BOOTSTRAP_ADMIN_EMAIL) \
+    BOOTSTRAP_ORGANIZATION_NAME=$(get_env_value BOOTSTRAP_ORGANIZATION_NAME) \
+    BOOTSTRAP_ORGANIZATION_SLUG=$(get_env_value BOOTSTRAP_ORGANIZATION_SLUG) \
+    BOOTSTRAP_PLATFORM_ADMIN=$(get_env_value BOOTSTRAP_PLATFORM_ADMIN) \
+    BOOTSTRAP_ACCOUNT_MODE=$(get_env_value BOOTSTRAP_ACCOUNT_MODE) \
     BOOTSTRAP_ADMIN_PASSWORD="$BOOTSTRAP_ADMIN_PASSWORD" \
     DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" \
     DB_SSL=true DB_SSL_CA="$SERVICE_DIR/certs/rds-global-bundle.pem" \

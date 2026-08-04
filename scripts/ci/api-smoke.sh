@@ -88,7 +88,7 @@ curl -fsS -b "$COOKIES" "$BASE/api/check-auth" | grep -q '"isAuthenticated":true
 echo "==> Authenticated survey CRUD"
 curl -fsS -b "$COOKIES" -X POST "$BASE/api/survey" \
   -H 'Content-Type: application/json' \
-  -d '{"surveyName":"ci-smoke-survey"}' >/dev/null
-curl -fsS -b "$COOKIES" "$BASE/api/surveys" | grep -q 'ci-smoke-survey'
+  -d '{"surveyName":"CISmokeSurvey"}' >/dev/null
+curl -fsS -b "$COOKIES" "$BASE/api/surveys" | grep -q 'CISmokeSurvey'
 
 echo "==> Smoke test passed"

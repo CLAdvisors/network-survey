@@ -15,7 +15,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: terraform-apply-${{ inputs.environment }}
+  # Production infrastructure/config updates serialize with production API
+  # releases so deploy cannot read partially updated IAM or runtime config.
+  group: ${{ inputs.environment == 'prod' && 'api-release-production' || 'terraform-apply-staging' }}
   cancel-in-progress: false
 
 jobs:

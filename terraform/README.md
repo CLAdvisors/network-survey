@@ -36,6 +36,7 @@ API runtime secrets are stored in SSM Parameter Store SecureString values, e.g.:
 /network-survey/prod/db/password
 /network-survey/prod/api/session-secret
 /network-survey/prod/api/resend-api-key
+/network-survey/prod/api/bootstrap-admin-password
 ```
 
 Never commit secret values or local `*.local.tfvars` files.
@@ -55,6 +56,13 @@ ensures this account is active, a platform administrator, and an owner of the
 first created; later deploys retain its existing password while re-ensuring its
 access. Rotate/reset the account through an approved operator recovery process,
 not by editing tracked configuration.
+
+Production CLA cutover temporarily configures the equivalent production
+SecureString to create the approved CLA owner in retry-safe `create-or-verify`
+mode. Production bootstrapping grants organization owner only, not
+platform-administrator access.
+After first-login validation and legacy-account cleanup, remove the bootstrap
+runtime configuration/IAM permission and delete or rotate the one-time parameter.
 
 ## Current apply commands
 

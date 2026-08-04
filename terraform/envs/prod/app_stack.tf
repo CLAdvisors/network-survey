@@ -23,14 +23,16 @@ locals {
   app_name_prefix = "${var.project_name}-${var.environment}-v2"
 
   # Runtime secrets intentionally keep the existing production Parameter Store paths.
-  ssm_parameter_prefix          = "/network-survey/${var.environment}"
-  db_password_parameter_name    = "${local.ssm_parameter_prefix}/db/password"
-  session_secret_parameter_name = "${local.ssm_parameter_prefix}/api/session-secret"
-  resend_api_key_parameter_name = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  ssm_parameter_prefix                    = "/network-survey/${var.environment}"
+  db_password_parameter_name              = "${local.ssm_parameter_prefix}/db/password"
+  session_secret_parameter_name           = "${local.ssm_parameter_prefix}/api/session-secret"
+  resend_api_key_parameter_name           = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  bootstrap_admin_password_parameter_name = "${local.ssm_parameter_prefix}/api/bootstrap-admin-password"
 
   frontend_url        = "https://${var.dashboard_domain}"
   survey_url          = "https://${var.survey_domain}"
   session_cookie_name = "sessionId"
+  api_config_db_host  = coalesce(var.api_config_db_host_override, aws_db_instance.prod_replacement.address)
 
   app_common_tags = merge(local.prod_app_tags, {
     # Use a distinct discovery environment until legacy prod resources are retired.
@@ -98,16 +100,24 @@ module "api_backend" {
   cloud_init_template_path = "${path.module}/../../cloud-init-template.sh"
   env_template_path        = "${path.module}/../../templates/env.tmpl"
 
-  db_host                       = aws_db_instance.prod_replacement.address
-  db_port                       = aws_db_instance.prod_replacement.port
-  db_name                       = aws_db_instance.prod_replacement.db_name
-  db_user                       = var.db_user
-  db_password_parameter_name    = local.db_password_parameter_name
-  session_secret_parameter_name = local.session_secret_parameter_name
-  resend_api_key_parameter_name = local.resend_api_key_parameter_name
-  frontend_url                  = local.frontend_url
-  survey_url                    = local.survey_url
-  session_cookie_name           = local.session_cookie_name
+  db_host                                 = local.api_config_db_host
+  db_port                                 = aws_db_instance.prod_replacement.port
+  db_name                                 = aws_db_instance.prod_replacement.db_name
+  db_user                                 = var.db_user
+  db_password_parameter_name              = local.db_password_parameter_name
+  session_secret_parameter_name           = local.session_secret_parameter_name
+  resend_api_key_parameter_name           = local.resend_api_key_parameter_name
+  bootstrap_admin_username                = var.enable_cla_owner_bootstrap ? "sgarcia@cladvisors.com" : null
+  bootstrap_admin_email                   = var.enable_cla_owner_bootstrap ? "sgarcia@cladvisors.com" : null
+  bootstrap_admin_password_parameter_name = var.enable_cla_owner_bootstrap ? local.bootstrap_admin_password_parameter_name : null
+  bootstrap_organization_name             = "CLA"
+  bootstrap_organization_slug             = "cla"
+  bootstrap_platform_admin                = false
+  bootstrap_account_mode                  = "create-or-verify"
+  cla_production_cutover                  = var.enable_cla_production_cutover
+  frontend_url                            = local.frontend_url
+  survey_url                              = local.survey_url
+  session_cookie_name                     = local.session_cookie_name
 
   common_tags           = local.app_common_tags
   config_bucket_tags    = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-config", App = "ona-config" })

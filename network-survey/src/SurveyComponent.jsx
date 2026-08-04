@@ -36,7 +36,7 @@ Serializer.addClass(
   "question"
 );
 
-function SurveyComponent({setTitle}) {
+function SurveyComponent({ setTitle, setInstructions }) {
     const theme = useTheme();
     const [json, setJson] = React.useState(null);
     const [survey, setSurvey] = React.useState(null);
@@ -60,13 +60,19 @@ function SurveyComponent({setTitle}) {
 
     React.useEffect(() => {
       if (!userId || !surveyName) return;
-      
+
+      // Reset to the legacy fallback while loading another survey. An explicit
+      // empty string from the API still hides the instructions block.
+      setInstructions(undefined);
       const url = buildApiUrl('/questions', { surveyName, userId });
       sendRequest(url, (data) => { 
-        setJson(data.questions); 
-        setTitle(data.title); 
+        setJson(data.questions);
+        setTitle(data.title);
+        setInstructions(data && Object.prototype.hasOwnProperty.call(data, 'instructions')
+          ? (data.instructions ?? '')
+          : undefined);
       });
-    }, [surveyName, setTitle, userId]);
+    }, [surveyName, setInstructions, setTitle, userId]);
 
     React.useEffect(() => {
       if (!json) return;

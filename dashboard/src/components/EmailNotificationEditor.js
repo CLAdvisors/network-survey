@@ -1,334 +1,339 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box,
-  TextField,
-  Autocomplete,
-  Paper,
-  Typography,
-  Button,
   Alert,
-  Collapse,
-  IconButton,
-} from "@mui/material";
-import { useTheme } from "@mui/material/styles";
-import EditableTableWrapper from "./EditableTableWrapper";
-import UploadFileIcon from "@mui/icons-material/UploadFile";
-import CloseIcon from "@mui/icons-material/Close";
-import DownloadIcon from "@mui/icons-material/Download";
-import api from "../api/axios";
-import { LANGUAGES } from "@network-survey/frontend-shared";
-const HEADER = "Language,Text\n";
+  Autocomplete,
+  Box,
+  Button,
+  CircularProgress,
+  Paper,
+  TextField,
+  Typography,
+} from '@mui/material';
+import { useTheme } from '@mui/material/styles';
+import DownloadIcon from '@mui/icons-material/Download';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import Papa from 'papaparse';
+import api from '../api/axios';
+import { LANGUAGES } from '@network-survey/frontend-shared';
 
-const EmailNotificationEditor = ({ surveyId }) => {
+const EMPTY_MESSAGE = { subject: '', text: '' };
+const LEGACY_EMAIL_SUBJECT = 'CLA Network Survey';
+
+const languageFromInput = (value) => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return LANGUAGES.find(
+    (language) => language.label.toLowerCase() === normalized || language.code.toLowerCase() === normalized
+  ) || null;
+};
+
+const normalizedHeader = (key) => String(key).trim().toLowerCase().replace(/[ _-]+/g, '');
+
+const valueForHeader = (row, aliases) => {
+  const entry = Object.entries(row).find(([key]) => aliases.includes(normalizedHeader(key)));
+  return entry ? String(entry[1] ?? '') : '';
+};
+
+const hasHeader = (row, aliases) => Object.keys(row).some((key) => aliases.includes(normalizedHeader(key)));
+
+const EmailNotificationEditor = ({ surveyId, onDirtyChange, onBusyChange }) => {
   const theme = useTheme();
-  const [selectedLanguage, setSelectedLanguage] = useState(null);
-  const [notificationText, setNotificationText] = useState("");
-  const [originalText, setOriginalText] = useState("");
-  const [hasChanges, setHasChanges] = useState(false);
+  const uploadInputRef = useRef(null);
+  const surveyIdRef = useRef(surveyId);
+  const generationRef = useRef(0);
+  const requestControllerRef = useRef(null);
+  surveyIdRef.current = surveyId;
+  const [selectedLanguage, setSelectedLanguage] = useState(LANGUAGES[0]);
   const [notifications, setNotifications] = useState({});
-  const [alert, setAlert] = useState({
-    show: false,
-    type: "info",
-    message: "",
-  });
+  const [subjects, setSubjects] = useState({});
+  const [draft, setDraft] = useState(EMPTY_MESSAGE);
+  const [original, setOriginal] = useState(EMPTY_MESSAGE);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [alert, setAlert] = useState(null);
 
-  const handleCloseAlert = () => {
-    setAlert({ ...alert, show: false });
-  };
+  const dirty = draft.subject !== original.subject || draft.text !== original.text;
 
-  // Fetch notifications for the survey
   useEffect(() => {
-    const fetchNotifications = async () => {
-        try {
-          const response = await api.get(`/survey-notifications/${surveyId}`);
-          setNotifications(response.data.notifications);
-    
-        //   set available languages to all languages
-          const availableLanguages  = LANGUAGES.map((lang) => { return lang.label; });
-          if (Object.keys(response.data.notifications).length > 0) {
-            const firstLanguageCode = availableLanguages[0];
-            const firstLanguage = LANGUAGES.find(
-              (lang) => lang.label === firstLanguageCode
-            );
-    
-            if (firstLanguage) {
-              setSelectedLanguage(firstLanguage);
-              setNotificationText(response.data.notifications[firstLanguageCode].replace(/"/g, ''));
-              setOriginalText(response.data.notifications[firstLanguageCode]);
-            } else {
-              setSelectedLanguage(null);
-              setNotificationText("");
-              setOriginalText("");
-            }
-          } else {
-            setSelectedLanguage({ code: "en", label: "English" });
-            setNotificationText("");
-            setOriginalText("");
-          }
-        } catch (error) {
-          console.error("Failed to fetch notifications:", error);
-          setAlert({
-            show: true,
-            type: "error",
-            message: "Failed to load notifications",
-          });
-        }
-      };
-    if (surveyId) {
-      fetchNotifications();
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    onBusyChange?.(saving);
+    return () => onBusyChange?.(false);
+  }, [saving, onBusyChange]);
+
+  useEffect(() => {
+    const generation = ++generationRef.current;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
+    let active = true;
+    setSelectedLanguage(LANGUAGES[0]);
+    setNotifications({});
+    setSubjects({});
+    setSaving(false);
+    setDraft(EMPTY_MESSAGE);
+    setOriginal(EMPTY_MESSAGE);
+    setAlert(null);
+
+    if (!surveyId) {
+      setLoading(false);
+      return () => { active = false; };
     }
+
+    const isCurrent = () => active && generation === generationRef.current && surveyId === surveyIdRef.current;
+    const loadNotifications = async () => {
+      setLoading(true);
+      try {
+        const response = await api.get(`/survey-notifications/${surveyId}`);
+        if (!isCurrent()) return;
+        const nextNotifications = response.data?.notifications || {};
+        const nextSubjects = response.data?.subjects || {};
+        const language = LANGUAGES.find(
+          (candidate) => Object.prototype.hasOwnProperty.call(nextNotifications, candidate.label)
+            || Object.prototype.hasOwnProperty.call(nextSubjects, candidate.label)
+        ) || LANGUAGES[0];
+        const nextDraft = {
+          subject: nextSubjects[language.label] ?? '',
+          text: nextNotifications[language.label] ?? '',
+        };
+        setNotifications(nextNotifications);
+        setSubjects(nextSubjects);
+        setSelectedLanguage(language);
+        setDraft(nextDraft);
+        setOriginal(nextDraft);
+      } catch (error) {
+        if (isCurrent()) setAlert({ severity: 'error', message: 'Failed to load email notifications.' });
+      } finally {
+        if (isCurrent()) setLoading(false);
+      }
+    };
+
+    loadNotifications();
+    return () => {
+      active = false;
+      requestControllerRef.current?.abort();
+      requestControllerRef.current = null;
+    };
   }, [surveyId]);
 
-  // Update the notification text and original text when the selected language changes
-  useEffect(() => {
-    console.log(notifications)
-    if (selectedLanguage && notifications[selectedLanguage.label]) {
-      setNotificationText(notifications[selectedLanguage.label].replace(/"/g, '') || "");
-      setOriginalText(notifications[selectedLanguage.label] || "");
-    } else {
-        setNotificationText("");
-      setOriginalText("");
-    }
-  }, [selectedLanguage, notifications, surveyId]);
-
-  const handleLanguageChange = (event, newValue) => {
-    if (newValue) {
-      setSelectedLanguage(newValue);
-    }
-  };
-
-  const handleTextChange = (event) => {
-    const newText = event.target.value;
-    setNotificationText(newText);
-    setHasChanges(newText !== originalText);
+  const selectLanguage = (_, language) => {
+    if (!language || dirty) return;
+    const nextDraft = {
+      subject: subjects[language.label] ?? '',
+      text: notifications[language.label] ?? '',
+    };
+    setSelectedLanguage(language);
+    setDraft(nextDraft);
+    setOriginal(nextDraft);
+    setAlert(null);
   };
 
   const handleSave = async () => {
+    if (!surveyId || !selectedLanguage || !dirty) return;
+    const operationSurveyId = surveyId;
+    const generation = generationRef.current;
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const isCurrent = () => generation === generationRef.current && operationSurveyId === surveyIdRef.current;
+    setSaving(true);
+    setAlert(null);
     try {
-    const csvData = HEADER + LANGUAGES.map(lang => {
-        const text = lang.label === selectedLanguage.label ? `"${notificationText.replace(/"/g, '""')}"` : notifications[lang.label] ? `"${notifications[lang.label].replace(/"/g, '""')}"` : '""';
-        return `${lang.label},${text}`;
-    }).join('\n');
-
-    console.log(csvData);
-
-      await api.post(`/updateEmails`, {
-        surveyName: surveyId,
-        csvData: csvData,
-      });
-      
-      setNotifications((prevNotifications) => ({
-        ...prevNotifications,
-        [selectedLanguage.label]: notificationText,
-      }));
-
-      setOriginalText(notificationText);
-      setHasChanges(false);
-      setAlert({
-        show: true,
-        type: "success",
-        message: "Notification text saved successfully",
-      });
+      await api.post(`/survey-notifications/${operationSurveyId}`, {
+        language: selectedLanguage.label,
+        subject: draft.subject,
+        text: draft.text,
+      }, { signal: controller.signal });
+      if (!isCurrent()) return;
+      setNotifications((current) => ({ ...current, [selectedLanguage.label]: draft.text }));
+      setSubjects((current) => ({ ...current, [selectedLanguage.label]: draft.subject }));
+      setOriginal(draft);
+      setAlert({ severity: 'success', message: 'Email notification saved.' });
     } catch (error) {
-      console.error("Failed to save notification:", error);
-      setAlert({
-        show: true,
-        type: "error",
-        message: "Failed to save notification",
-      });
+      if (isCurrent() && !controller.signal.aborted) {
+        setAlert({ severity: 'error', message: 'Failed to save email notification.' });
+      }
+    } finally {
+      if (isCurrent()) {
+        requestControllerRef.current = null;
+        setSaving(false);
+      }
     }
   };
 
-  const handleFileUpload = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const csvData = e.target?.result;
-
-        const csvArray = csvData.split("\n");
-        // const header = csvArray.shift().split(",");
-
-        const newNotifications = csvArray.reduce((acc, row) => {
-          // Handle quotes and commas properly using regex
-          const matches = row.match(/(?:^|,)("(?:[^"]|"")*"|[^,]*)/g);
-          if (matches && matches.length >= 2) {
-            const langCode = matches[0].replace(/^,|"/g, '').trim();
-            const text = matches[1].replace(/^,|"/g, '').replace(/""/g, '"').trim();
-            acc[langCode] = text;
-          }
-          return acc;
-        }, {});
-
-        setNotifications(prevNotifications => ({
-            ...prevNotifications,
-            ...newNotifications
-        }));
-
-        // Update the selected language if it's not available in the new notifications
-        if (!newNotifications[selectedLanguage?.code]) {
-          const availableLanguages = Object.keys(newNotifications);
-          if (availableLanguages.length > 0) {
-            setSelectedLanguage(
-              LANGUAGES.find((lang) => lang.code === availableLanguages[0])
-            );
-          }
-        }
-
-        await api.post("/updateEmails", {
-          surveyName: surveyId,
-          csvData: csvData,
-        });
-
-        setAlert({
-          show: true,
-          type: "success",
-          message: "Notifications updated successfully from CSV",
-        });
-      } catch (error) {
-        console.error("Failed to process CSV:", error);
-        setAlert({
-          show: true,
-          type: "error",
-          message: "Failed to update notifications from CSV",
-        });
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = "";
+  const handleReset = () => {
+    setDraft(original);
+    setAlert(null);
   };
 
-  const handleDownloadTemplate = () => {
-    const csvContent = [
-      "language_code,notification_text",
-      ...LANGUAGES.map((lang) => `${lang.code},""`),
-    ].join("\n");
+  const downloadRows = useMemo(() => LANGUAGES.map((language) => ({
+    Language: language.label,
+    Subject: subjects[language.label] ?? LEGACY_EMAIL_SUBJECT,
+    Text: notifications[language.label] ?? '',
+  })), [notifications, subjects]);
 
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "notification_template.csv";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleDownload = () => {
+    const csv = Papa.unparse(downloadRows, { columns: ['Language', 'Subject', 'Text'] });
+    const url = window.URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'survey-notifications.csv';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
     window.URL.revokeObjectURL(url);
   };
 
-  return (
-    <Paper
-      elevation={2}
-      sx={{
-        p: 3,
-        bgcolor: theme.palette.background.paper,
-        borderRadius: 2,
-      }}
-    >
-      <Box sx={{ mb: 2 }}>
-        <Collapse in={alert.show}>
-          <Alert
-            severity={alert.type}
-            action={
-              <IconButton
-                aria-label="close"
-                color="inherit"
-                size="small"
-                onClick={handleCloseAlert}
-              >
-                <CloseIcon fontSize="inherit" />
-              </IconButton>
-            }
-            sx={{ mb: 2 }}
-          >
-            {alert.message}
-          </Alert>
-        </Collapse>
-      </Box>    
-      <Box
-        sx={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          mb: 3,
-          borderBottom: `2px solid ${theme.palette.primary.main}`,
-          pb: 1,
-        }}
-      >
-        
-        <Typography variant="h6" color="primary" sx={{ fontWeight: "bold" }}>
-          Survey Notification Text
-        </Typography>
+  const handleFileUpload = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || dirty || !surveyId) return;
 
-        <Box sx={{ display: "flex", gap: 2 }}>
-          <Button
-            variant="outlined"
-            startIcon={<DownloadIcon />}
-            onClick={handleDownloadTemplate}
-            size="small"
-          >
-            Template
+    const operationSurveyId = surveyId;
+    const generation = generationRef.current;
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const isCurrent = () => generation === generationRef.current && operationSurveyId === surveyIdRef.current;
+    const finish = () => {
+      if (!isCurrent()) return;
+      requestControllerRef.current = null;
+      setSaving(false);
+    };
+
+    setSaving(true);
+    setAlert(null);
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: 'greedy',
+      complete: async ({ data, errors, meta }) => {
+        try {
+          if (!isCurrent()) return;
+          if (errors.length) throw new Error(errors[0].message);
+          const normalizedFields = (meta?.fields || []).map(normalizedHeader);
+          const textAliases = ['text', 'notificationtext', 'emailtext', 'message'];
+          if (!normalizedFields.some((field) => textAliases.includes(field))) {
+            throw new Error('CSV must include a recognized Text or Message header.');
+          }
+
+          const rows = data.map((row, index) => {
+            const languageValue = valueForHeader(row, ['language', 'languagecode', 'lang']);
+            const language = languageFromInput(languageValue);
+            if (!language) throw new Error(`Unknown language on CSV row ${index + 2}: ${languageValue || '(blank)'}`);
+            const includesSubject = hasHeader(row, ['subject', 'emailsubject']);
+            return {
+              Language: language.label,
+              Subject: includesSubject
+                ? valueForHeader(row, ['subject', 'emailsubject'])
+                : (subjects[language.label] ?? LEGACY_EMAIL_SUBJECT),
+              Text: valueForHeader(row, textAliases),
+            };
+          });
+
+          if (!rows.length) throw new Error('No recognized notification rows were found.');
+
+          const csvData = Papa.unparse(rows, { columns: ['Language', 'Subject', 'Text'] });
+          await api.post('/updateEmails', { surveyName: operationSurveyId, csvData }, { signal: controller.signal });
+          if (!isCurrent()) return;
+
+          const importedNotifications = {};
+          const importedSubjects = {};
+          rows.forEach((row) => {
+            importedNotifications[row.Language] = row.Text;
+            importedSubjects[row.Language] = row.Subject;
+          });
+          const nextNotifications = { ...notifications, ...importedNotifications };
+          const nextSubjects = { ...subjects, ...importedSubjects };
+          const nextLanguage = languageFromInput(rows[0].Language) || LANGUAGES[0];
+          const nextDraft = {
+            subject: nextSubjects[nextLanguage.label] ?? '',
+            text: nextNotifications[nextLanguage.label] ?? '',
+          };
+          setNotifications(nextNotifications);
+          setSubjects(nextSubjects);
+          setSelectedLanguage(nextLanguage);
+          setDraft(nextDraft);
+          setOriginal(nextDraft);
+          setAlert({ severity: 'success', message: 'Email notifications imported.' });
+        } catch (error) {
+          if (isCurrent() && !controller.signal.aborted) {
+            setAlert({ severity: 'error', message: error.message || 'Failed to import email notifications.' });
+          }
+        } finally {
+          finish();
+        }
+      },
+      error: (error) => {
+        if (isCurrent() && !controller.signal.aborted) {
+          setAlert({ severity: 'error', message: error.message || 'Failed to read the CSV file.' });
+        }
+        finish();
+      },
+    });
+  };
+
+  return (
+    <Paper elevation={2} sx={{ p: 3, bgcolor: theme.palette.background.paper, borderRadius: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+        <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold' }}>
+          Survey Email Notification
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownload} disabled={loading}>
+            Download CSV
           </Button>
           <Button
             variant="contained"
-            component="label"
             startIcon={<UploadFileIcon />}
-            size="small"
+            onClick={() => uploadInputRef.current?.click()}
+            disabled={loading || saving || dirty || !surveyId}
+            title={dirty ? 'Save or reset the current changes before importing.' : undefined}
           >
-            Upload
-            <input
-              type="file"
-              hidden
-              accept=".csv"
-              onChange={handleFileUpload}
-            />
+            Upload CSV
           </Button>
+          <input ref={uploadInputRef} type="file" hidden accept=".csv,text/csv" onChange={handleFileUpload} />
         </Box>
       </Box>
 
-      <EditableTableWrapper
-        onSave={handleSave}
-        hasChanges={hasChanges}
-        setHasChanges={setHasChanges}
-      >
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          <Autocomplete
-            value={selectedLanguage || null}
-            onChange={handleLanguageChange}
-            options={LANGUAGES}
-            getOptionLabel={(option) => option?.label || ""}
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                label="Select Language"
-                variant="outlined"
-              />
-            )}
-            sx={{ width: "100%", maxWidth: 300 }}
-          />
+      {alert && <Alert severity={alert.severity} onClose={() => setAlert(null)} sx={{ mb: 2 }}>{alert.message}</Alert>}
 
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+      ) : (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Autocomplete
+            value={selectedLanguage}
+            onChange={selectLanguage}
+            options={LANGUAGES}
+            getOptionLabel={(option) => option?.label || ''}
+            isOptionEqualToValue={(option, value) => option.code === value?.code}
+            disabled={dirty || saving}
+            renderInput={(params) => <TextField {...params} label="Language" helperText={dirty ? 'Save or reset changes before switching languages.' : ' '} />}
+            sx={{ maxWidth: 320 }}
+          />
+          <TextField
+            fullWidth
+            label="Email subject"
+            value={draft.subject}
+            onChange={(event) => setDraft((current) => ({ ...current, subject: event.target.value }))}
+            disabled={!surveyId || saving}
+          />
           <TextField
             fullWidth
             multiline
-            rows={8}
-            label="Notification Text"
-            value={notificationText}
-            onChange={handleTextChange}
-            variant="outlined"
-            placeholder={
-              selectedLanguage
-                ? `Enter notification text for ${selectedLanguage.label}...`
-                : "Select a language"
-            }
-            sx={{
-              "& .MuiOutlinedInput-root": {
-                backgroundColor: theme.palette.background.default,
-              },
-            }}
+            minRows={8}
+            label="Notification text"
+            value={draft.text}
+            onChange={(event) => setDraft((current) => ({ ...current, text: event.target.value }))}
+            disabled={!surveyId || saving}
           />
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+            <Button onClick={handleReset} disabled={!dirty || saving}>Reset</Button>
+            <Button variant="contained" onClick={handleSave} disabled={!dirty || saving}>
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </Box>
         </Box>
-      </EditableTableWrapper>
+      )}
     </Paper>
   );
 };

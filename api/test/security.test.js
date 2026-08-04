@@ -30,6 +30,14 @@ const {
   EDITOR_ROLES,
   ADMIN_ROLES,
   hashToken,
+  parseEmailCsv,
+  validateNotification,
+  insertEmails,
+  normalizeLanguage,
+  buildNotificationMaps,
+  sendTestMail,
+  startSurvey,
+  emailQueue,
   parseRequiredCsvValue,
   csvToJson,
   SUPPORTED_QUESTION_TYPES,
@@ -1327,6 +1335,161 @@ test('/api/user returns a client error for malformed or non-object answers', asy
   assert.equal(schemaQueries, 0, 'invalid answer envelopes must fail before loading the schema');
 });
 
+test('editable survey content migration is additive, included, and backfills exact legacy defaults', () => {
+  const changelog = fs.readFileSync(path.join(__dirname, '../../db/changelogs/master-changelog.xml'), 'utf8');
+  const migration = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_5_editable_survey_content.sql'), 'utf8');
+  const instructions = 'For each question below, indicate the people you interact with at work. The survey will take 10-15 minutes to complete; please plan to finish in one session.';
+
+  assert.match(changelog, /v1_5_editable_survey_content\.sql/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS instructions TEXT/);
+  assert.equal((migration.match(new RegExp(instructions.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 2);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS subject VARCHAR\(255\)/);
+  assert.match(migration, /DEFAULT 'CLA Network Survey'/);
+  assert.match(migration, /UPDATE EMAIL[\s\S]*SET subject = 'CLA Network Survey'[\s\S]*WHERE subject IS NULL/i);
+  assert.doesNotMatch(migration, /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b/i);
+});
+
+test('email CSV parser supports legacy and subject formats without changing punctuation', () => {
+  const legacy = parseEmailCsv('Language,Text\nEnglish,"Hello, team — don\'t strip punctuation!"', 'Survey A');
+  assert.deepEqual(legacy, [{ surveyName: 'Survey A', language: 'English', text: "Hello, team — don't strip punctuation!" }]);
+
+  const oldExport = parseEmailCsv('language_code,notification_text\nen,"Exact old export"', 'Survey A');
+  assert.deepEqual(oldExport, [{ surveyName: 'Survey A', language: 'English', text: 'Exact old export' }]);
+
+  const current = parseEmailCsv('Language,Subject,Text\nFrench,"Objet : réseau!","Bonjour, équipe!"', 'Survey A');
+  assert.deepEqual(current, [{
+    surveyName: 'Survey A',
+    language: 'French',
+    subject: 'Objet : réseau!',
+    text: 'Bonjour, équipe!',
+  }]);
+});
+
+test('email CSV parser normalizes header aliases and rejects missing language or text headers', () => {
+  assert.deepEqual(
+    parseEmailCsv(' Language-Code , Email Subject , E-mail Text \nes,Asunto,Mensaje', 'Survey A'),
+    [{ surveyName: 'Survey A', language: 'Spanish', subject: 'Asunto', text: 'Mensaje' }]
+  );
+  assert.throws(() => parseEmailCsv('subject,text\nHello,Body', 'Survey A'), /Language and Text headers/);
+  assert.throws(() => parseEmailCsv('language,subject\nen,Hello', 'Survey A'), /Language and Text headers/);
+});
+
+test('legacy language codes and wrapped labels normalize to shared canonical labels', () => {
+  assert.equal(normalizeLanguage('en'), 'English');
+  assert.equal(normalizeLanguage(' "Spanish" '), 'Spanish');
+  assert.equal(normalizeLanguage("'French'"), 'French');
+  assert.equal(normalizeLanguage('KLINGON'), null);
+
+  assert.deepEqual(buildNotificationMaps([
+    { lang: "'en'", subject: null, text: 'Legacy hello' },
+    { lang: 'English', subject: null, text: 'Hello' },
+    { lang: '"en"', subject: null, text: 'Older duplicate' },
+    { lang: '"Spanish"', subject: 'Hola subject', text: 'Hola' },
+  ]), {
+    notifications: { English: 'Hello', Spanish: 'Hola' },
+    subjects: { English: 'CLA Network Survey', Spanish: 'Hola subject' },
+    templates: {
+      English: { subject: 'CLA Network Survey', text: 'Hello' },
+      Spanish: { subject: 'Hola subject', text: 'Hola' },
+    },
+  });
+
+  const parsed = parseEmailCsv('Language,Text\nen,Hello\n"\'Spanish\'",Hola', 'Survey A');
+  assert.deepEqual(parsed.map(({ language }) => language), ['English', 'Spanish']);
+});
+
+test('sendTestMail selects current localized subjects and bodies for legacy respondent and EMAIL languages', async (t) => {
+  const originalConnect = pool.connect;
+  const sent = [];
+  let released = 0;
+  t.after(() => { pool.connect = originalConnect; });
+
+  const templateRows = [
+    { lang: '"en"', text: 'Stale English body', subject: 'Stale English subject' },
+    { lang: 'English', text: "Current English body — don't alter", subject: 'Current English subject' },
+    { lang: "'Spanish'", text: 'Cuerpo actual', subject: 'Asunto actual' },
+  ];
+  pool.connect = async () => ({
+    async query(sql, values) {
+      if (/FROM email/i.test(sql)) {
+        assert.doesNotMatch(sql, /lang\s*=\s*\$3/i);
+        assert.deepEqual(values, ['survey-id', 'Survey A']);
+        return { rows: templateRows };
+      }
+      assert.match(sql, /FROM Respondent/i);
+      return { rows: [{ uuid: 'respondent-token' }] };
+    },
+    release() { released += 1; },
+  });
+  const mailer = async (...args) => { sent.push(args); };
+
+  await sendTestMail('english@example.com', { id: 'survey-id', name: 'Survey A' }, 'en', mailer);
+  await sendTestMail('spanish@example.com', { id: 'survey-id', name: 'Survey A' }, '"Spanish"', mailer);
+
+  assert.deepEqual(sent, [
+    ['english@example.com', 'respondent-token', 'Survey A', "Current English body — don't alter", 'Current English subject'],
+    ['spanish@example.com', 'respondent-token', 'Survey A', 'Cuerpo actual', 'Asunto actual'],
+  ]);
+  assert.equal(released, 2);
+});
+
+test('startSurvey releases its client and prevalidates every canonicalized template before enqueueing', async (t) => {
+  const originalConnect = pool.connect;
+  const initialQueueLength = emailQueue.length;
+  let released = false;
+  t.after(() => {
+    pool.connect = originalConnect;
+    emailQueue.splice(initialQueueLength);
+  });
+  pool.connect = async () => ({
+    async query(sql) {
+      if (/FROM Respondent/i.test(sql)) {
+        return { rows: [
+          { contact_info: 'one@example.com', uuid: 'one', lang: 'en' },
+          { contact_info: 'two@example.com', uuid: 'two', lang: "'Spanish'" },
+        ] };
+      }
+      return { rows: [{ lang: '"English"', text: 'Hello', subject: 'Subject' }] };
+    },
+    release() { released = true; },
+  });
+
+  await assert.rejects(startSurvey({ id: 'survey-id', name: 'Survey A' }), /Spanish/);
+  assert.equal(released, true);
+  assert.equal(emailQueue.length, initialQueueLength, 'no recipient is queued when any template is missing');
+});
+
+test('notification validation enforces language, safe nonblank subjects, and text bounds', () => {
+  assert.equal(validateNotification({ language: 'English', subject: 'A subject!', text: '' }), null);
+  assert.match(validateNotification({ language: 'Klingon', subject: 'Subject', text: 'Text' }), /known language/);
+  assert.match(validateNotification({ language: 'English', subject: '   ', text: 'Text' }), /required/);
+  assert.match(validateNotification({ language: 'English', subject: 'Header\r\nBcc: bad', text: 'Text' }), /line breaks|control/);
+  assert.match(validateNotification({ language: 'English', subject: 'x'.repeat(256), text: 'Text' }), /255/);
+  assert.match(validateNotification({ language: 'English', subject: 'Subject', text: 'x'.repeat(10001) }), /10000/);
+});
+
+test('legacy email upserts preserve subjects and release clients while propagating failures', async (t) => {
+  const originalConnect = pool.connect;
+  t.after(() => { pool.connect = originalConnect; });
+  const calls = [];
+  let released = false;
+  pool.connect = async () => ({
+    async query(sql, values) {
+      calls.push({ sql, values });
+      if (/INSERT INTO email/i.test(sql)) throw new Error('write failed');
+      return { rows: [] };
+    },
+    release() { released = true; },
+  });
+
+  await assert.rejects(insertEmails([{ surveyName: 'Survey A', language: 'English', text: "Don't alter me!" }]), /write failed/);
+  const insert = calls.find((call) => /INSERT INTO email/i.test(call.sql));
+  assert.doesNotMatch(insert.sql, /subject/i);
+  assert.equal(insert.values[3], "Don't alter me!");
+  assert.equal(calls.some((call) => call.sql === 'ROLLBACK'), true);
+  assert.equal(released, true);
+});
+
 test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL', (t) => {
   const originalDashboardUrl = process.env.DASHBOARD_URL;
   const originalFrontendUrl = process.env.FRONTEND_URL;
@@ -1357,6 +1520,9 @@ test('dashboard/admin endpoints require authentication', async () => {
     ['post', '/api/updateTargets', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],
     ['post', '/api/updateQuestions', { surveyName: 'S', questions: { elements: [] } }],
     ['get', '/api/survey-notifications/S'],
+    ['post', '/api/survey-notifications/S', { language: 'English', subject: 'Subject', text: 'Text' }],
+    ['get', '/api/survey-content/S'],
+    ['put', '/api/survey-content/S', { instructions: '' }],
     ['get', '/api/admin/names?surveyName=S'],
     ['get', '/api/admin/questions?surveyName=S'],
     ['get', '/api/listQuestions?surveyName=S'],
@@ -1784,7 +1950,7 @@ test('/api/testEmail rejects arbitrary recipients instead of falling back to ano
   pool.connect = async () => ({
     query: async (sql, values) => {
       sendTestQueries.push({ sql, values });
-      if (/SELECT text FROM email/.test(sql)) return { rows: [{ text: 'Hello {{link}}' }] };
+      if (/SELECT lang, text, subject FROM email/.test(sql)) return { rows: [{ lang: 'English', text: 'Hello {{link}}', subject: 'Localized subject' }] };
       if (/SELECT uuid FROM Respondent/.test(sql)) {
         assert.match(sql, /lower\(contact_info\) = lower\(\$3\)/);
         assert.deepEqual(values, ['11111111-1111-4111-8111-111111111111', 'Survey A', 'attacker@example.com']);
@@ -2054,6 +2220,38 @@ test('respondent routes reject archived survey tokens without dashboard session'
     .query({ surveyName: 'Archived Survey', userId: 'archived-token' });
   assert.equal(namesRes.status, 403);
   assert.equal(calls.length, 4);
+});
+
+test('/api/questions returns instructions only after respondent token validation', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  pool.query = async (sql, values) => {
+    assert.match(sql, /JOIN Survey s/);
+    assert.deepEqual(values, ['valid-token', 'Survey A']);
+    return { rows: [{ respondent_id: 1, can_respond: true, survey_id: 'survey-a-id', response: null }] };
+  };
+  let released = false;
+  pool.connect = async () => ({
+    async query(sql, values) {
+      assert.match(sql, /SELECT questions, title, instructions/);
+      assert.deepEqual(values, ['Survey A']);
+      return { rows: [{ title: 'Survey', questions: { elements: [] }, instructions: 'Read this first.' }] };
+    },
+    release() { released = true; },
+  });
+
+  const res = await request(app)
+    .get('/api/questions')
+    .query({ surveyName: 'Survey A', userId: 'valid-token' });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.instructions, 'Read this first.');
+  assert.equal(released, true);
 });
 
 test('/api/questions rejects demo token for arbitrary survey definitions', async (t) => {

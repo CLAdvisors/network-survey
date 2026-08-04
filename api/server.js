@@ -105,20 +105,20 @@ async function sendAccountEmail({ to, subject, html, text }) {
   }
 }
 
-async function sendMail(email, id, surveyName, text) {
+async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {
   try {
     if (!resend) {
       throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
     }
 
-    text = "<p>" + text.replace(/"/g, '') + "</p>";
+    text = "<p>" + text + "</p>";
     text = text.replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
     let customLink = `${process.env.SURVEY_URL}/?surveyName=${surveyName}&userId=${id}`;
 
     const emailData = {
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
-      subject: 'CLA Network Survey',
+      subject: subject || 'CLA Network Survey',
       html: EMAIL_HTML[0] + text + EMAIL_HTML[1] + customLink + EMAIL_HTML[2],
       surveyName
     };
@@ -138,14 +138,14 @@ let isProcessing = false;
 const RATE_LIMIT = 10; // emails per second
 const DELAY = 1000; // 1 second delay between batches
 
-async function rateLimitedSend(emailData) {
-  // Add email to queue
+function rateLimitedSend(emailData) {
   emailQueue.push(emailData);
-  
-  // Start processing if not already running
+
   if (!isProcessing) {
     isProcessing = true;
-    await processEmailQueue();
+    void processEmailQueue().catch((error) => {
+      console.error('Unexpected email queue processing failure:', error);
+    });
   }
 }
 
@@ -198,19 +198,21 @@ async function processEmailQueue() {
 }
 
 // User test email function (allow admin user to send test email to themselves)
-async function sendTestMail(email, survey, lang) {
+async function sendTestMail(email, survey, lang, mailer = sendMail) {
   const client = await pool.connect();
   try {
-    const query = `SELECT text FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
-    const values = [survey.id, survey.name, lang];
-    const response = await client.query(query, values);
-    
-    if (!response.rows || response.rows.length === 0) {
+    const response = await client.query(
+      `SELECT lang, text, subject FROM email WHERE ${legacySurveyPredicate()}`,
+      [survey.id, survey.name]
+    );
+    const language = normalizeLanguage(lang);
+    const template = language ? buildNotificationMaps(response.rows).templates[language] : null;
+
+    if (!template) {
       throw new Error(`Email template not found for survey '${survey.name}' in language '${lang}'`);
     }
 
-    const text = response.rows[0].text;
-    if (text === undefined || text === null) {
+    if (template.text === undefined || template.text === null) {
       throw new Error(`Email text is undefined for survey '${survey.name}'`);
     }
 
@@ -231,50 +233,45 @@ async function sendTestMail(email, survey, lang) {
       throw error;
     }
 
-    await sendMail(email, respondentToken, survey.name, text);
+    await mailer(email, respondentToken, survey.name, template.text, template.subject);
   } finally {
     client.release();
   }
 }
 
-async function startSurvey(survey){
-  // Pull all users from the database
+async function startSurvey(survey) {
   const client = await pool.connect();
-  const query = `SELECT name, contact_info, uuid, lang FROM Respondent WHERE ${legacySurveyPredicate()} AND can_respond = true`;
-  const values = [survey.id, survey.name];
-  let respondents = [];
-  let emails = [];
-  await client.query(query, values)
-    .then(response => {
-        respondents = response.rows.map(row => ({
-            userName: row.name,
-            email: row.contact_info,
-            userId: row.uuid,
-            language: row.lang
-        }));
-    });
-
-  // Pull the email text from the database for each language
-  const emailQuery = `SELECT lang, text FROM email WHERE ${legacySurveyPredicate()}`;
-  const emailValues = [survey.id, survey.name];
-  await client.query(emailQuery, emailValues)
-    .then(response => {
-        emails = response.rows.map(row => ({
-            language: row.lang,
-            text: row.text
-        }));
-    });
-    // Create a map from language to email text
-    const emailMap = emails.reduce((map, email) => {
-      map[email.language.replace(/"/g, "").replace(/'/g, "")] = '<p>' + email.text + '</p>';
-      return map;
-    }, {});
-    
-    // Send the emails
-    respondents.forEach(respondent => {
-      sendMail(respondent.email, respondent.userId, survey.name, emailMap[respondent.language].replace(/"/g, "").replace(/'/g, ""));
-    });
+  let respondents;
+  let templates;
+  try {
+    const respondentResult = await client.query(
+      `SELECT name, contact_info, uuid, lang FROM Respondent WHERE ${legacySurveyPredicate()} AND can_respond = true`,
+      [survey.id, survey.name]
+    );
+    const emailResult = await client.query(
+      `SELECT lang, text, subject FROM email WHERE ${legacySurveyPredicate()}`,
+      [survey.id, survey.name]
+    );
+    respondents = respondentResult.rows;
+    templates = emailResult.rows;
+  } finally {
+    client.release();
   }
+
+  const emailMap = buildNotificationMaps(templates).templates;
+  const pendingEmails = respondents.map((respondent) => {
+    const language = normalizeLanguage(respondent.lang);
+    const template = language ? emailMap[language] : null;
+    if (!template) {
+      throw new Error(`Email template not found for language '${respondent.lang}'`);
+    }
+    return { respondent, template };
+  });
+
+  await Promise.all(pendingEmails.map(({ respondent, template }) =>
+    sendMail(respondent.contact_info, respondent.uuid, survey.name, template.text, template.subject)
+  ));
+}
 // sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query
@@ -378,7 +375,96 @@ const EDITOR_ROLES = ['owner', 'admin', 'editor'];
 const ADMIN_ROLES = ['owner', 'admin'];
 const ORG_ROLES = ['owner', 'admin', 'editor', 'analyst', 'viewer'];
 const USER_STATUSES = ['invited', 'active', 'disabled'];
+// Keep this definition aligned with frontend-shared/src/constants.js LANGUAGES.
+const LANGUAGE_DEFINITIONS = [
+  ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'],
+  ['it', 'Italian'], ['pt', 'Portuguese'], ['nl', 'Dutch'], ['pl', 'Polish'],
+  ['ru', 'Russian'], ['ja', 'Japanese'], ['zh', 'Chinese'], ['ko', 'Korean'],
+];
+const LANGUAGE_LABELS = new Set(LANGUAGE_DEFINITIONS.map(([, label]) => label));
+const LANGUAGE_LOOKUP = new Map(LANGUAGE_DEFINITIONS.flatMap(([code, label]) => [
+  [code.toLowerCase(), label],
+  [label.toLowerCase(), label],
+]));
+const LEGACY_EMAIL_SUBJECT = 'CLA Network Survey';
+const MAX_NOTIFICATION_TEXT_LENGTH = 10000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeLanguage(value) {
+  if (typeof value !== 'string') return null;
+  const unwrapped = value.trim().replace(/^["']+|["']+$/g, '').trim().toLowerCase();
+  return LANGUAGE_LOOKUP.get(unwrapped) || null;
+}
+
+function buildNotificationMaps(rows = []) {
+  const notifications = {};
+  const subjects = {};
+  const templates = {};
+  const priorities = {};
+  for (const row of rows) {
+    const language = normalizeLanguage(row.lang);
+    if (!language) continue;
+    // Prefer a canonical-label row written by the current application over a
+    // duplicate legacy code/wrapped row, regardless of database row order.
+    const priority = row.lang.trim() === language ? 2 : 1;
+    if ((priorities[language] || 0) > priority) continue;
+    const subject = row.subject || LEGACY_EMAIL_SUBJECT;
+    priorities[language] = priority;
+    notifications[language] = row.text;
+    subjects[language] = subject;
+    templates[language] = { text: row.text, subject };
+  }
+  return { notifications, subjects, templates };
+}
+
+function validateNotification({ language, subject, text } = {}) {
+  if (!normalizeLanguage(language)) return 'Language must be a known language label.';
+  if (typeof subject !== 'string' || !subject.trim()) return 'Subject is required.';
+  if (subject.length > 255) return 'Subject must be at most 255 characters.';
+  if (/[\p{Cc}\p{Cf}]/u.test(subject)) return 'Subject cannot contain line breaks or control characters.';
+  if (typeof text !== 'string') return 'Text must be a string.';
+  if (text.length > MAX_NOTIFICATION_TEXT_LENGTH) return `Text must be at most ${MAX_NOTIFICATION_TEXT_LENGTH} characters.`;
+  return null;
+}
+
+function parseEmailCsv(csvData, surveyName) {
+  if (typeof csvData !== 'string') throw new Error('CSV data must be a string.');
+  const normalizeHeader = (header) => String(header)
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[ _-]+/g, '');
+  const parsed = Papa.parse(csvData, {
+    header: true,
+    skipEmptyLines: 'greedy',
+    transformHeader: normalizeHeader,
+  });
+  if (parsed.errors.length) throw new Error(`Invalid CSV: ${parsed.errors[0].message}`);
+
+  const fields = parsed.meta.fields || [];
+  const findField = (aliases) => fields.find((field) => aliases.includes(field));
+  const languageField = findField(['language', 'languagecode', 'lang']);
+  const textField = findField(['text', 'notificationtext', 'emailtext', 'message']);
+  const subjectField = findField(['subject', 'emailsubject']);
+  if (!languageField || !textField) {
+    throw new Error('CSV must include recognized Language and Text headers.');
+  }
+
+  return parsed.data.map((row, index) => {
+    const language = normalizeLanguage(row[languageField]);
+    const text = row[textField];
+    if (!language || typeof text !== 'string') throw new Error(`Invalid email template on row ${index + 2}.`);
+    if (text.length > MAX_NOTIFICATION_TEXT_LENGTH) throw new Error(`Row ${index + 2}: Text must be at most ${MAX_NOTIFICATION_TEXT_LENGTH} characters.`);
+    const item = { surveyName, language, text };
+    if (subjectField) {
+      const subject = row[subjectField];
+      const validationError = validateNotification({ language, subject, text });
+      if (validationError) throw new Error(`Row ${index + 2}: ${validationError}`);
+      item.subject = subject;
+    }
+    return item;
+  });
+}
 
 function hasAnyRole(role, allowedRoles) {
   return Boolean(role && allowedRoles.includes(role));
@@ -1109,7 +1195,7 @@ async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRol
   }
 
   const result = await pool.query(
-    `SELECT s.id, s.name, s.title, s.creation_date, s.questions,
+    `SELECT s.id, s.name, s.title, s.creation_date, s.questions, s.instructions,
             s.organization_id, s.created_by_user_id, om.role
      FROM Survey s
      LEFT JOIN organization_memberships om
@@ -1180,8 +1266,9 @@ async function insertUsers(users, deleteRow = null, survey = null) {
         survey?.name || user.surveyName,
         survey?.id || user.surveyId || null,
         user.canRespond !== undefined ? user.canRespond : true, // Default to true if not specified
-        user.language || 'English' // Default to English if not specified
+        normalizeLanguage(user.language || 'English')
       ];
+      if (!values[6]) throw new Error(`Unknown respondent language '${user.language}'.`);
       
       await client.query(query, values);
     }
@@ -1196,38 +1283,35 @@ async function insertUsers(users, deleteRow = null, survey = null) {
   }
 }
 async function insertEmails(data, survey = null) {
-  // Start a PostgreSQL client from the pool
   const client = await pool.connect();
-  console.log(data);
   try {
-    // Begin a transaction
     await client.query('BEGIN');
-
-    // Iterate through the emails and insert or update them
     for (const email of data) {
-      const query = `
-        INSERT INTO email (survey_name, survey_id, lang, text)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (survey_name, lang) DO UPDATE
-        SET text = EXCLUDED.text,
-            survey_id = EXCLUDED.survey_id
-      `;
-      const values = [survey?.name || email.surveyName, survey?.id || email.surveyId || null, email.language, email.text.replace(/"/g, "").replace(/'/g, "")];
-      await client.query(query, values);
+      const surveyName = survey?.name || email.surveyName;
+      const surveyId = survey?.id || email.surveyId || null;
+      const language = normalizeLanguage(email.language);
+      if (!language) throw new Error(`Unknown email template language '${email.language}'.`);
+      if (email.subject === undefined) {
+        await client.query(`
+          INSERT INTO email (survey_name, survey_id, lang, text)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (survey_name, lang) DO UPDATE
+          SET text = EXCLUDED.text, survey_id = EXCLUDED.survey_id
+        `, [surveyName, surveyId, language, email.text]);
+      } else {
+        await client.query(`
+          INSERT INTO email (survey_name, survey_id, lang, subject, text)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (survey_name, lang) DO UPDATE
+          SET subject = EXCLUDED.subject, text = EXCLUDED.text, survey_id = EXCLUDED.survey_id
+        `, [surveyName, surveyId, language, email.subject, email.text]);
+      }
     }
-
-    // Commit the transaction
     await client.query('COMMIT');
-
-    // Release the client back to the pool
-    client.release();
-
-    console.log('Email data inserted or updated successfully!');
   } catch (error) {
-    // If an error occurs, rollback the transaction
-    console.log(error);
-    await client.query('ROLLBACK');
-    console.error('Error inserting or updating emails:', error);
+    try { await client.query('ROLLBACK'); } catch (rollbackError) { console.error('Email rollback failed:', rollbackError); }
+    throw error;
+  } finally {
     client.release();
   }
 }
@@ -1965,19 +2049,12 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     return;
   }
 
-  let csvArray = csvData.split('\n');
-  const header = csvArray.shift().split(',');
-
-  csvArray = csvArray.map((row, index) => {
-    const columns = row.split(',');
-    // combine all strings after index 0
-    columns[1] = columns.slice(1).join(',');
-    return {
-      surveyName: surveyName,
-      language: columns[0].replace(/(\r\n|\n|\r)/gm, ""),
-      text: columns[1].replace(/(\r\n|\n|\r)/gm, "")
-    }
-  });
+  let csvArray;
+  try {
+    csvArray = parseEmailCsv(csvData, surveyName);
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
 
   try {
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
@@ -1987,7 +2064,7 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Error updating email templates:', error);
     res.status(500).json({ message: 'Failed to update email data.' });
-  } 
+  }
 });
 // Modify the POST /api/updateTarget endpoint to handle the new fields
 app.post('/api/updateTarget', requireAuth, async (req, res) => {
@@ -2072,6 +2149,43 @@ app.post('/api/updateTarget', requireAuth, async (req, res) => {
     });
   }
 });
+app.get('/api/survey-content/:surveyId', requireAuth, async (req, res) => {
+  const surveyId = req.params.surveyId;
+  try {
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: UUID_RE.test(surveyId) ? null : surveyId,
+      surveyId: UUID_RE.test(surveyId) ? surveyId : null,
+      allowedRoles: READ_SURVEY_ROLES,
+    });
+    if (!survey) return;
+    res.json({ instructions: survey.instructions });
+  } catch (error) {
+    console.error('Error retrieving survey content:', error);
+    res.status(500).json({ message: 'Failed to retrieve survey content.' });
+  }
+});
+
+app.put('/api/survey-content/:surveyId', express.json(), requireAuth, async (req, res) => {
+  const { instructions } = req.body || {};
+  if (typeof instructions !== 'string') return res.status(400).json({ message: 'Instructions must be a string.' });
+  if (instructions.length > 10000) return res.status(400).json({ message: 'Instructions must be at most 10000 characters.' });
+
+  try {
+    const surveyId = req.params.surveyId;
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: UUID_RE.test(surveyId) ? null : surveyId,
+      surveyId: UUID_RE.test(surveyId) ? surveyId : null,
+      allowedRoles: EDITOR_ROLES,
+    });
+    if (!survey) return;
+    const result = await pool.query('UPDATE Survey SET instructions = $1 WHERE id = $2 RETURNING instructions', [instructions, survey.id]);
+    res.json({ instructions: result.rows[0].instructions });
+  } catch (error) {
+    console.error('Error updating survey content:', error);
+    res.status(500).json({ message: 'Failed to update survey content.' });
+  }
+});
+
 // GET API endpoint for retrieving email texts and available languages
 app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => {
   const surveyId = req.params.surveyId;
@@ -2086,24 +2200,48 @@ app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => 
     const survey = await resolveSurveyForUser(req, res, { surveyName: surveyId, surveyId: UUID_RE.test(surveyId) ? surveyId : null, allowedRoles: ANALYST_ROLES });
     if (!survey) return;
     const query = `
-      SELECT lang, text
+      SELECT lang, text, subject
       FROM EMAIL
       WHERE ${legacySurveyPredicate()}
     `;
 
     const result = await client.query(query, [survey.id, survey.name]);
 
-    const notifications = result.rows.reduce((acc, row) => {
-      acc[row.lang] = row.text;
-      return acc;
-    }, {});
-
-    res.status(200).json({ notifications });
+    const { notifications, subjects } = buildNotificationMaps(result.rows);
+    res.status(200).json({ notifications, subjects });
   } catch (error) {
     console.error('Error retrieving email texts:', error);
     res.status(500).json({ message: 'Failed to retrieve email texts.' });
   } finally {
     client.release();
+  }
+});
+
+app.post('/api/survey-notifications/:surveyId', express.json(), requireAuth, async (req, res) => {
+  const validationError = validateNotification(req.body);
+  if (validationError) return res.status(400).json({ message: validationError });
+
+  try {
+    const surveyId = req.params.surveyId;
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName: UUID_RE.test(surveyId) ? null : surveyId,
+      surveyId: UUID_RE.test(surveyId) ? surveyId : null,
+      allowedRoles: EDITOR_ROLES,
+    });
+    if (!survey) return;
+    const { language, subject, text } = req.body;
+    const canonicalLanguage = normalizeLanguage(language);
+    const result = await pool.query(`
+      INSERT INTO EMAIL (survey_name, survey_id, lang, subject, text)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (survey_name, lang) DO UPDATE
+      SET survey_id = EXCLUDED.survey_id, subject = EXCLUDED.subject, text = EXCLUDED.text
+      RETURNING lang, subject, text
+    `, [survey.name, survey.id, canonicalLanguage, subject, text]);
+    res.json({ language: result.rows[0].lang, subject: result.rows[0].subject, text: result.rows[0].text });
+  } catch (error) {
+    console.error('Error updating survey notification:', error);
+    res.status(500).json({ message: 'Failed to update survey notification.' });
   }
 });
 
@@ -2614,7 +2752,7 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
 
   try {
     const query = `
-      SELECT questions, title
+      SELECT questions, title, instructions
       FROM Survey
       WHERE name = $1;
     `;
@@ -2624,7 +2762,7 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
       return res.status(404).json({ message: 'Survey not found.' });
     }
 
-    const jsonData = { title: result.rows[0].title, questions: result.rows[0].questions };
+    const jsonData = { title: result.rows[0].title, questions: result.rows[0].questions, instructions: result.rows[0].instructions };
     res.status(200).json(jsonData);
   } catch (error) {
     console.error('Error fetching survey questions:', error);
@@ -3011,4 +3149,15 @@ module.exports = {
   validateRequiredAnswers,
   normalizeQuestionNames,
   formatRespondentChoice,
+  LANGUAGE_LABELS,
+  normalizeLanguage,
+  buildNotificationMaps,
+  sendTestMail,
+  startSurvey,
+  emailQueue,
+  LEGACY_EMAIL_SUBJECT,
+  MAX_NOTIFICATION_TEXT_LENGTH,
+  validateNotification,
+  parseEmailCsv,
+  insertEmails,
 };

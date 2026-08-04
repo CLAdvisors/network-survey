@@ -8,6 +8,7 @@ import api from "../api/axios";
 import QuestionTable from "./QuestionTable";
 import CreateSurveyDialog from "./CreateSurveyDialog";
 import EmailNotificationEditor from "./EmailNotificationEditor";
+import SurveyContentEditor from "./SurveyContentEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 
@@ -19,6 +20,10 @@ const Dashboard = () => {
   const [respondentData, setRespondentData] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
+  const [contentDirty, setContentDirty] = React.useState(false);
+  const [notificationDirty, setNotificationDirty] = React.useState(false);
+  const [contentBusy, setContentBusy] = React.useState(false);
+  const [notificationBusy, setNotificationBusy] = React.useState(false);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
 
   const fetchSurveyData = async () => {
@@ -87,6 +92,21 @@ const Dashboard = () => {
   }, [selectSurvey, canViewSensitiveSurveyData]);
 
   const handleSelectRow = (childData) => {
+    const currentId = selectSurvey?.id || selectSurvey?.name;
+    const nextId = childData?.id || childData?.name;
+    if (currentId && currentId !== nextId && (contentBusy || notificationBusy)) {
+      setSnackbar({
+        severity: 'warning',
+        message: 'Please wait for the current save or CSV import to finish before switching surveys.',
+      });
+      return;
+    }
+    if (currentId && currentId !== nextId && (contentDirty || notificationDirty)) {
+      const shouldDiscard = window.confirm('Discard unsaved changes and switch surveys?');
+      if (!shouldDiscard) return;
+    }
+    setContentDirty(false);
+    setNotificationDirty(false);
     setSelectSurvey(childData);
   };
 
@@ -194,8 +214,22 @@ const Dashboard = () => {
       </CollapsibleSection>
 
       {canEditSurvey(selectSurvey) && (
+        <CollapsibleSection title="Survey Content">
+          <SurveyContentEditor
+            surveyId={selectSurvey?.id || selectSurvey?.name}
+            onDirtyChange={setContentDirty}
+            onBusyChange={setContentBusy}
+          />
+        </CollapsibleSection>
+      )}
+
+      {canEditSurvey(selectSurvey) && (
         <CollapsibleSection title="Email Notifications">
-          <EmailNotificationEditor surveyId={selectSurvey?.id || selectSurvey?.name} />
+          <EmailNotificationEditor
+            surveyId={selectSurvey?.id || selectSurvey?.name}
+            onDirtyChange={setNotificationDirty}
+            onBusyChange={setNotificationBusy}
+          />
         </CollapsibleSection>
       )}
 

@@ -1,17 +1,20 @@
-import { DefaultLightPanelless } from 'survey-core/themes';
+import { DefaultLight } from 'survey-core/themes';
 import { BRAND_COLORS } from './constants.js';
 
 const APP_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
+/** Opt-in scope shared by the respondent runtime and dashboard Demo Survey. */
+export const PRODUCTION_SURVEY_CLASS_NAME = 'cla-survey-runtime';
+
 /**
- * The single SurveyJS runtime theme used by both respondent and dashboard previews.
- * Start with a supported built-in theme so new SurveyJS variables retain defaults,
- * then apply the application's brand and surface tokens.
+ * SurveyJS must use its framed model to emit `sd-element--with-frame`.
+ * The accompanying scoped stylesheet then ports the production CRA rules onto
+ * current SurveyJS class names without affecting Survey Creator's designer.
  */
-export const BRANDED_PANELLESS_SURVEY_THEME = Object.freeze({
-  ...DefaultLightPanelless,
+export const PRODUCTION_SURVEY_THEME = Object.freeze({
+  ...DefaultLight,
   cssVariables: Object.freeze({
-    ...DefaultLightPanelless.cssVariables,
+    ...DefaultLight.cssVariables,
     '--sjs-font-family': APP_FONT_FAMILY,
     '--sjs-general-backcolor': '#ffffff',
     '--sjs-general-backcolor-dim': 'transparent',
@@ -25,19 +28,18 @@ export const BRANDED_PANELLESS_SURVEY_THEME = Object.freeze({
     '--sjs-primary-forecolor-light': BRAND_COLORS.primary,
     '--sjs-secondary-backcolor': BRAND_COLORS.primary,
     '--sjs-secondary-backcolor-light': 'rgba(66, 180, 175, 0.1)',
-    '--sjs-border-default': '#e4e9e8',
-    '--sjs-border-light': '#e4e9e8',
+    '--sjs-border-default': '#e8e8e8',
+    '--sjs-border-light': '#e8e8e8',
     '--sjs-corner-radius': '6px',
-    '--sjs-question-background': 'transparent',
-    '--sjs-questionpanel-backcolor': 'transparent',
+    '--sjs-question-background': '#ffffff',
+    '--sjs-questionpanel-backcolor': '#ffffff',
     '--sjs-header-backcolor': 'transparent',
     '--sjs-font-questiontitle-color': BRAND_COLORS.textPrimary,
     '--sjs-font-questiontitle-weight': '500',
-    '--sjs-font-questiondescription-color': 'rgba(51, 51, 51, 0.7)',
-    '--sjs-special-red': '#d32f2f',
-    '--sjs-special-red-light': 'rgba(211, 47, 47, 0.1)',
-    // Custom draggable-ranking renderer tokens. Including these in the theme
-    // keeps Survey Creator's built-in preview aligned even without our MUI wrapper.
+    '--sjs-font-questiondescription-color': '#666666',
+    '--sjs-special-red': '#ff4d4f',
+    '--sjs-special-red-light': 'rgba(255, 77, 79, 0.1)',
+    // Tokens consumed by the custom draggable-ranking renderer.
     '--survey-primary': BRAND_COLORS.primary,
     '--survey-primary-hover': BRAND_COLORS.primaryHover,
     '--survey-primary-light': 'rgba(66, 180, 175, 0.1)',
@@ -51,20 +53,17 @@ export const BRANDED_PANELLESS_SURVEY_THEME = Object.freeze({
   })
 });
 
-/** Apply the shared theme through SurveyJS's supported instance API. */
-export function applyBrandedPanellessSurveyTheme(survey) {
+/** Apply the production theme through SurveyJS's supported instance API. */
+export function applyProductionSurveyTheme(survey) {
   if (!survey || typeof survey.applyTheme !== 'function') {
     throw new TypeError('A SurveyJS model with applyTheme() is required.');
   }
-  survey.applyTheme(BRANDED_PANELLESS_SURVEY_THEME);
+  survey.applyTheme(PRODUCTION_SURVEY_THEME);
   return survey;
 }
 
-/**
- * MUI `sx` bridge for embedding SurveyJS in either application shell. SurveyJS
- * owns its component tokens; the wrapper only removes its outer page surfaces.
- */
-export const BRANDED_SURVEY_WRAPPER_SX = Object.freeze({
+/** MUI bridge for custom renderer tokens inside either application shell. */
+export const PRODUCTION_SURVEY_WRAPPER_SX = Object.freeze({
   '--survey-primary': BRAND_COLORS.primary,
   '--survey-primary-hover': BRAND_COLORS.primaryHover,
   '--survey-primary-light': 'rgba(66, 180, 175, 0.1)',
@@ -74,8 +73,5 @@ export const BRANDED_SURVEY_WRAPPER_SX = Object.freeze({
   '--survey-muted-text': 'rgba(51, 51, 51, 0.7)',
   '--survey-disabled-text': 'rgba(0, 0, 0, 0.38)',
   '--survey-error': '#d32f2f',
-  '--survey-error-surface': 'rgba(211, 47, 47, 0.04)',
-  '& .sd-root-modern, & .sd-body, & .sd-container-modern': {
-    backgroundColor: 'transparent'
-  }
+  '--survey-error-surface': 'rgba(211, 47, 47, 0.04)'
 });

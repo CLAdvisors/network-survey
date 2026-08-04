@@ -1,0 +1,362 @@
+/*
+ * Production respondent styling, ported from the legacy CRA Survey.css.
+ * Keep every rule under this opt-in runtime class: Survey Creator's designer
+ * shares SurveyJS class names and must not inherit respondent presentation.
+ */
+.cla-survey-runtime {
+  --primary-color: #42b4af;
+  --primary-hover: #3b9f9b;
+  --primary-light: rgba(66, 180, 175, 0.1);
+  --survey-border: #e8e8e8;
+  box-sizing: border-box;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding-inline: var(--respondent-survey-gutter, 24px);
+  background: transparent;
+}
+
+.cla-survey-runtime .sd-root-modern,
+.cla-survey-runtime .sv-root-modern {
+  --sv-element-add-padding-right: 0;
+  --sv-container-reduced-width: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, sans-serif;
+}
+
+/* Remove only the runtime page surfaces, not Creator surfaces. */
+.cla-survey-runtime .sd-root-modern,
+.cla-survey-runtime .sd-body,
+.cla-survey-runtime .sd-container-modern,
+.cla-survey-runtime .sv-body,
+.cla-survey-runtime .sv-container-modern {
+  background: transparent !important;
+}
+
+.cla-survey-runtime .sd-body__page {
+  padding-top: 10px;
+}
+
+/* Framed question model from the production CRA survey. */
+.cla-survey-runtime .sd-question.sd-element--with-frame {
+  box-sizing: border-box;
+  background: var(--survey-surface, #fff);
+  border-radius: 6px;
+  padding: 40px;
+  margin-bottom: 1rem;
+  box-shadow: 0 0 0 1px rgba(49, 201, 166, 0.4);
+}
+
+.cla-survey-runtime .sd-element__title,
+.cla-survey-runtime .sd-question__title,
+.cla-survey-runtime .sv-question__title {
+  color: #333;
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1.4;
+  margin-bottom: 16px;
+}
+
+.cla-survey-runtime .sv_custom_header,
+.cla-survey-runtime .sv-title {
+  color: #42b4af;
+}
+
+.cla-survey-runtime .sd-question__required-text,
+.cla-survey-runtime .sv-question__required-text {
+  color: #ff4d4f;
+  margin-left: 4px;
+  font-weight: normal;
+}
+
+.cla-survey-runtime .sd-description,
+.cla-survey-runtime .sv-description {
+  color: #666;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* Tagbox styling. */
+.cla-survey-runtime .sd-input.sd-tagbox,
+.cla-survey-runtime .sd-tagbox,
+.cla-survey-runtime .sv-tagbox {
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  min-height: 42px;
+  transition: all 0.2s ease;
+}
+
+.cla-survey-runtime .sd-input.sd-tagbox:focus-within,
+.cla-survey-runtime .sd-tagbox:focus-within,
+.cla-survey-runtime .sv-tagbox:focus-within {
+  border-color: #42b4af;
+  box-shadow: 0 0 0 2px rgba(66, 180, 175, 0.1);
+}
+
+.cla-survey-runtime .sv-tagbox__item,
+.cla-survey-runtime .sd-tagbox__item {
+  background: #42b4af !important;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.85rem;
+  margin: 2px;
+}
+
+.cla-survey-runtime .sv-tagbox__item:hover,
+.cla-survey-runtime .sd-tagbox__item:hover {
+  background: #3b9f9b !important;
+}
+
+/* Inputs and dropdowns. */
+.cla-survey-runtime .sd-input:not(.sd-tagbox),
+.cla-survey-runtime .sv-text,
+.cla-survey-runtime .sv-dropdown {
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  min-height: 42px;
+  padding: 8px 12px;
+  width: 100%;
+}
+
+.cla-survey-runtime .sd-input:focus,
+.cla-survey-runtime .sv-text:focus,
+.cla-survey-runtime .sv-dropdown:focus {
+  border-color: #42b4af;
+  box-shadow: 0 0 0 2px rgba(66, 180, 175, 0.1);
+  outline: none;
+}
+
+/* Navigation buttons. */
+.cla-survey-runtime .sv-btn,
+.cla-survey-runtime .sv-complete-btn,
+.cla-survey-runtime .sd-btn--action,
+.cla-survey-runtime .sd-navigation__complete-btn {
+  background: #42b4af !important;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 500;
+  min-width: 120px;
+  transition: all 0.2s ease;
+}
+
+.cla-survey-runtime .sv-btn:hover,
+.cla-survey-runtime .sv-complete-btn:hover,
+.cla-survey-runtime .sd-btn--action:hover,
+.cla-survey-runtime .sd-navigation__complete-btn:hover {
+  background: #3b9f9b !important;
+  transform: translateY(-1px);
+}
+
+.cla-survey-runtime .sv-footer,
+.cla-survey-runtime .sd-body__navigation {
+  margin-top: 32px;
+  padding-top: 24px;
+}
+
+/* Progress bar and page count. */
+.cla-survey-runtime .sv-progress-bar,
+.cla-survey-runtime .sd-progress {
+  background: #f0f0f0;
+  border-radius: 4px;
+}
+
+.cla-survey-runtime .sv-progress-bar {
+  height: 4px;
+}
+
+/* Current SurveyJS uses the same 2px track rendered by the production build. */
+.cla-survey-runtime .sd-progress {
+  height: 2px;
+}
+
+.cla-survey-runtime .sv-progress-bar__bar,
+.cla-survey-runtime .sd-progress__bar {
+  background: #42b4af;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.cla-survey-runtime .sv-page-number,
+.cla-survey-runtime .sd-progress__text {
+  color: #666;
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+/* Error states. */
+.cla-survey-runtime .sv-question--error,
+.cla-survey-runtime .sd-question--error {
+  border-color: #ff4d4f;
+}
+
+.cla-survey-runtime .sv-question__erbox,
+.cla-survey-runtime .sd-question__erbox {
+  color: #ff4d4f;
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
+
+/* Choice controls. */
+.cla-survey-runtime .sv-radio--checked .sv-radio__decor,
+.cla-survey-runtime .sv-checkbox--checked .sv-checkbox__decor,
+.cla-survey-runtime .sd-radio--checked .sd-radio__decor,
+.cla-survey-runtime .sd-checkbox--checked .sd-checkbox__decor {
+  background: #42b4af !important;
+  border-color: #42b4af !important;
+}
+
+.cla-survey-runtime .sv-radio__decor,
+.cla-survey-runtime .sv-checkbox__decor,
+.cla-survey-runtime .sd-radio__decor,
+.cla-survey-runtime .sd-checkbox__decor {
+  border-color: #e8e8e8;
+  background: #fff;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.cla-survey-runtime .sv-radio:hover .sv-radio__decor,
+.cla-survey-runtime .sv-checkbox:hover .sv-checkbox__decor,
+.cla-survey-runtime .sd-radio:hover .sd-radio__decor,
+.cla-survey-runtime .sd-checkbox:hover .sd-checkbox__decor {
+  border-color: #42b4af;
+}
+
+/* Matrix and circular rating controls shown in the production survey. */
+.cla-survey-runtime .sv-matrix__cell--selected,
+.cla-survey-runtime .sv-rating__item--selected,
+.cla-survey-runtime .sv-rating__item--hover,
+.cla-survey-runtime .sd-matrix__text--checked,
+.cla-survey-runtime .sd-rating__item--selected,
+.cla-survey-runtime .sd-rating__item--allowhover:hover {
+  background: #42b4af !important;
+  color: #fff !important;
+}
+
+.cla-survey-runtime .sv-matrix__cell,
+.cla-survey-runtime .sv-rating__item,
+.cla-survey-runtime .sd-matrix__cell,
+.cla-survey-runtime .sd-rating__item {
+  transition: background 0.2s, color 0.2s;
+}
+
+.cla-survey-runtime .sd-rating__item {
+  border-radius: 50%;
+}
+
+/* Preserve the responsive tagbox and custom-ranking behavior. */
+.cla-survey-runtime .draggable-ranking-host,
+.cla-survey-runtime .draggable-ranking-host [data-rbd-droppable-id],
+.cla-survey-runtime .draggable-ranking-host [data-rbd-draggable-id] {
+  box-sizing: border-box;
+  white-space: normal;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cla-survey-runtime .draggable-ranking-host [data-rbd-draggable-id] {
+  overflow-wrap: anywhere;
+}
+
+.cla-survey-runtime .sd-question .sd-tagbox__value {
+  width: var(--respondent-tag-value-width, auto);
+  gap: 4px;
+}
+
+/* Selected tags collapse SurveyJS's hint; retain a touch-friendly search row. */
+.cla-survey-runtime .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint {
+  position: relative;
+  flex: 0 0 100%;
+  min-height: var(--respondent-tag-search-height, 0);
+  align-items: center;
+}
+
+.cla-survey-runtime .sd-question .sd-tagbox__hint-suffix-wrapper,
+.cla-survey-runtime .sd-question .sd-tagbox__filter-string-input {
+  width: 100%;
+  min-height: var(--respondent-tag-search-height, 0);
+}
+
+.cla-survey-runtime .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__filter-string-input {
+  box-sizing: border-box;
+  padding-inline: 12px 0;
+}
+
+.cla-survey-runtime .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint::before {
+  content: var(--respondent-tag-search-prompt, none);
+  position: absolute;
+  inset-inline-start: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--survey-muted-text, #666);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.cla-survey-runtime .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__hint:focus-within::before {
+  content: none;
+}
+
+@media (max-width: 599.95px) {
+  .cla-survey-runtime {
+    --respondent-survey-gutter: 0;
+    --respondent-tag-value-width: 100%;
+    --respondent-tag-search-height: 40px;
+    --respondent-tag-search-prompt: "Search and add another…";
+    --sjs-font-questiontitle-size: 16px;
+    --sjs-font-questiondescription-size: 14px;
+  }
+
+  .cla-survey-runtime .sd-body.sd-body--static {
+    padding: 12px 0 8px;
+  }
+
+  .cla-survey-runtime .sd-body__page {
+    padding-top: 4px;
+  }
+
+  .cla-survey-runtime .sd-page {
+    padding-inline: 0;
+  }
+
+  .cla-survey-runtime .sd-input.sd-tagbox {
+    min-height: 44px;
+  }
+
+  .cla-survey-runtime .sd-question .sd-tagbox__value,
+  .cla-survey-runtime .sd-question .sv-tagbox__item {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .cla-survey-runtime .sd-question .sv-tagbox__item {
+    flex: 0 0 100%;
+    min-height: 40px;
+    padding-inline-end: 40px;
+  }
+
+  .cla-survey-runtime .sd-question .sv-tagbox__item-text {
+    min-width: 0;
+    overflow: hidden;
+    text-align: start;
+  }
+
+  .cla-survey-runtime .sd-question .sv-tagbox__item-text span {
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .cla-survey-runtime .sd-question .sd-tagbox-item_clean-button {
+    width: 40px;
+    min-height: 40px;
+    padding: 0;
+    inset-inline-end: 0;
+    opacity: 1;
+  }
+}

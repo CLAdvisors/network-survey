@@ -4,7 +4,7 @@ import { AppPage, Surface } from '@network-survey/frontend-react';
 import Header from './Header';
 import SurveyComponent from './SurveyComponent';
 import Logo from './logo.svg?react';
-import { BRANDED_SURVEY_WRAPPER_SX } from '@network-survey/frontend-shared';
+import { PRODUCTION_SURVEY_WRAPPER_SX } from '@network-survey/frontend-shared';
 
 const Survey = () => {
   const [title, setTitle] = useState('');
@@ -28,8 +28,8 @@ const Survey = () => {
           <Box
             className="survey-content"
             sx={{
-              p: 3,
-              ...BRANDED_SURVEY_WRAPPER_SX
+              p: { xs: 2, sm: 3 },
+              ...PRODUCTION_SURVEY_WRAPPER_SX
             }}
           >
             <SurveyComponent setTitle={setTitle} />

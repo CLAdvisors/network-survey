@@ -333,8 +333,12 @@
   }
 
   .cla-survey-runtime .sd-description {
-    font-size: 14px;
+    font-size: 13px;
     line-height: 1.4;
+  }
+
+  .cla-survey-runtime .sd-body__progress--bottom {
+    margin-top: 32px;
   }
 
   .cla-survey-runtime .sd-body.sd-body--static {
@@ -415,8 +419,12 @@
 }
 
 .cla-survey-runtime--mobile .sd-description {
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.4;
+}
+
+.cla-survey-runtime--mobile .sd-body__progress--bottom {
+  margin-top: 32px;
 }
 
 .cla-survey-runtime--mobile .sd-body.sd-body--static {

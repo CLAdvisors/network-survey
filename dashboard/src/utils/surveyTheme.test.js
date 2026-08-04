@@ -72,6 +72,8 @@ describe('production SurveyJS styling', () => {
     expect(runtimeCss).toContain('overflow-wrap: anywhere;');
     expect(runtimeCss).toContain('--respondent-tag-value-width: 100%;');
     expect(runtimeCss).toMatch(/@media[\s\S]*?\.sd-question\.sd-element--with-frame\s*\{[\s\S]*?box-shadow:\s*none;/);
+    expect(runtimeCss).toMatch(/@media[\s\S]*?\.sd-description\s*\{[\s\S]*?font-size:\s*13px;/);
+    expect(runtimeCss).toMatch(/@media[\s\S]*?\.sd-body__progress--bottom\s*\{[\s\S]*?margin-top:\s*32px;/);
   });
 
   it('opts in only the respondent runtime and dashboard Demo Survey', () => {

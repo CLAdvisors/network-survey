@@ -77,8 +77,5 @@ export const BRANDED_SURVEY_WRAPPER_SX = Object.freeze({
   '--survey-error-surface': 'rgba(211, 47, 47, 0.04)',
   '& .sd-root-modern, & .sd-body, & .sd-container-modern': {
     backgroundColor: 'transparent'
-  },
-  '& .sd-body__page': {
-    paddingTop: '10px'
   }
 });

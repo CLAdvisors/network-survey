@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -10,14 +10,24 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Typography,
 } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
+import { LANGUAGES } from '@network-survey/frontend-shared';
 
-const SendDemoDialog = ({ open, onClose, onSubmit, surveyName }) => {
+const SendDemoDialog = ({ open, onClose, onSubmit, surveyName, loading = false }) => {
   const [email, setEmail] = useState('');
-  const [language, setLanguage] = useState('en');
+  const [language, setLanguage] = useState('English');
   const [error, setError] = useState('');
   const theme = useTheme();
+
+  useEffect(() => {
+    if (!open) {
+      setEmail('');
+      setLanguage('English');
+      setError('');
+    }
+  }, [open]);
 
   const handleSubmit = () => {
     if (!email.trim()) {
@@ -30,9 +40,7 @@ const SendDemoDialog = ({ open, onClose, onSubmit, surveyName }) => {
       setError('Please enter a valid email address');
       return;
     }
-    onSubmit(email, language);
-    setEmail('');
-    setError('');
+    onSubmit(email.trim(), language);
   };
 
   const handleClose = () => {
@@ -63,6 +71,9 @@ const SendDemoDialog = ({ open, onClose, onSubmit, surveyName }) => {
         Send Demo Survey
       </DialogTitle>
       <DialogContent sx={{ mt: 2 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Send a no-results demo of “{surveyName}” using its configured email text and survey.
+        </Typography>
         <TextField
           autoFocus
           margin="dense"
@@ -86,27 +97,18 @@ const SendDemoDialog = ({ open, onClose, onSubmit, surveyName }) => {
             onChange={(e) => setLanguage(e.target.value)}
             label="Language"
           >
-            <MenuItem value="English">English</MenuItem>
-            <MenuItem value="Spanish">Spanish</MenuItem>
-            <MenuItem value="French">French</MenuItem>
-            <MenuItem value="German">German</MenuItem>
-            <MenuItem value="Italian">Italian</MenuItem>
-            <MenuItem value="Portuguese">Portuguese</MenuItem>
-            <MenuItem value="Dutch">Dutch</MenuItem>
-            <MenuItem value="Polish">Polish</MenuItem>
-            <MenuItem value="Russian">Russian</MenuItem>
-            <MenuItem value="Japanese">Japanese</MenuItem>
-            <MenuItem value="Chinese">Chinese</MenuItem>
-            <MenuItem value="Korean" >Korean</MenuItem>
+            {LANGUAGES.map(({ code, label }) => (
+              <MenuItem key={code} value={label}>{label}</MenuItem>
+            ))}
           </Select>
         </FormControl>
       </DialogContent>
       <DialogActions sx={{ p: 2, pt: 0 }}>
-        <Button onClick={handleClose} variant="outlined">
+        <Button onClick={handleClose} variant="outlined" disabled={loading}>
           Cancel
         </Button>
-        <Button onClick={handleSubmit} variant="contained">
-          Send Demo
+        <Button onClick={handleSubmit} variant="contained" disabled={loading}>
+          {loading ? 'Sending…' : 'Send Demo'}
         </Button>
       </DialogActions>
     </Dialog>

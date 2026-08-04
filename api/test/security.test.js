@@ -25,6 +25,9 @@ const {
   getDefaultOrganizationForUser,
   getDashboardBaseUrl,
   buildDashboardUrl,
+  createDemoToken,
+  verifyDemoToken,
+  sanitizeSurveyForDemo,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
@@ -1347,10 +1350,128 @@ test('dashboard URL helpers prefer DASHBOARD_URL and fall back to FRONTEND_URL',
   assert.equal(buildDashboardUrl('reset-password?token=abc'), 'https://admin.example.com/reset-password?token=abc');
 });
 
+test('demo links are signed, survey-bound, and expire without database state', () => {
+  const surveyId = '11111111-1111-4111-8111-111111111111';
+  const issuedAt = Date.now();
+  const token = createDemoToken(surveyId, 'Survey A', issuedAt);
+
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(verifyDemoToken(token, issuedAt + 1)).filter(([key]) => key !== 'nonce')),
+    { type: 'survey-demo', surveyId, surveyName: 'Survey A', expiresAt: issuedAt + (24 * 60 * 60 * 1000) }
+  );
+  const tokenParts = token.split('.');
+  tokenParts[2] = `${tokenParts[2][0] === 'A' ? 'B' : 'A'}${tokenParts[2].slice(1)}`;
+  assert.equal(verifyDemoToken(tokenParts.join('.'), issuedAt + 1), null);
+  assert.equal(verifyDemoToken(token, issuedAt + (24 * 60 * 60 * 1000)), null);
+});
+
+test('demo schema sanitization recursively replaces legacy people choices', () => {
+  const privateChoices = ['Private Person (private@example.com)'];
+  const schema = {
+    pages: [{
+      elements: [{
+        type: 'panel',
+        elements: [{ type: 'tagbox', name: 'nested', choices: privateChoices }],
+      }, {
+        type: 'paneldynamic',
+        templateElements: [{
+          type: 'matrixdropdown',
+          cellType: 'tagbox',
+          columns: [{ name: 'person', choicesFromQuestion: 'matrix_source', defaultValue: privateChoices }],
+        }],
+      }, {
+        type: 'dropdown', name: 'private_source', choicesFromQuestion: 'second_source', defaultValue: privateChoices[0],
+      }, {
+        type: 'tagbox', name: 'from_source', choicesFromQuestion: 'private_source', defaultValue: privateChoices,
+      }, {
+        type: 'dropdown', name: 'matrix_source', choices: privateChoices, defaultValue: privateChoices[0],
+      }, {
+        type: 'dropdown', name: 'second_source', choices: privateChoices,
+      }, {
+        type: 'text', name: 'private_source', choicesByUrl: { url: 'https://user:secret@private.example/choices' },
+      }],
+    }],
+  };
+
+  const sanitized = sanitizeSurveyForDemo(schema);
+  const elements = sanitized.pages[0].elements;
+  const nestedTagbox = elements[0].elements[0];
+  const matrixTagbox = elements[1].templateElements[0].columns[0];
+  const sourceQuestion = elements[2];
+  const sourceTagbox = elements[3];
+  const matrixSourceQuestion = elements[4];
+  const secondSourceQuestion = elements[5];
+  const duplicateSourceName = elements[6];
+  for (const question of [nestedTagbox, matrixTagbox, sourceTagbox]) {
+    assert.deepEqual(question.choices, []);
+    assert.equal(question.choicesLazyLoadEnabled, true);
+    assert.equal(question.allowAddNewTag, false);
+    assert.equal(question.choicesFromQuestion, undefined);
+    assert.equal(question.defaultValue, undefined);
+  }
+  for (const source of [sourceQuestion, matrixSourceQuestion, secondSourceQuestion, duplicateSourceName]) {
+    assert.equal(source.choices.length, 100);
+    assert.equal(source.choices[0], 'Demo Person 001 (demo-person-001@example.com)');
+    assert.equal(source.choices.includes(privateChoices[0]), false);
+    assert.equal(source.defaultValue, undefined);
+    assert.equal(source.choicesByUrl, undefined);
+  }
+  assert.deepEqual(schema.pages[0].elements[0].elements[0].choices, privateChoices, 'persisted schema is not mutated');
+});
+
+test('signed demo links load survey questions but cannot be used for a different survey', async (t) => {
+  const originalConnect = pool.connect;
+  t.after(() => { pool.connect = originalConnect; });
+
+  const surveyId = '11111111-1111-4111-8111-111111111111';
+  const token = createDemoToken(surveyId, 'Survey A');
+  let queryCount = 0;
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      queryCount += 1;
+      assert.match(sql, /WHERE \(id = \$1/);
+      assert.deepEqual(values, [surveyId, 'Survey A']);
+      return { rows: [{
+        title: 'Configured title',
+        questions: { elements: [
+          { type: 'text', name: 'q1' },
+          {
+            type: 'tagbox',
+            name: 'people',
+            choicesLazyLoadEnabled: true,
+            choices: ['Private Person (private@example.com)'],
+          },
+        ] },
+      }] };
+    },
+    release() {},
+  });
+
+  const valid = await request(app).get('/api/questions').query({ surveyName: 'Survey A', demoToken: token });
+  assert.equal(valid.status, 200);
+  assert.equal(valid.body.title, 'Configured title');
+  assert.deepEqual(valid.body.questions.elements[1].choices, [], 'demo schemas scrub persisted people choices');
+
+  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token, take: 2 });
+  assert.equal(names.status, 200);
+  assert.deepEqual(names.body, {
+    names: [
+      'Demo Person 001 (demo-person-001@example.com)',
+      'Demo Person 002 (demo-person-002@example.com)',
+    ],
+    total: 100,
+  }, 'demo links use synthetic choices instead of exposing respondent PII');
+
+  const wrongSurvey = await request(app).get('/api/questions').query({ surveyName: 'Survey B', demoToken: token });
+  assert.equal(wrongSurvey.status, 403);
+  assert.equal(queryCount, 1);
+});
+
 test('dashboard/admin endpoints require authentication', async () => {
   const endpoints = [
     ['post', '/api/survey', { surveyName: 'S' }],
     ['post', '/api/testEmail', { surveyName: 'S', language: 'English', email: 'a@example.com' }],
+    ['post', '/api/surveys/survey-id/demo-email', { language: 'English', email: 'a@example.com' }],
     ['post', '/api/startSurvey', { surveyName: 'S' }],
     ['post', '/api/updateEmails', { surveyName: 'S', csvData: 'English,Hello' }],
     ['post', '/api/updateTarget', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],

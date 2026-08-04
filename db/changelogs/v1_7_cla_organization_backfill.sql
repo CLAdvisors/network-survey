@@ -89,7 +89,7 @@ FROM Survey s
 WHERE e.survey_id IS NULL
   AND e.survey_name = s.name;
 
--- Include active, archived, and demo surveys. Legacy creator fields deliberately
+-- Move active, archived, and demo surveys. Legacy creator fields deliberately
 -- remain unchanged/null because the old schema did not record ownership.
 UPDATE Survey
 SET organization_id = (SELECT id FROM organizations WHERE slug = 'cla')

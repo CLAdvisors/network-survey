@@ -1,15 +1,11 @@
 const placeholderObservers = new WeakMap();
 
 function getSearchPlaceholder(question) {
-  const configured = question?.placeholder;
-  const defaultPlaceholder = question?.getDefaultPropertyValue?.('placeholder');
-
-  if (configured && configured !== defaultPlaceholder) {
-    return configured;
-  }
-
+  // SurveyJS localizes this specifically as a search instruction (for
+  // example, “Type to search…”). The question placeholder is usually a
+  // longer empty-control prompt and does not fit beneath selected tags.
   return question?.dropdownListModel?.listModel?.filterStringPlaceholder
-    || configured
+    || question?.placeholder
     || '';
 }
 

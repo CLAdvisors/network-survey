@@ -77,6 +77,12 @@
   padding-inline: 12px 0;
 }
 
+.survey-content .sd-question .sd-tagbox:not(.sd-tagbox--empty) .sd-tagbox__filter-string-input::placeholder {
+  color: var(--sjs-font-editorfont-placeholdercolor, var(--sjs-general-forecolor-light, #909090));
+  opacity: 1;
+  font-size: 14px;
+}
+
 .survey-content .sd-question .sv-tagbox__item {
   flex: var(--respondent-tag-flex, 0 1 auto);
   min-width: 0;

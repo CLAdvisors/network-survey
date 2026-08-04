@@ -1358,7 +1358,9 @@ test('demo links are signed, survey-bound, and expire without database state', (
     Object.fromEntries(Object.entries(verifyDemoToken(token, issuedAt + 1)).filter(([key]) => key !== 'nonce')),
     { type: 'survey-demo', surveyId, surveyName: 'Survey A', expiresAt: issuedAt + (24 * 60 * 60 * 1000) }
   );
-  assert.equal(verifyDemoToken(`${token.slice(0, -1)}x`, issuedAt + 1), null);
+  const tokenParts = token.split('.');
+  tokenParts[2] = `${tokenParts[2][0] === 'A' ? 'B' : 'A'}${tokenParts[2].slice(1)}`;
+  assert.equal(verifyDemoToken(tokenParts.join('.'), issuedAt + 1), null);
   assert.equal(verifyDemoToken(token, issuedAt + (24 * 60 * 60 * 1000)), null);
 });
 
@@ -1374,7 +1376,18 @@ test('signed demo links load survey questions but cannot be used for a different
       queryCount += 1;
       assert.match(sql, /WHERE \(id = \$1/);
       assert.deepEqual(values, [surveyId, 'Survey A']);
-      return { rows: [{ title: 'Configured title', questions: { elements: [{ type: 'text', name: 'q1' }] } }] };
+      return { rows: [{
+        title: 'Configured title',
+        questions: { elements: [
+          { type: 'text', name: 'q1' },
+          {
+            type: 'tagbox',
+            name: 'people',
+            choicesLazyLoadEnabled: true,
+            choices: ['Private Person (private@example.com)'],
+          },
+        ] },
+      }] };
     },
     release() {},
   });
@@ -1382,6 +1395,7 @@ test('signed demo links load survey questions but cannot be used for a different
   const valid = await request(app).get('/api/questions').query({ surveyName: 'Survey A', demoToken: token });
   assert.equal(valid.status, 200);
   assert.equal(valid.body.title, 'Configured title');
+  assert.deepEqual(valid.body.questions.elements[1].choices, [], 'demo schemas scrub persisted people choices');
 
   const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token, take: 2 });
   assert.equal(names.status, 200);

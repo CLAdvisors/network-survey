@@ -362,6 +362,20 @@ function verifyDemoToken(token, now = Date.now()) {
   }
 }
 
+function sanitizeSurveyForDemo(questions) {
+  if (!questions || typeof questions !== 'object' || !Array.isArray(questions.elements)) {
+    return questions;
+  }
+  return {
+    ...questions,
+    elements: questions.elements.map((element) => (
+      element?.type === 'tagbox' && element.choicesLazyLoadEnabled === true
+        ? { ...element, choices: [] }
+        : element
+    )),
+  };
+}
+
 app.use(express.json());
 
 app.use(cors({
@@ -2752,8 +2766,10 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
       return res.status(404).json({ message: 'Survey not found.' });
     }
 
-    const jsonData = { title: result.rows[0].title, questions: result.rows[0].questions };
-    res.status(200).json(jsonData);
+    const questions = demoClaims
+      ? sanitizeSurveyForDemo(result.rows[0].questions)
+      : result.rows[0].questions;
+    res.status(200).json({ title: result.rows[0].title, questions });
   } catch (error) {
     console.error('Error fetching survey questions:', error);
     res.status(500).json({ message: 'Failed to fetch survey questions.' });
@@ -3127,6 +3143,7 @@ module.exports = {
   buildDashboardUrl,
   createDemoToken,
   verifyDemoToken,
+  sanitizeSurveyForDemo,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,

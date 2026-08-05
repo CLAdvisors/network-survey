@@ -15,6 +15,7 @@ vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
     canEditSurvey: () => canEdit,
     canArchiveSurvey: () => false,
+    hasSurveyRole: () => false,
   }),
 }));
 
@@ -117,4 +118,21 @@ test('users without edit access do not see copy or email demo actions', async ()
   await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
   expect(screen.queryByText('Copy Survey')).not.toBeInTheDocument();
   expect(screen.queryByText('Send Email Demo')).not.toBeInTheDocument();
+});
+
+test('an active survey offers status and close, but no launch or reminder bypass', async () => {
+  api.post.mockResolvedValue({ status: 200, data: {} });
+  const changed = vi.fn();
+  render(<SurveyTableMenuCell row={{ id: 'survey-1', name: 'Leadership Survey', lifecycleStatus: 'active' }} onLifecycleChange={changed} />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Actions for Leadership Survey' }));
+  expect(screen.getByText('View Delivery Status')).toBeInTheDocument();
+  expect(screen.getByText('Close Survey')).toBeInTheDocument();
+  expect(screen.queryByText('Launch Survey')).not.toBeInTheDocument();
+  expect(screen.queryByText(/reminder/i)).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByText('Close Survey'));
+  await userEvent.click(screen.getByRole('button', { name: 'Close survey' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/surveys/survey-1/close'));
+  expect(changed).toHaveBeenCalledWith('survey-1');
 });

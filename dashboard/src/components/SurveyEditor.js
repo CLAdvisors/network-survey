@@ -25,6 +25,8 @@ import {
 } from '../utils/surveyToolbox';
 import { hideQuestionValueName } from '../utils/surveyCreatorMetadata';
 import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
+import { lifecycleStatus, surveyId } from './surveyLifecycle';
+import { useAuth } from '../context/AuthContext';
 
 // Define and register custom question class for draggableranking
 class QuestionDraggableRankingModel extends Question {
@@ -223,6 +225,7 @@ Serializer.removeProperty('survey', 'logo');
 hideQuestionValueName();
 
 const SurveyEditor = () => {
+  const { canEditSurvey } = useAuth();
   const [surveys, setSurveys] = useState([]);
   const [selectedSurvey, setSelectedSurvey] = useState(null);
   const [inputValue, setInputValue] = useState('');
@@ -235,21 +238,38 @@ const SurveyEditor = () => {
   const creatorRef = useRef(null);
   const surveyHooksRef = useRef(new Map());
   const selectedSurveyRef = useRef(null);
+  const selectedSurveyRecord = surveys.find((survey) => surveyId(survey) === selectedSurvey || survey.name === selectedSurvey) || null;
+  const lifecycleLocked = Boolean(selectedSurveyRecord) && lifecycleStatus(selectedSurveyRecord) !== 'draft';
+  const roleLocked = Boolean(selectedSurveyRecord) && !canEditSurvey(selectedSurveyRecord);
+  const editorReadOnly = lifecycleLocked || roleLocked;
 
-  // Fetch surveys on mount
+  // Refresh lifecycle/role state while the editor remains open.
   useEffect(() => {
+    const controller = new AbortController();
+    let first = true;
+    let inFlight = false;
     const fetchSurveys = async () => {
-      setLoading(true);
+      if (inFlight) return;
+      inFlight = true;
+      if (first) setLoading(true);
       try {
-        const response = await api.get('/surveys');
-        setSurveys(response.data.surveys || []);
+        const response = await api.get('/surveys', { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          const nextSurveys = response.data.surveys || [];
+          setSurveys(nextSurveys);
+          setSelectedSurvey((current) => current && !nextSurveys.some((survey) => surveyId(survey) === current || survey.name === current) ? null : current);
+        }
       } catch (err) {
-        setSurveys([]);
+        if (first && !controller.signal.aborted) setSurveys([]);
       } finally {
-        setLoading(false);
+        if (first && !controller.signal.aborted) setLoading(false);
+        first = false;
+        inFlight = false;
       }
     };
     fetchSurveys();
+    const timer = setInterval(fetchSurveys, 30000);
+    return () => { clearInterval(timer); controller.abort(); };
   }, []);
 
   useEffect(() => {
@@ -499,6 +519,8 @@ const SurveyEditor = () => {
   // Normalize the one logical editor page while rejecting unsupported layouts
   // before Survey Creator can silently discard them in single-page mode.
   useEffect(() => {
+    const controller = new AbortController();
+    creator.readOnly = editorReadOnly;
     if (!selectedSurvey) {
       creator.JSON = {};
       return;
@@ -507,7 +529,8 @@ const SurveyEditor = () => {
       setLoading(true);
       try {
         // Use the full survey JSON endpoint
-        const response = await api.get(`/admin/questions?surveyName=${selectedSurvey}`);
+        const response = await api.get(`/admin/questions?surveyName=${selectedSurvey}`, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         const json = response.data.questions || {};
         const flatSchema = serializeFlatSurveySchema(json);
         creator.JSON = {
@@ -519,17 +542,21 @@ const SurveyEditor = () => {
           configureSurveyModel(creator.survey, 'designer');
         }
       } catch (err) {
-        creator.JSON = {};
-        setSaveError(err.response?.data?.message || err.message || 'Unable to load survey. Please try again.');
+        if (!controller.signal.aborted) {
+          creator.JSON = {};
+          setSaveError(err.response?.data?.message || err.message || 'Unable to load survey. Please try again.');
+        }
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     };
     loadSurvey();
-  }, [selectedSurvey, creator, configureSurveyModel]);
+    return () => controller.abort();
+  }, [selectedSurvey, creator, configureSurveyModel, editorReadOnly]);
 
   const handleSaveSurvey = async () => {
-    if (!selectedSurvey) return;
+    if (!selectedSurvey || editorReadOnly) return;
+    const savingSurveyName = selectedSurvey;
     setSaving(true);
     setSaveError(null);
     try {
@@ -542,6 +569,7 @@ const SurveyEditor = () => {
       });
       // Adopt the API's canonical names immediately. Otherwise Survey Creator
       // retains temporary names and a second save allocates fresh identities.
+      if (selectedSurveyRef.current !== savingSurveyName) return;
       const savedSchema = serializeFlatSurveySchema(response.data?.questions || questions);
       creator.JSON = {
         ...savedSchema,
@@ -551,7 +579,7 @@ const SurveyEditor = () => {
         configureSurveyModel(creator.survey, 'designer');
       }
     } catch (err) {
-      setSaveError(err.response?.data?.message || err.message || 'Unable to save survey. Please try again.');
+      if (selectedSurveyRef.current === savingSurveyName) setSaveError(err.response?.data?.message || err.message || 'Unable to save survey. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -601,9 +629,10 @@ const SurveyEditor = () => {
   // Handle survey selection or creation
   const handleSurveyChange = (event, newValue) => {
     if (typeof newValue === 'string') {
-      setSelectedSurvey(newValue);
+      const matchingSurvey = surveys.find((survey) => survey.name === newValue);
+      setSelectedSurvey(matchingSurvey ? surveyId(matchingSurvey) : null);
     } else if (newValue && newValue.name) {
-      setSelectedSurvey(newValue.name);
+      setSelectedSurvey(surveyId(newValue));
     } else {
       setSelectedSurvey(null);
     }
@@ -613,14 +642,16 @@ const SurveyEditor = () => {
     <Box sx={{ marginTop: '20px', marginLeft: '2%', marginRight: '2%' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
         <Autocomplete
-          freeSolo
-          options={surveys.map(s => s.name)}
-          value={selectedSurvey || ''}
+          options={surveys}
+          disabled={saving}
+          getOptionLabel={(option) => typeof option === 'string' ? option : option.name || ''}
+          isOptionEqualToValue={(option, value) => surveyId(option) === surveyId(value)}
+          value={selectedSurveyRecord}
           onChange={handleSurveyChange}
           inputValue={inputValue}
           onInputChange={(e, v) => setInputValue(v)}
           renderInput={(params) => (
-            <TextField {...params} label="Select or Create Survey" variant="outlined" size="small" />
+            <TextField {...params} label="Select Survey" variant="outlined" size="small" />
           )}
           sx={{ minWidth: 300 }}
         />
@@ -628,7 +659,7 @@ const SurveyEditor = () => {
         <Button
           variant="contained"
           onClick={handleSaveSurvey}
-          disabled={!selectedSurvey || saving}
+          disabled={!selectedSurvey || saving || editorReadOnly}
         >
           Save Survey
         </Button>
@@ -640,6 +671,8 @@ const SurveyEditor = () => {
           Demo Survey
         </Button>
       </Box>
+      {lifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Survey design is read-only while this survey is {lifecycleStatus(selectedSurveyRecord)}. You can still preview it.</Alert>}
+      {roleLocked && <Alert severity="info" sx={{ mb: 2 }}>Your role has read-only access to this survey design. You can still preview it.</Alert>}
       {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
       <Box
         sx={{

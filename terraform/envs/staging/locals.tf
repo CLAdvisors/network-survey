@@ -10,9 +10,9 @@ locals {
   frontend_url = "https://${var.dashboard_domain}"
   survey_url   = "https://${var.survey_domain}"
 
-  # Staging and prod share the .bennetts.work cookie domain, so each
-  # environment needs its own session cookie name
-  session_cookie_name = "sessionId-${local.environment}"
+  # Rotate away from the legacy parent-domain cookie. The API now emits this
+  # as a host-only cookie, but distinct names keep environments unambiguous.
+  session_cookie_name = "ona-session-${local.environment}-v2"
 
   ssm_parameter_prefix                    = "/network-survey/${local.environment}"
   db_password_parameter_name              = "${local.ssm_parameter_prefix}/db/password"

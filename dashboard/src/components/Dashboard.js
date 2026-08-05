@@ -11,6 +11,8 @@ import EmailNotificationEditor from "./EmailNotificationEditor";
 import InvitationSubjectEditor from "./InvitationSubjectEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
+import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
+import { lifecycleStatus, surveyId } from "./surveyLifecycle";
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -20,74 +22,75 @@ const Dashboard = () => {
   const [respondentData, setRespondentData] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
+  const surveyRequest = React.useRef(0);
+  const relatedRequest = React.useRef(0);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
 
-  const fetchSurveyData = async () => {
+  const fetchSurveyData = React.useCallback(async () => {
+    const request = ++surveyRequest.current;
     try {
       const response = await api.get("/surveys");
-      setSurveyData(response.data.surveys);
-      
-      // Update selected survey if it still exists
-      if (selectSurvey) {
-        const surveyStillExists = response.data.surveys.find(
-          survey => (survey.id || survey.name) === (selectSurvey.id || selectSurvey.name)
-        );
-        if (!surveyStillExists) {
-          setSelectSurvey(null);
-          setQuestionData(null);
-          setRespondentData(null);
-        }
-      }
+      if (request !== surveyRequest.current) return response.data.surveys || [];
+      const surveys = response.data.surveys || [];
+      setSurveyData(surveys);
+      setSelectSurvey((current) => {
+        if (!current) return null;
+        return surveys.find((survey) => surveyId(survey) === surveyId(current)) || null;
+      });
+      return surveys;
     } catch (err) {
-      console.log(err);
+      if (request === surveyRequest.current) {
+        setSnackbar({ severity: 'error', message: 'Unable to refresh surveys.' });
+      }
+      return [];
     }
-  };
-
-  React.useEffect(() => {
-    fetchSurveyData();
   }, []);
 
   React.useEffect(() => {
+    fetchSurveyData();
+    const timer = setInterval(fetchSurveyData, 30000);
+    return () => clearInterval(timer);
+  }, [fetchSurveyData]);
+
+  React.useEffect(() => {
+    const request = ++relatedRequest.current;
+    const controller = new AbortController();
     const fetchRelatedData = async () => {
-      if (!selectSurvey) return;
-
-      try {
-        // Fetch question data; viewers are allowed to see question text.
-        const questionResponse = await api.get(
-          `/listQuestions?surveyName=${selectSurvey.id || selectSurvey.name}`
-        );
-        setQuestionData(questionResponse.data.questions);
-      } catch (err) {
-        console.log(err);
+      if (!selectSurvey) {
         setQuestionData(null);
-      }
-
-      if (!canViewSensitiveSurveyData(selectSurvey)) {
         setRespondentData(null);
         return;
       }
-
+      const selectedId = surveyId(selectSurvey);
       try {
-        // Fetch respondent data for analyst+ roles only because it includes PII.
-        const respondentResponse = await api.get(
-          `/targets?surveyName=${selectSurvey.id || selectSurvey.name}`
-        );
-
-        // Remove dummy user with name 'None'
-        const filteredRespondents = respondentResponse.data.filter(
-          (respondent) => respondent.name !== "None"
-        );
-        setRespondentData(filteredRespondents);
+        const questionResponse = await api.get(`/listQuestions?surveyName=${selectedId}`, { signal: controller.signal });
+        if (request === relatedRequest.current) setQuestionData(questionResponse.data.questions);
       } catch (err) {
-        console.log(err);
-        setRespondentData(null);
+        if (!controller.signal.aborted && request === relatedRequest.current) setQuestionData(null);
+      }
+
+      if (!canViewSensitiveSurveyData(selectSurvey)) {
+        if (request === relatedRequest.current) setRespondentData(null);
+        return;
+      }
+      try {
+        const respondentResponse = await api.get(`/targets?surveyName=${selectedId}`, { signal: controller.signal });
+        const filteredRespondents = respondentResponse.data.filter((respondent) => respondent.name !== "None");
+        if (request === relatedRequest.current) setRespondentData(filteredRespondents);
+      } catch (err) {
+        if (!controller.signal.aborted && request === relatedRequest.current) setRespondentData(null);
       }
     };
-
     fetchRelatedData();
+    return () => controller.abort();
   }, [selectSurvey, canViewSensitiveSurveyData]);
 
   const handleSelectRow = (childData) => {
+    if (surveyId(childData) !== surveyId(selectSurvey)) {
+      relatedRequest.current += 1;
+      setQuestionData(null);
+      setRespondentData(null);
+    }
     setSelectSurvey(childData);
   };
 
@@ -120,13 +123,18 @@ const Dashboard = () => {
     }
   };
 
-  const handleRespondentsUpdate = (updatedSurveys) => {
+  const replaceSurveys = (updatedSurveys) => {
     setSurveyData(updatedSurveys);
+    setSelectSurvey((current) => current && updatedSurveys.find((survey) => surveyId(survey) === surveyId(current)) || null);
   };
 
-  const handleQuestionsUpdate = (updatedSurveys) => {
-    setSurveyData(updatedSurveys);
-  };
+  const handlePanelSurveyRefresh = React.useCallback(async (selectedId) => {
+    const surveys = await fetchSurveyData();
+    return surveys.find((survey) => surveyId(survey) === selectedId);
+  }, [fetchSurveyData]);
+
+  const selectedIsLifecycleLocked = Boolean(selectSurvey) && lifecycleStatus(selectSurvey) !== 'draft';
+  const selectedReadOnly = !canEditSurvey(selectSurvey) || selectedIsLifecycleLocked;
 
   return (
     <Box
@@ -180,6 +188,7 @@ const Dashboard = () => {
           onSurveyDeleted={handleSurveyDeleted}
           onSurveyCopied={handleSurveyCopied}
           selectedSurvey={selectSurvey}
+          onLifecycleChange={fetchSurveyData}
         />
       </CollapsibleSection>
 
@@ -190,29 +199,39 @@ const Dashboard = () => {
         memberships={memberships}
       />
 
+      {selectSurvey && <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} />}
+
       <CollapsibleSection title="Survey Questions">
-        <QuestionTable 
+        {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
+        <QuestionTable
+          key={surveyId(selectSurvey) || 'no-survey'}
           rows={questionData} 
-          surveyName={selectSurvey?.id || selectSurvey?.name}
-          onQuestionsUpdate={handleQuestionsUpdate}
-          readOnly={!canEditSurvey(selectSurvey)}
+          surveyName={surveyId(selectSurvey)}
+          onQuestionsUpdate={replaceSurveys}
+          readOnly={selectedReadOnly}
         />
       </CollapsibleSection>
 
       {canEditSurvey(selectSurvey) && (
         <CollapsibleSection title="Email Notifications">
-          <InvitationSubjectEditor surveyId={selectSurvey?.id || selectSurvey?.name} />
-          <EmailNotificationEditor surveyId={selectSurvey?.id || selectSurvey?.name} />
+          {selectedIsLifecycleLocked ? (
+            <Alert severity="info" sx={{ mb: 2 }}>Invitation subjects are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>
+          ) : (
+            <InvitationSubjectEditor key={surveyId(selectSurvey)} surveyId={surveyId(selectSurvey)} />
+          )}
+          <EmailNotificationEditor key={surveyId(selectSurvey)} surveyId={surveyId(selectSurvey)} readOnly={selectedIsLifecycleLocked} />
         </CollapsibleSection>
       )}
 
       {canViewSensitiveSurveyData(selectSurvey) && (
         <CollapsibleSection title="Survey Respondents">
+          {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
           <RespondentTable
+            key={surveyId(selectSurvey)}
             rows={respondentData}
-            surveyName={selectSurvey?.id || selectSurvey?.name}
-            onRespondentsUpdate={handleRespondentsUpdate}
-            readOnly={!canEditSurvey(selectSurvey)}
+            surveyName={surveyId(selectSurvey)}
+            onRespondentsUpdate={replaceSurveys}
+            readOnly={selectedReadOnly}
           />
         </CollapsibleSection>
       )}

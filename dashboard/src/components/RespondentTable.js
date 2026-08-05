@@ -6,7 +6,6 @@ import api from '../api/axios';
 import { Box, Paper, Typography, Button, Switch } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
-import EmailIcon from '@mui/icons-material/Email';
 import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
 import { LANGUAGES } from '@network-survey/frontend-shared';
@@ -85,7 +84,29 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
         />
       )
     },
-    { field: 'status', headerName: 'Status', width: 120 },
+    {
+      field: 'responseStatus',
+      headerName: 'Response status',
+      width: 145,
+      valueGetter: (_, row) => row.responseStatus || row.response_status || row.status || 'Not started'
+    },
+    {
+      field: 'emailStatus',
+      headerName: 'Email status',
+      width: 140,
+      valueGetter: (_, row) => row.emailStatus || row.email_status || 'Not queued'
+    },
+    {
+      field: 'lastEmailAttempt',
+      headerName: 'Last email attempt',
+      width: 190,
+      valueGetter: (_, row) => row.lastEmailAttempt || row.last_email_attempt || null,
+      valueFormatter: (value) => {
+        if (!value) return '—';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+      }
+    },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -96,24 +117,6 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
         <TableMenuCell
           row={params.row}
           actions={[
-            {
-              label: 'Send Reminder',
-              icon: <EmailIcon fontSize="small" />,
-              handler: async (row) => {
-                try {
-                  const response = await api.post('/testEmail', {
-                    email: row.email,
-                    surveyName,
-                    language: row.language
-                  });
-                  alert(response.data?.message || 'Email sent successfully via test route!');
-                } catch (error) {
-                  const errorMsg = error.response?.data?.message || error.message || 'An unknown error occurred';
-                  console.error('Error sending reminder:', error);
-                  alert('Failed to send reminder: ' + errorMsg);
-                }
-              }
-            },
             {
               label: 'Delete Respondent',
               icon: <DeleteIcon fontSize="small" />,
@@ -150,6 +153,9 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
       }));
       setTableRows(updatedRows);
       setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+    } else {
+      setTableRows([]);
+      setOriginalRows([]);
     }
   }, [rows]);
 

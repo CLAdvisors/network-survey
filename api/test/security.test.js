@@ -42,6 +42,7 @@ const {
   validateRequiredAnswers,
   normalizeQuestionNames,
   formatRespondentChoice,
+  isTrustedStateChangingOrigin,
 } = require('../server');
 
 test('question schema requiredness is explicit, typed, and validates submitted answers', () => {
@@ -771,13 +772,19 @@ test('authenticated question update rejects nested, unknown, and invalid-identit
     }
     if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
     if (/LEFT JOIN organization_memberships/.test(sql)) {
-      return { rows: [{ id: 'survey-id', name: 'Survey A', role: 'editor', questions: { elements: [] } }] };
+      return { rows: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Survey A', role: 'editor', questions: { elements: [] } }] };
     }
     return { rows: [], rowCount: 0 };
   };
   let persisted = false;
   pool.connect = async () => ({
-    query: async () => { persisted = true; return { rows: [], rowCount: 0 }; },
+    query: async (sql) => {
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 };
+      if (/FOR UPDATE OF s/.test(sql)) return { rows: [{ id: '11111111-1111-4111-8111-111111111111', name: 'Survey A', role: 'editor', lifecycle_status: 'draft', questions: { elements: [] } }] };
+      if (/jsonb_object_keys/.test(sql)) return { rows: [{ max_question_number: '0' }] };
+      if (/UPDATE Survey/i.test(sql)) { persisted = true; return { rows: [], rowCount: 1 }; }
+      return { rows: [], rowCount: 0 };
+    },
     release() {}
   });
 
@@ -906,7 +913,7 @@ test('authenticated question updates allocate above historical response keys for
     if (/sessions/i.test(sql)) return { rows: [], rowCount: 1 };
     if (/LEFT JOIN organization_memberships/.test(sql)) {
       return { rows: [{
-        id: 'history-survey-id', name: 'History Survey', role: 'editor', questions: persistedQuestions,
+        id: '22222222-2222-4222-8222-222222222222', name: 'History Survey', role: 'editor', questions: persistedQuestions,
       }] };
     }
     if (/jsonb_object_keys/.test(sql)) {
@@ -919,9 +926,15 @@ test('authenticated question updates allocate above historical response keys for
   const updates = [];
   pool.connect = async () => ({
     query: async (sql, values) => {
-      updates.push({ sql, values });
-      persistedQuestions = /SET title =/.test(sql) ? values[1] : values[0];
-      return { rows: [{ name: 'History Survey' }], rowCount: 1 };
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 };
+      if (/FOR UPDATE OF s/.test(sql)) return { rows: [{ id: '22222222-2222-4222-8222-222222222222', name: 'History Survey', role: 'editor', lifecycle_status: 'draft', questions: persistedQuestions }] };
+      if (/jsonb_object_keys/.test(sql)) { historicalQueries.push({ sql, values }); return { rows: [{ max_question_number: historicalMaximum }] }; }
+      if (/UPDATE (Survey|survey)/.test(sql)) {
+        updates.push({ sql, values });
+        persistedQuestions = /SET title =/.test(sql) ? values[1] : values[0];
+        return { rows: [{ name: 'History Survey' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
     },
     release() {}
   });
@@ -991,20 +1004,20 @@ test('authenticated question updates allocate above historical response keys for
     ['question_13', 'question_14', 'question_16']);
   assert.equal(addAfterDelete.body.questions.claNextQuestionNumber, 17);
 
-  assert.equal(historicalQueries.length, 4);
+  assert.equal(historicalQueries.length, 3, 'invalid client metadata is rejected before taking the lifecycle lock');
   for (const { sql, values } of historicalQueries) {
     assert.match(sql, /jsonb_object_keys/);
     assert.match(sql, /\^question_\(\[1-9\]\[0-9\]\*\)\$/);
     assert.match(sql, /r\.survey_id = \$1 OR \(r\.survey_id IS NULL AND r\.survey_name = \$2\)/);
-    assert.deepEqual(values, ['history-survey-id', 'History Survey']);
+    assert.deepEqual(values, ['22222222-2222-4222-8222-222222222222', 'History Survey']);
   }
-  assert.deepEqual(updates[0].values, [reorderedAndImported.body.questions, 'history-survey-id']);
-  assert.deepEqual(updates[1].values, ['Imported', csvAdd.body.questions, 'history-survey-id']);
+  assert.deepEqual(updates[0].values, [reorderedAndImported.body.questions, '22222222-2222-4222-8222-222222222222']);
+  assert.deepEqual(updates[1].values, ['Imported', csvAdd.body.questions, '22222222-2222-4222-8222-222222222222']);
   assert.deepEqual(updates[2].values, [
     { ...csvAdd.body.questions, elements: csvAdd.body.questions.elements.slice(0, 2) },
-    'history-survey-id',
+    '22222222-2222-4222-8222-222222222222',
   ]);
-  assert.deepEqual(updates[3].values, [addAfterDelete.body.questions, 'history-survey-id']);
+  assert.deepEqual(updates[3].values, [addAfterDelete.body.questions, '22222222-2222-4222-8222-222222222222']);
 });
 
 test('/api/user enforces required answers and accepts omitted optional answers', async (t) => {
@@ -1045,8 +1058,11 @@ test('/api/user enforces required answers and accepts omitted optional answers',
   const persisted = [];
   pool.connect = async () => ({
     query: async (sql, values) => {
-      persisted.push({ sql, values });
-      return { rowCount: 1, rows: [] };
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 };
+      if (/FROM Respondent r[\s\S]+JOIN Survey s/.test(sql)) return { rows: [{ respondent_id:91,response:null,can_respond:true,survey_id:'survey-requiredness-id' }] };
+      if (/SELECT questions FROM Survey/.test(sql)) return { rows: [{ questions: schema }] };
+      if (/UPDATE respondent SET response/.test(sql)) { persisted.push({ sql, values }); return { rowCount: 1, rows: [] }; }
+      return { rowCount: 0, rows: [] };
     },
     release() {}
   });
@@ -1098,7 +1114,7 @@ test('/api/user enforces required answers and accepts omitted optional answers',
   assert.deepEqual(persisted[0].values[0].question_2, ['one', 'two']);
   assert.equal(persisted[0].values[0].question_5, undefined, 'hidden required answer may be omitted');
   assert.equal(typeof persisted[0].values[0].timeStamp, 'string');
-  assert.equal(queryCalls.filter(({ sql }) => /SELECT questions FROM Survey/.test(sql)).length, 3);
+  assert.equal(queryCalls.filter(({ sql }) => /SELECT questions FROM Survey/.test(sql)).length, 0, 'schema reads use the locked submission transaction, not the pool');
 });
 
 test('/api/user rejects nested required omissions and answer constraints before persistence', async (t) => {
@@ -1128,7 +1144,13 @@ test('/api/user rejects nested required omissions and answer constraints before 
   };
   const persisted = [];
   pool.connect = async () => ({
-    query: async (sql, values) => { persisted.push({ sql, values }); return { rowCount: 1, rows: [] }; },
+    query: async (sql, values) => {
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 };
+      if (/FROM Respondent r[\s\S]+JOIN Survey s/.test(sql)) return { rows: [{ can_respond:true,survey_id:'survey-constraints-id' }] };
+      if (/SELECT questions FROM Survey/.test(sql)) return { rows: [{ questions: schema }] };
+      if (/UPDATE respondent SET response/.test(sql)) { persisted.push({ sql, values }); return { rowCount: 1, rows: [] }; }
+      return { rowCount: 0, rows: [] };
+    },
     release() {},
   });
 
@@ -1197,7 +1219,14 @@ test('/api/user validates lazy tagbox answers against exact same-survey responde
   };
   const persisted = [];
   pool.connect = async () => ({
-    query: async (sql, values) => { persisted.push({ sql, values }); return { rows: [], rowCount: 1 }; },
+    query: async (sql, values) => {
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql)) return { rows: [], rowCount: 0 };
+      if (/FROM Respondent r[\s\S]+JOIN Survey s/.test(sql)) return { rows: [{ can_respond:true,survey_id:'survey-a-id' }] };
+      if (/SELECT questions FROM Survey/.test(sql)) return { rows: [{ questions: schema }] };
+      if (/SELECT r\.name, r\.contact_info/.test(sql)) return pool.query(sql, values);
+      if (/UPDATE respondent SET response/.test(sql)) { persisted.push({ sql, values }); return { rows: [], rowCount: 1 }; }
+      return { rows: [], rowCount: 0 };
+    },
     release() {},
   });
 
@@ -1480,6 +1509,14 @@ test('signed demo links load configured questions and real respondents but canno
   const wrongSurvey = await request(app).get('/api/questions').query({ surveyName: 'Survey B', demoToken: token });
   assert.equal(wrongSurvey.status, 403);
   assert.equal(queryCount, 2);
+});
+
+test('hosted cookie-authenticated mutations require the exact dashboard Origin', () => {
+  const base = { stateChanging: true, userId: 1, dashboardOrigin: 'https://dashboard.test', nodeEnv: 'prod' };
+  assert.equal(isTrustedStateChangingOrigin({ ...base, origin: undefined }), false);
+  assert.equal(isTrustedStateChangingOrigin({ ...base, origin: 'https://evil.test' }), false);
+  assert.equal(isTrustedStateChangingOrigin({ ...base, origin: 'https://dashboard.test' }), true);
+  assert.equal(isTrustedStateChangingOrigin({ ...base, stateChanging: false, origin: undefined }), true);
 });
 
 test('dashboard/admin endpoints require authentication', async () => {
@@ -1918,10 +1955,11 @@ test('member management, invite, reset, and audit routes are present with requir
   assert.match(serverSource, /app\.post\('\/api\/password-reset\/request'/);
   assert.match(serverSource, /app\.post\('\/api\/password-reset\/complete'/);
   assert.match(serverSource, /eventType: 'member\.updated'/);
-  assert.match(serverSource, /eventType: 'survey\.archived'/);
+  const lifecycleSource = fs.readFileSync(path.join(__dirname, '../lifecycle.js'), 'utf8');
+  assert.match(lifecycleSource, /'survey\.archived'/);
 });
 
-test('/api/testEmail rejects arbitrary recipients instead of falling back to another respondent token', async (t) => {
+test('/api/testEmail disables the legacy untracked respondent reminder path', async (t) => {
   const originalQuery = pool.query;
   const originalConnect = pool.connect;
   t.after(() => {
@@ -1959,14 +1997,6 @@ test('/api/testEmail rejects arbitrary recipients instead of falling back to ano
   pool.connect = async () => ({
     query: async (sql, values) => {
       sendTestQueries.push({ sql, values });
-      if (/SELECT text, invitation_subject FROM email/.test(sql)) {
-        return { rows: [{ text: 'Hello {{link}}', invitation_subject: 'Invitation' }] };
-      }
-      if (/SELECT uuid FROM Respondent/.test(sql)) {
-        assert.match(sql, /lower\(contact_info\) = lower\(\$3\)/);
-        assert.deepEqual(values, ['11111111-1111-4111-8111-111111111111', 'Survey A', 'attacker@example.com']);
-        return { rows: [] };
-      }
       return { rows: [], rowCount: 0 };
     },
     release() {}
@@ -1980,9 +2010,9 @@ test('/api/testEmail rejects arbitrary recipients instead of falling back to ano
     .post('/api/testEmail')
     .send({ surveyName: 'Survey A', language: 'English', email: 'attacker@example.com' });
 
-  assert.equal(res.status, 404);
-  assert.match(res.body.message, /Reminders can only be sent/);
-  assert.equal(sendTestQueries.some((call) => /SELECT uuid FROM Respondent/.test(call.sql)), true);
+  assert.equal(res.status, 410);
+  assert.equal(res.body.error, 'reminders_not_available');
+  assert.equal(sendTestQueries.length, 0);
 });
 
 test('dashboard read-only tables hide edit controls and demo email avoids public demo token', () => {
@@ -1999,8 +2029,8 @@ test('dashboard read-only tables hide edit controls and demo email avoids public
   assert.match(respondentTable, /surveyName,/);
   assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);
   assert.doesNotMatch(serverSource, /sendMail\(email, 'demo'/);
-  assert.match(serverSource, /lower\(contact_info\) = lower\(\$3\)/);
-  assert.match(serverSource, /No active respondent token found/);
+  assert.match(serverSource, /app\.post\('\/api\/surveys\/:surveyId\/demo-email'/);
+  assert.match(serverSource, /createDemoToken\(survey\.id, survey\.name\)/);
 });
 
 test('demo seed is local-guarded, idempotent, and uses real respondent tokens', () => {
@@ -2288,11 +2318,13 @@ test('survey create organization defaulting handles none, one, multiple, and pla
   assert.equal(res.statusCode, 400);
 });
 
-test('startSurvey email_sent update and survey archive implementation are scoped and non-destructive', () => {
-  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
-  assert.match(serverSource, /UPDATE Respondent SET email_sent = true WHERE contact_info = ANY\(\$1\) AND survey_name = \$2/);
-  assert.match(serverSource, /UPDATE survey SET archived_at = CURRENT_TIMESTAMP, archived_by_user_id = \$1 WHERE id = \$2/);
-  assert.doesNotMatch(serverSource, /DELETE FROM email WHERE survey_name[\s\S]+DELETE FROM respondent WHERE survey_name[\s\S]+DELETE FROM survey WHERE name/);
+test('provider acceptance dual-write and survey archive are stable-ID scoped and non-destructive', () => {
+  const workerSource = fs.readFileSync(path.join(__dirname, '../email-worker.js'), 'utf8');
+  const lifecycleSource = fs.readFileSync(path.join(__dirname, '../lifecycle.js'), 'utf8');
+  assert.match(workerSource, /UPDATE respondent SET email_sent=true WHERE respondent_id=\$1 AND survey_id=\$2/);
+  assert.match(lifecycleSource, /UPDATE survey SET archived_at=now\(\),archived_by_user_id=\$1/);
+  assert.match(lifecycleSource, /cancellation_requested_at/);
+  assert.doesNotMatch(lifecycleSource, /DELETE FROM (email|respondent|survey)/i);
 });
 
 test('/api/names rejects demo and does not query/return respondent names', async (t) => {

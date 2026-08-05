@@ -225,11 +225,11 @@ function buildChildEnv(overrides) {
   };
 }
 
-function startService({ name, cwd, env }) {
+function startService({ name, cwd, env, command = `${npmCommand} run dev` }) {
   let child;
 
   try {
-    child = spawn(`${npmCommand} run dev`, {
+    child = spawn(command, {
       cwd,
       env: buildChildEnv(env),
       shell: true,
@@ -414,6 +414,14 @@ async function main() {
   });
 
   await waitForHttpOk(config.apiHealthUrl, 30000);
+
+  console.log('Starting durable email worker...');
+  startService({
+    name: 'email-worker',
+    cwd: path.join(repoRoot, 'api'),
+    command: `${npmCommand} run worker:dev`,
+    env: { EMAIL_WORKER_ENV: 'local', RELEASE_REVISION: 'local' },
+  });
 
   console.log('Starting dashboard and survey app...');
   startService({

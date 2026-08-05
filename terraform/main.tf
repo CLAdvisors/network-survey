@@ -255,16 +255,29 @@ resource "aws_s3_object" "api_config" {
   bucket = aws_s3_bucket.config_bucket.id
   key    = "configs/.env.prod"
   content = templatefile("./templates/env.tmpl", {
-    db_host                       = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
-    db_port                       = aws_db_instance.postgres.port
-    db_name                       = aws_db_instance.postgres.db_name
-    db_user                       = var.db_user
-    db_password_parameter_name    = local.db_password_parameter_name
-    frontend_url                  = local.frontend_url
-    survey_url                    = local.survey_url
-    session_secret_parameter_name = local.session_secret_parameter_name
-    session_cookie_name           = local.session_cookie_name
-    resend_api_key_parameter_name = local.resend_api_key_parameter_name
+    db_host                                 = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
+    db_port                                 = aws_db_instance.postgres.port
+    db_name                                 = aws_db_instance.postgres.db_name
+    db_user                                 = var.db_user
+    db_password_parameter_name              = local.db_password_parameter_name
+    frontend_url                            = local.frontend_url
+    survey_url                              = local.survey_url
+    session_secret_parameter_name           = local.session_secret_parameter_name
+    session_cookie_name                     = local.session_cookie_name
+    email_worker_environment                = local.is_prod ? "prod" : "staging"
+    survey_delivery_v2_enabled              = false
+    legacy_start_enabled                    = false
+    email_rate_per_second                   = local.is_prod ? 4 : 1
+    email_rate_budget_environment           = local.is_prod ? "prod" : "staging"
+    resend_api_key_parameter_name           = local.resend_api_key_parameter_name
+    cla_production_cutover                  = false
+    bootstrap_admin_username                = null
+    bootstrap_admin_password_parameter_name = null
+    bootstrap_admin_email                   = null
+    bootstrap_organization_name             = ""
+    bootstrap_organization_slug             = ""
+    bootstrap_platform_admin                = false
+    bootstrap_account_mode                  = "local"
   })
 }
 

@@ -19,7 +19,7 @@ import api from "../api/axios";
 import { LANGUAGES } from "@network-survey/frontend-shared";
 const HEADER = "Language,Text\n";
 
-const EmailNotificationEditor = ({ surveyId }) => {
+const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
   const theme = useTheme();
   const [selectedLanguage, setSelectedLanguage] = useState(null);
   const [notificationText, setNotificationText] = useState("");
@@ -38,9 +38,16 @@ const EmailNotificationEditor = ({ surveyId }) => {
 
   // Fetch notifications for the survey
   useEffect(() => {
+    const controller = new AbortController();
+    setNotifications({});
+    setSelectedLanguage(null);
+    setNotificationText('');
+    setOriginalText('');
+    setHasChanges(false);
     const fetchNotifications = async () => {
         try {
-          const response = await api.get(`/survey-notifications/${surveyId}`);
+          const response = await api.get(`/survey-notifications/${surveyId}`, { signal: controller.signal });
+          if (controller.signal.aborted) return;
           setNotifications(response.data.notifications);
     
         //   set available languages to all languages
@@ -66,6 +73,7 @@ const EmailNotificationEditor = ({ surveyId }) => {
             setOriginalText("");
           }
         } catch (error) {
+          if (controller.signal.aborted) return;
           console.error("Failed to fetch notifications:", error);
           setAlert({
             show: true,
@@ -74,9 +82,8 @@ const EmailNotificationEditor = ({ surveyId }) => {
           });
         }
       };
-    if (surveyId) {
-      fetchNotifications();
-    }
+    if (surveyId) fetchNotifications();
+    return () => controller.abort();
   }, [surveyId]);
 
   // Update the notification text and original text when the selected language changes
@@ -98,12 +105,14 @@ const EmailNotificationEditor = ({ surveyId }) => {
   };
 
   const handleTextChange = (event) => {
+    if (readOnly) return;
     const newText = event.target.value;
     setNotificationText(newText);
     setHasChanges(newText !== originalText);
   };
 
   const handleSave = async () => {
+    if (readOnly) return;
     try {
     const csvData = HEADER + LANGUAGES.map(lang => {
         const text = lang.label === selectedLanguage.label ? `"${notificationText.replace(/"/g, '""')}"` : notifications[lang.label] ? `"${notifications[lang.label].replace(/"/g, '""')}"` : '""';
@@ -138,6 +147,13 @@ const EmailNotificationEditor = ({ surveyId }) => {
       });
     }
   };
+
+  useEffect(() => {
+    if (readOnly && hasChanges) {
+      setNotificationText(originalText.replace(/"/g, ''));
+      setHasChanges(false);
+    }
+  }, [readOnly, hasChanges, originalText]);
 
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
@@ -227,7 +243,8 @@ const EmailNotificationEditor = ({ surveyId }) => {
       }}
     >
       <Box sx={{ mb: 2 }}>
-        <Collapse in={alert.show}>
+        {readOnly && <Alert severity="info" sx={{ mb: 2 }}>Notification templates are read-only after a survey has been launched.</Alert>}
+        <Collapse {...{ in: alert.show }}>
           <Alert
             severity={alert.type}
             action={
@@ -275,6 +292,7 @@ const EmailNotificationEditor = ({ surveyId }) => {
             component="label"
             startIcon={<UploadFileIcon />}
             size="small"
+            disabled={readOnly}
           >
             Upload
             <input
@@ -289,12 +307,13 @@ const EmailNotificationEditor = ({ surveyId }) => {
 
       <EditableTableWrapper
         onSave={handleSave}
-        hasChanges={hasChanges}
+        hasChanges={!readOnly && hasChanges}
         setHasChanges={setHasChanges}
       >
         <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <Autocomplete
             value={selectedLanguage || null}
+            disabled={readOnly}
             onChange={handleLanguageChange}
             options={LANGUAGES}
             getOptionLabel={(option) => option?.label || ""}
@@ -315,6 +334,7 @@ const EmailNotificationEditor = ({ surveyId }) => {
             label="Notification Text"
             value={notificationText}
             onChange={handleTextChange}
+            disabled={readOnly}
             variant="outlined"
             placeholder={
               selectedLanguage

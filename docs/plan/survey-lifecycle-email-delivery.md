@@ -1,7 +1,7 @@
 # Survey lifecycle and reliable email delivery plan
 
-**Status:** Proposed implementation plan  
-**Branch:** `plan/survey-lifecycle-email-delivery`  
+**Status:** Proposed implementation plan
+**Branch:** `plan/survey-lifecycle-email-delivery`
 **Scope:** API, PostgreSQL/Liquibase, background worker, dashboard UX, deployment, and operations
 
 ## 1. Outcome

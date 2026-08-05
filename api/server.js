@@ -16,6 +16,8 @@ const { Model, Serializer, Question } = require('survey-core');
 
 dotenvFlow.config();
 
+const { ResendProvider, reserveProviderRate } = require('./email');
+const lifecycle = require('./lifecycle');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -25,10 +27,8 @@ if (!Serializer.findClass('draggableranking')) {
   }
   Serializer.addClass('draggableranking', [], () => new QuestionDraggableRankingModel(''), 'question');
 }
+lifecycle.setSurveyDefinitionValidator(validateSurveyDefinition);
 
-// Create a new instance of the Pool.
-// DB_SSL enables TLS (RDS enforces it); DB_SSL_CA points at the RDS CA bundle
-// so the server certificate is actually verified.
 const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
@@ -36,287 +36,53 @@ const pool = new Pool({
   port: process.env.DB_PORT,
   database: process.env.DB_NAME || 'ONA',
   ssl: process.env.DB_SSL === 'true'
-    ? {
-        ca: process.env.DB_SSL_CA ? fs.readFileSync(process.env.DB_SSL_CA, 'utf8') : undefined,
-        rejectUnauthorized: Boolean(process.env.DB_SSL_CA),
-      }
+    ? { ca: process.env.DB_SSL_CA ? fs.readFileSync(process.env.DB_SSL_CA, 'utf8') : undefined,
+        rejectUnauthorized: Boolean(process.env.DB_SSL_CA) }
     : undefined,
 });
-
 const resend = resendApiKey ? new Resend(resendApiKey) : null;
+const directSurveyProvider = resendApiKey ? new ResendProvider({ apiKey: resendApiKey }) : null;
 
-const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-<html lang="en">
+async function reserveSynchronousEmailRate() {
+  const environment = process.env.EMAIL_RATE_BUDGET_ENV || lifecycle.environmentName(process.env);
+  const rate = Math.max(1, Number(process.env.EMAIL_RATE_PER_SECOND || 5));
+  const deadline = Date.now() + Math.max(1000, Number(process.env.SYNC_EMAIL_RATE_WAIT_MS || 10000));
+  while (Date.now() < deadline) {
+    if (await reserveProviderRate(pool, environment, rate)) return;
+    await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 150)));
+  }
+  const error = new Error('Email provider rate budget is busy; retry shortly.');
+  error.statusCode = 503;
+  throw error;
+}
 
-  <head data-id="__react-email-head"></head>
-  <div id="__react-email-preview" style="display:none;overflow:hidden;line-height:1px;opacity:0;max-height:0;max-width:0">You&#x27;re now ready to take your CLA survey!
-  </div>
-
-  <body data-id="__react-email-body" style="background-color:#f6f9fc;font-family:-apple-system,BlinkMacSystemFont,&quot;Segoe UI&quot;,Roboto,&quot;Helvetica Neue&quot;,Ubuntu,sans-serif">
-    <table align="center" width="100%" data-id="__react-email-container" role="presentation" cellSpacing="0" cellPadding="0" border="0" style="max-width:37.5em;background-color:#ffffff;margin:0 auto;padding:20px 0 48px;margin-bottom:64px">
-      <tbody>
-        <tr style="width:100%">
-          <td>
-            <table align="center" width="100%" data-id="react-email-section" style="padding:0 48px" border="0" cellPadding="0" cellSpacing="0" role="presentation">
-              <tbody>
-                <tr>
-                  <td><img data-id="react-email-img" alt="Logo" src="https://i.postimg.cc/4nkbg08K/logo.png" width="189" height="49" style="display:block;outline:none;border:none;text-decoration:none;margin-top:1.0rem;" />
-                    <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />`, 
-                    `<a href="`, `" data-id="react-email-button" target="_blank" style="background-color:#42B4AF;border-radius:5px;color:#fff;font-size:16px;font-weight:bold;text-decoration:none;text-align:center;display:inline-block;width:100%;line-height:100%;max-width:100%;padding:10px 10px"><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%;mso-text-raise:15" hidden>&nbsp;</i><![endif]--></span><span style="max-width:100%;display:inline-block;line-height:120%;mso-padding-alt:0px;mso-text-raise:7.5px">Start your survey</span><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%" hidden>&nbsp;</i><![endif]--></span></a>
-                    <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
-                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">View our <a href="https://stripe.com/docs" data-id="react-email-link" target="_blank" style="color:#556cd6;text-decoration:none">privacy policy</a> .</p>
-                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem. Morbi sed erat non ex mollis pulvinar ut eu nisi.</p>
-                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">— The CLA team</p>
-                    <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
-                    <p data-id="react-email-text" style="font-size:12px;line-height:16px;margin:16px 0;color:#8898aa">Contemporary Leadership Advisors, 299 Park Ave, New York, NY 10171</p>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </body>
-
-</html>`];
-
-const loremIpsum = `<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem.</p> 
-<p>Morbi sed erat non ex mollis pulvinar ut eu nisi. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed gravida cursus pellentesque. Aliquam in lectus et ex ultricies sodales a.</p>`; 
-
+// Account/demo mail remains bounded request work in Phase 1. Resend resolves
+// provider errors in {error}; only a response containing an id is accepted.
 async function sendAccountEmail({ to, subject, html, text }) {
-  if (!resend) {
-    return { sent: false, message: 'Email delivery is not configured; deliver the returned link manually.' };
-  }
-
+  if (!resend) return { sent: false, message: 'Email is not configured; deliver the returned link manually.' };
   try {
-    await resend.emails.send({
-      from: 'CLA Survey <survey@cladvisors.com>',
-      to,
-      subject,
-      html,
-      text,
-    });
-    return { sent: true };
+    await reserveSynchronousEmailRate();
+    const result = await resend.emails.send({ from: 'CLA Survey <survey@cladvisors.com>', to, subject, html, text });
+    if (result?.error || !result?.data?.id) throw new Error(result?.error?.message || 'Provider response did not include a message ID');
+    return { sent: true, providerMessageId: result.data.id };
   } catch (error) {
-    console.error(`Failed to send account email to ${to}:`, error.message);
-    return { sent: false, message: 'Email delivery failed; deliver the returned link manually.' };
+    console.error('Account email provider request failed:', String(error.message || error).slice(0, 500));
+    return { sent: false, message: 'Email provider request failed; deliver the returned link manually.' };
   }
 }
 
-function buildSurveyEmailHtml(text, link) {
-  const formattedText = (`<p>${text.replace(/"/g, '')}</p>`)
-    .replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
-  return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + link + EMAIL_HTML[2];
+function buildSurveyEmailHtml(text, link, language = 'en') {
+  return require('./email').renderInvitation({ bodyText: text, link, language }).html;
 }
 
-async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {
-  try {
-    if (!resend) {
-      throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
-    }
-
-    const customLink = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(surveyName)}&userId=${encodeURIComponent(id)}`;
-    const emailData = {
-      from: 'CLA Survey <survey@cladvisors.com>',
-      to: email,
-      subject,
-      html: buildSurveyEmailHtml(text, customLink),
-      surveyName
-    };
-
-    // Add delay to respect rate limit
-    await rateLimitedSend(emailData);
-
-  } catch (error) {
-    console.error(`Failed to send email to ${email}:`, error);
-    throw error;
-  }
-}
-
-async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Network Survey') {
-  if (!resend) {
-    throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
-  }
-  if (!process.env.SURVEY_URL) {
-    throw new Error('Missing SURVEY_URL environment variable');
-  }
-
+async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Network Survey', language = 'en') {
+  if (!directSurveyProvider) throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
+  await reserveSynchronousEmailRate();
   const link = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(survey.name)}&demoToken=${encodeURIComponent(demoToken)}`;
-  const result = await resend.emails.send({
-    from: 'CLA Survey <survey@cladvisors.com>',
-    to: email,
-    subject: `[Demo] ${subject}`,
-    html: buildSurveyEmailHtml(text, link),
-  });
-  if (result?.error) throw new Error(result.error.message || 'Email delivery failed');
+  const rendered = require('./email').renderInvitation({ bodyText: text, link, language });
+  return directSurveyProvider.send({ from: 'CLA Survey <survey@cladvisors.com>', to: email, subject: `[Demo] ${subject}`, ...rendered },
+    { idempotencyKey: `survey-demo/${crypto.randomUUID()}` });
 }
-
-// Queue for managing email sending with rate limiting
-const emailQueue = [];
-let isProcessing = false;
-const RATE_LIMIT = 10; // emails per second
-const DELAY = 1000; // 1 second delay between batches
-
-async function rateLimitedSend(emailData) {
-  // Add email to queue
-  emailQueue.push(emailData);
-  
-  // Start processing if not already running
-  if (!isProcessing) {
-    isProcessing = true;
-    await processEmailQueue();
-  }
-}
-
-async function processEmailQueue() {
-  while (emailQueue.length > 0) {
-    // Process up to RATE_LIMIT emails at once
-    const batch = emailQueue.splice(0, RATE_LIMIT);
-    
-    // Send batch of emails and track successful sends
-    const results = await Promise.all(batch.map(async (emailData) => {
-      try {
-        await resend.emails.send(emailData);
-        // Extract recipient email from emailData
-        return { success: true, email: emailData.to };
-      } catch (error) {
-        console.error(`Failed to send email to ${emailData.to}:`, error);
-        return { success: false, email: emailData.to };
-      }
-    }));
-
-    // Update email_sent status for successful sends
-    const successfulBySurvey = results.reduce((grouped, result) => {
-      if (!result.success) return grouped;
-      const surveyName = batch.find(emailData => emailData.to === result.email)?.surveyName;
-      if (!surveyName) return grouped;
-      grouped[surveyName] = grouped[surveyName] || [];
-      grouped[surveyName].push(result.email);
-      return grouped;
-    }, {});
-    for (const [surveyName, successfulEmails] of Object.entries(successfulBySurvey)) {
-      if (successfulEmails.length > 0) {
-        try {
-          await pool.query(
-            'UPDATE Respondent SET email_sent = true WHERE contact_info = ANY($1) AND survey_name = $2',
-            [successfulEmails, surveyName]
-          );
-        } catch (error) {
-          console.error('Failed to update email_sent status:', error);
-        }
-      }
-    }
-
-    // Wait for rate limit window if more emails remain
-    if (emailQueue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, DELAY));
-    }
-  }
-  
-  isProcessing = false;
-}
-
-// User test email function (allow admin user to send test email to themselves)
-async function sendTestMail(email, survey, lang) {
-  const client = await pool.connect();
-  try {
-    const query = `SELECT text, invitation_subject FROM email WHERE ${legacySurveyPredicate()} AND lang = $3`;
-    const values = [survey.id, survey.name, lang];
-    const response = await client.query(query, values);
-    
-    if (!response.rows || response.rows.length === 0) {
-      throw new Error(`Email template not found for survey '${survey.name}' in language '${lang}'`);
-    }
-
-    const text = response.rows[0].text;
-    if (text === undefined || text === null) {
-      throw new Error(`Email text is undefined for survey '${survey.name}'`);
-    }
-
-    const respondentResult = await client.query(
-      `SELECT uuid FROM Respondent
-       WHERE ${legacySurveyPredicate()}
-         AND can_respond = true
-         AND uuid IS NOT NULL
-         AND lower(contact_info) = lower($3)
-       ORDER BY respondent_id
-       LIMIT 1`,
-      [survey.id, survey.name, email]
-    );
-    const respondentToken = respondentResult.rows[0]?.uuid;
-    if (!respondentToken) {
-      const error = new Error(`No active respondent token found for '${email}' on survey '${survey.name}'. Reminders can only be sent to that respondent's own email address.`);
-      error.statusCode = 404;
-      throw error;
-    }
-
-    await sendMail(email, respondentToken, survey.name, text, response.rows[0].invitation_subject);
-  } finally {
-    client.release();
-  }
-}
-
-async function startSurvey(survey){
-  // Pull all users from the database
-  const client = await pool.connect();
-  const query = `SELECT name, contact_info, uuid, lang FROM Respondent WHERE ${legacySurveyPredicate()} AND can_respond = true`;
-  const values = [survey.id, survey.name];
-  let respondents = [];
-  let emails = [];
-  await client.query(query, values)
-    .then(response => {
-        respondents = response.rows.map(row => ({
-            userName: row.name,
-            email: row.contact_info,
-            userId: row.uuid,
-            language: row.lang
-        }));
-    });
-
-  // Pull the email text from the database for each language
-  const emailQuery = `SELECT lang, text, invitation_subject FROM email WHERE ${legacySurveyPredicate()}`;
-  const emailValues = [survey.id, survey.name];
-  await client.query(emailQuery, emailValues)
-    .then(response => {
-        emails = response.rows.map(row => ({
-            language: row.lang,
-            text: row.text,
-            subject: row.invitation_subject
-        }));
-    });
-    // Create a map from language to email text
-    const emailMap = emails.reduce((map, email) => {
-      map[email.language.replace(/"/g, "").replace(/'/g, "")] = {
-        text: '<p>' + email.text + '</p>',
-        subject: email.subject,
-      };
-      return map;
-    }, {});
-    
-    const missingLanguages = [...new Set(
-      respondents
-        .filter(respondent => !emailMap[respondent.language])
-        .map(respondent => respondent.language)
-    )];
-    if (missingLanguages.length > 0) {
-      throw new Error(`Invitation templates are missing for: ${missingLanguages.join(', ')}`);
-    }
-
-    // Send the emails
-    respondents.forEach(respondent => {
-      const invitation = emailMap[respondent.language];
-      sendMail(
-        respondent.email,
-        respondent.userId,
-        survey.name,
-        invitation.text.replace(/"/g, "").replace(/'/g, ""),
-        invitation.subject
-      );
-    });
-  }
-// sendMail('bgarcia2324@gmail.com', 'byVHldRI2ZgaOXNhE-ih7', 'GEEEEEE');
 
 // Function to execute a query
 async function executeQuery(query, values = []) {
@@ -469,13 +235,15 @@ app.use(cors({
     if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
-      console.warn(`CORS rejected origin: ${origin} (Allowed: ${allowedOrigins.join(', ')})`);
-      callback(new Error('Not allowed by CORS'));
+      console.warn(`CORS withheld for origin: ${origin} (Allowed: ${allowedOrigins.join(', ')})`);
+      // Continue without CORS headers so authenticated mutation middleware can
+      // return its stable 403 instead of Express converting a CORS error to 500.
+      callback(null, false);
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key']
 }));
 
 app.set('trust proxy', 1);
@@ -490,18 +258,44 @@ app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  // Per-environment cookie name: staging and prod share the .bennetts.work
-  // cookie domain, so a shared name would let them clobber each other
-  name: process.env.SESSION_COOKIE_NAME || 'sessionId',
+  // Host-only v2 cookie: sibling static hosts must never receive API sessions.
+  name: process.env.SESSION_COOKIE_NAME || 'ona_session_v2',
   cookie: {
     secure: process.env.NODE_ENV === 'prod', // Only use secure in production
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    sameSite: 'lax',  // Changed from 'strict' to 'lax' for better compatibility
-    path: '/',
-    domain: process.env.NODE_ENV === 'prod' ? '.bennetts.work' : undefined
+    sameSite: 'lax',
+    path: '/'
   }
 }));
+function isTrustedStateChangingOrigin({ stateChanging, userId, origin, dashboardOrigin, nodeEnv }) {
+  if (!stateChanging || !userId) return true;
+  const hosted = ['prod', 'production'].includes(String(nodeEnv || '').toLowerCase());
+  if (hosted) return Boolean(dashboardOrigin) && origin === dashboardOrigin;
+  return !origin || (Boolean(dashboardOrigin) && origin === dashboardOrigin);
+}
+
+// Explicitly retire the old parent-domain cookie during the controlled re-login rollout.
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === 'prod') {
+    // Expire both legacy parent-domain names during the forced v2 re-login.
+    // New Terraform config uses a distinct host-only SESSION_COOKIE_NAME.
+    for (const legacyName of ['sessionId', 'sessionId-staging']) {
+      res.append('Set-Cookie', `${legacyName}=; Max-Age=0; Path=/; Domain=.bennetts.work; Secure; HttpOnly; SameSite=Lax`);
+    }
+  }
+  const trustedOrigin = isTrustedStateChangingOrigin({
+    stateChanging: !['GET', 'HEAD', 'OPTIONS'].includes(req.method),
+    userId: req.session?.userId,
+    origin: req.get('Origin')?.replace(/\/$/, ''),
+    dashboardOrigin: process.env.FRONTEND_URL?.replace(/\/$/, ''),
+    nodeEnv: process.env.NODE_ENV,
+  });
+  if (!trustedOrigin) {
+    return res.status(403).json({ error: 'csrf_origin_invalid', message: 'A trusted dashboard Origin is required.' });
+  }
+  next();
+});
 const isLocalEnvironment = ['development', 'dev', 'local', 'test'].includes(process.env.NODE_ENV || 'development');
 const allowPublicSignup = process.env.ALLOW_PUBLIC_SIGNUP === 'true' || (isLocalEnvironment && process.env.ALLOW_PUBLIC_SIGNUP !== 'false');
 
@@ -655,7 +449,7 @@ async function updateLastLoginIfSupported(userId) {
   }
 }
 
-async function validateRespondentToken(surveyName, userId) {
+async function validateRespondentToken(surveyName, userId, queryable = pool, lockSurvey = false) {
   if (!surveyName || surveyName === 'undefined' || surveyName === 'null') {
     return { ok: false, status: 400, message: 'Survey name is required.' };
   }
@@ -664,13 +458,15 @@ async function validateRespondentToken(surveyName, userId) {
     return { ok: false, status: 400, message: 'User ID is required.' };
   }
 
-  const result = await pool.query(
-    `SELECT r.respondent_id, r.response, r.can_respond, r.survey_id
+  const result = await queryable.query(
+    `SELECT r.respondent_id, r.response, r.can_respond, r.survey_id, s.lifecycle_status
      FROM Respondent r
      JOIN Survey s ON (r.survey_id = s.id OR (r.survey_id IS NULL AND r.survey_name = s.name))
      WHERE r.uuid = $1
        AND r.survey_name = $2
-       AND s.archived_at IS NULL`,
+       AND s.archived_at IS NULL
+       AND s.lifecycle_status = 'active'
+       ${lockSurvey ? 'FOR SHARE OF s' : ''}`,
     [userId, surveyName]
   );
 
@@ -819,7 +615,12 @@ app.post('/api/logout', (req, res) => {
       console.error('Logout error:', err);
       return res.status(500).json({ error: 'Error during logout' });
     }
-    res.clearCookie(process.env.SESSION_COOKIE_NAME || 'sessionId');
+    res.clearCookie(process.env.SESSION_COOKIE_NAME || 'ona_session_v2', {
+      secure: process.env.NODE_ENV === 'prod',
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+    });
     res.json({ success: true });
   });
 });
@@ -1397,7 +1198,8 @@ async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRol
 
   const result = await pool.query(
     `SELECT s.id, s.name, s.title, s.creation_date, s.questions,
-            s.organization_id, s.created_by_user_id, om.role
+            s.organization_id, s.created_by_user_id, s.lifecycle_status, s.lifecycle_version,
+            s.started_at, s.closed_at, s.archived_at, om.role
      FROM Survey s
      LEFT JOIN organization_memberships om
        ON om.organization_id = s.organization_id AND om.user_id = $1
@@ -1430,11 +1232,11 @@ async function insertSurvey(name, title, organizationId, createdByUserId) {
   console.log('Survey added successfully!');
   return result.rows[0];
 }
-async function insertUsers(users, deleteRow = null, survey = null) {
-  const client = await pool.connect();
+async function insertUsers(users, deleteRow = null, survey = null, transactionClient = null) {
+  const client = transactionClient || await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    if (!transactionClient) await client.query('BEGIN');
 
     // If there's a row to delete, delete it first
     if (deleteRow) {
@@ -1473,22 +1275,19 @@ async function insertUsers(users, deleteRow = null, survey = null) {
       await client.query(query, values);
     }
 
-    await client.query('COMMIT');
+    if (!transactionClient) await client.query('COMMIT');
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (!transactionClient) await client.query('ROLLBACK');
     console.error('Error in database operation:', error);
     throw error;
   } finally {
-    client.release();
+    if (!transactionClient) client.release();
   }
 }
-async function insertEmails(data, survey = null) {
-  // Start a PostgreSQL client from the pool
-  const client = await pool.connect();
-  console.log(data);
+async function insertEmails(data, survey = null, transactionClient = null) {
+  const client = transactionClient || await pool.connect();
   try {
-    // Begin a transaction
-    await client.query('BEGIN');
+    if (!transactionClient) await client.query('BEGIN');
 
     // Iterate through the emails and insert or update them
     for (const email of data) {
@@ -1513,19 +1312,18 @@ async function insertEmails(data, survey = null) {
       await client.query(query, values);
     }
 
-    await client.query('COMMIT');
-    console.log('Email data inserted or updated successfully!');
+    if (!transactionClient) await client.query('COMMIT');
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (!transactionClient) await client.query('ROLLBACK');
     console.error('Error inserting or updating emails:', error);
     throw error;
   } finally {
-    client.release();
+    if (!transactionClient) client.release();
   }
 }
 
-async function insertQuestions(name, title, json, surveyId = null) {
-  const client = await pool.connect();
+async function insertQuestions(name, title, json, surveyId = null, transactionClient = null) {
+  const client = transactionClient || await pool.connect();
 
   try {
     if (title === undefined || title === null || title === '') {
@@ -1544,7 +1342,7 @@ async function insertQuestions(name, title, json, surveyId = null) {
     console.error('Error occurred:', error);
     throw error;
   } finally {
-    await client.release();
+    if (!transactionClient) client.release();
   }
 }
 async function insertResponses(responses, userId, surveyName, surveyId = null) {
@@ -2212,34 +2010,13 @@ app.post('/api/surveys/:surveyId/copy', express.json(), requireAuth, async (req,
   }
 });
 
-app.post('/api/testEmail', express.json(), requireAuth, async (req, res) => {
-  const data  = req.body;
-  const surveyName = data.surveyName;
-  const language = data.language;
-  const email = data.email;
-
-  if (!surveyName) {
-    res.status(400).json({ message: 'Survey name is required.' });
-    return;
-  }
-  if (!language) {
-    res.status(400).json({ message: 'Language name is required.' });
-    return;
-  }
-  if (!email) {
-    res.status(400).json({ message: 'Email name is required.' });
-    return;
-  }
-
-  try {
-    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
-    if (!survey) return;
-    await sendTestMail(email, survey, language);
-    res.status(200).json({ message: 'Test email sent successfully!' });
-  } catch (error) {
-    console.error(error);
-    res.status(error.statusCode || 500).json({ message: error.message || 'Error occurred while sending test email.' });
-  }
+app.post('/api/testEmail', express.json(), requireAuth, async (_req, res) => {
+  // Real-respondent reminders must not bypass durable delivery history.
+  // Phase 3 replaces this compatibility route with an audited reminder run.
+  res.status(410).json({
+    error: 'reminders_not_available',
+    message: 'Respondent reminders are temporarily unavailable while durable reminder tracking is being introduced.',
+  });
 });
 
 app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoEmailRateLimiter, async (req, res) => {
@@ -2278,24 +2055,68 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
   }
 });
 
-app.post('/api/startSurvey', express.json(), requireAuth, async (req, res) => {
-  const data  = req.body;
-  const surveyName = data.surveyName;
+function sendLifecycleError(res, error) {
+  if (error instanceof lifecycle.LifecycleError) return res.status(error.status).json(lifecycle.publicError(error));
+  console.error('Lifecycle operation failed:', String(error.message || error).slice(0, 500));
+  return res.status(500).json({ error: 'internal_error', message: 'Lifecycle operation failed.' });
+}
+function launchResponse(res, launch) {
+  const location = `/api/surveys/${launch.survey_id}/launches/${launch.id}`;
+  return res.status(launch.replayed ? 200 : 202).location(location).json({
+    launch,
+    lifecycleStatus: launch.lifecycleStatus,
+    message: launch.replayed ? 'Existing invitation launch returned; no new work was queued.' : 'Invitation launch queued.',
+  });
+}
 
-  if (!surveyName) {
-    res.status(400).json({ message: 'Survey name is required.' });
-    return;
-  }
-
+app.get('/api/surveys/:surveyId/launch-readiness', requireAuth, async (req, res) => {
   try {
-    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
-    if (!survey) return;
-    await startSurvey(survey);
-    res.status(200).json({ message: 'Survey started successfully!' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to start survey.' });
+    const readiness = await lifecycle.getReadiness(pool, req.user, req.params.surveyId);
+    if (process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true') {
+      readiness.blockers.push({ code: 'launch_disabled', message: 'Durable survey launch is not enabled.' });
+      readiness.blockerCount = Number(readiness.blockerCount || 0) + 1;
+      readiness.canLaunch = false;
+    }
+    res.json(readiness);
   }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.post('/api/surveys/:surveyId/launches', express.json(), requireAuth, async (req, res) => {
+  if (process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true') return res.status(503).json({ error: 'launch_disabled', message: 'Survey launch is temporarily disabled.' });
+  try { launchResponse(res, await lifecycle.launchSurvey(pool, req.user, req.params.surveyId, { kind: req.body?.kind, idempotencyKey: req.get('Idempotency-Key') })); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.get('/api/surveys/:surveyId/launches', requireAuth, async (req, res) => {
+  try { res.json({ launches: await lifecycle.listLaunches(pool, req.user, req.params.surveyId) }); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.get('/api/surveys/:surveyId/launches/:launchId', requireAuth, async (req, res) => {
+  try { res.json({ launch: await lifecycle.listLaunches(pool, req.user, req.params.surveyId, req.params.launchId) }); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.get('/api/surveys/:surveyId/deliveries', requireAuth, async (req, res) => {
+  try { res.json(await lifecycle.listDeliveries(pool, req.user, req.params.surveyId, req.query)); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.post('/api/surveys/:surveyId/close', express.json(), requireAuth, async (req, res) => {
+  try { res.json(await lifecycle.transitionSurvey(pool, req.user, req.params.surveyId, 'close')); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.post('/api/surveys/:surveyId/reopen', express.json(), requireAuth, async (req, res) => {
+  try { res.json(await lifecycle.transitionSurvey(pool, req.user, req.params.surveyId, 'reopen')); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+
+// Deprecated compatibility adapter. It uses a stable server business key and
+// never performs provider I/O in the request.
+app.post('/api/startSurvey', express.json(), requireAuth, async (req, res) => {
+  if (process.env.LEGACY_START_ENABLED !== 'true' || process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true') return res.status(503).json({ error: 'launch_disabled', message: 'Legacy survey launch is disabled.' });
+  if (!req.body?.surveyName) return res.status(400).json({ message: 'Survey name is required.' });
+  try {
+    const survey = await resolveSurveyForUser(req, res, { surveyName: req.body.surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+    launchResponse(res, await lifecycle.launchSurvey(pool, req.user, survey.id, { kind: 'initial', legacy: true }));
+  } catch (error) { sendLifecycleError(res, error); }
 });
 
 app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
@@ -2340,9 +2161,10 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
   try {
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
-    await insertEmails(emailTemplates, survey);
+    await lifecycle.withEditableSurvey(pool, req.user, survey.id, (client, lockedSurvey) => insertEmails(emailTemplates, lockedSurvey, client));
     res.status(200).json({ message: 'Email data updated successfully.' });
   } catch (error) {
+    if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
     console.error('Error updating email templates:', error);
     res.status(500).json({ message: 'Failed to update email data.' });
   } 
@@ -2415,7 +2237,7 @@ app.post('/api/updateTarget', requireAuth, async (req, res) => {
     if (!survey) return;
 
     // Handle the database operations with potential deletion
-    await insertUsers(surveyTargets, deleteRow, survey);
+    await lifecycle.withEditableSurvey(pool, req.user, survey.id, (client, lockedSurvey) => insertUsers(surveyTargets, deleteRow, lockedSurvey, client));
 
     res.status(200).json({ 
       message: 'Respondents updated successfully.',
@@ -2423,6 +2245,7 @@ app.post('/api/updateTarget', requireAuth, async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
     console.error('Error updating respondents:', error);
     res.status(500).json({ 
       message: 'Failed to update respondents', 
@@ -2575,7 +2398,7 @@ app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => 
     if (!survey) return;
 
     // Insert the users into the database
-    await insertUsers(surveyTargets, null, survey);
+    await lifecycle.withEditableSurvey(pool, req.user, survey.id, (client, lockedSurvey) => insertUsers(surveyTargets, null, lockedSurvey, client));
 
     res.status(200).json({ 
       message: 'Survey created successfully.',
@@ -2583,6 +2406,7 @@ app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => 
     }); 
 
   } catch (error) {
+    if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
     console.error('Error processing CSV:', error);
     res.status(500).json({ 
       message: 'Failed to process CSV data',
@@ -2722,52 +2546,48 @@ app.post('/api/updateQuestions', express.json(), requireAuth, async (req, res) =
     } else {
       return res.status(400).json({ message: 'Invalid questions format.' });
     }
+    // Reject malformed definitions before taking the lifecycle write lock; the
+    // same definition is normalized again inside the transaction.
+    validateSurveyDefinition(submittedQuestions);
 
-    const historicalMaximumResult = await pool.query(
-      `SELECT COALESCE(MAX((matched.parts[1])::numeric), 0)::text AS max_question_number
-       FROM Respondent r
-       CROSS JOIN LATERAL jsonb_object_keys(
-         CASE WHEN jsonb_typeof(r.response) = 'object' THEN r.response ELSE '{}'::jsonb END
-       ) AS response_key(key)
-       CROSS JOIN LATERAL regexp_match(response_key.key, '^question_([1-9][0-9]*)$') AS matched(parts)
-       WHERE ${legacySurveyPredicate('r')}`,
-      [survey.id, survey.name]
-    );
-    const historicalMaximum = BigInt(historicalMaximumResult.rows[0]?.max_question_number || 0);
-    const currentCanonicalNames = new Set(
-      (Array.isArray(survey.questions?.elements) ? survey.questions.elements : [])
-        .map((question) => question?.name)
-        .filter((name) => typeof name === 'string' && /^question_[1-9]\d*$/.test(name))
-    );
-    const savedQuestions = normalizeQuestionNames(submittedQuestions, {
-      minimumNextQuestionNumber: historicalMaximum + 1n,
-      currentCanonicalNames,
-      // Survey Creator may discard unknown top-level metadata. Never let its
-      // submitted copy reset the allocation watermark held by the database.
-      persistedNextQuestionNumber: Object.prototype.hasOwnProperty.call(
-        survey.questions || {}, 'claNextQuestionNumber'
-      ) ? survey.questions.claNextQuestionNumber : 1,
+    const savedQuestions = await lifecycle.withEditableSurvey(pool, req.user, survey.id, async (client, lockedSurvey) => {
+      const historicalMaximumResult = await client.query(
+        `SELECT COALESCE(MAX((matched.parts[1])::numeric), 0)::text AS max_question_number
+         FROM Respondent r
+         CROSS JOIN LATERAL jsonb_object_keys(CASE WHEN jsonb_typeof(r.response) = 'object' THEN r.response ELSE '{}'::jsonb END) AS response_key(key)
+         CROSS JOIN LATERAL regexp_match(response_key.key, '^question_([1-9][0-9]*)$') AS matched(parts)
+         WHERE ${legacySurveyPredicate('r')}`,
+        [lockedSurvey.id, lockedSurvey.name]
+      );
+      const historicalMaximum = BigInt(historicalMaximumResult.rows[0]?.max_question_number || 0);
+      const currentCanonicalNames = new Set((lockedSurvey.questions?.elements || []).map((question) => question?.name).filter((name) => typeof name === 'string' && /^question_[1-9]\d*$/.test(name)));
+      const normalized = normalizeQuestionNames(submittedQuestions, {
+        minimumNextQuestionNumber: historicalMaximum + 1n,
+        currentCanonicalNames,
+        persistedNextQuestionNumber: Object.prototype.hasOwnProperty.call(lockedSurvey.questions || {}, 'claNextQuestionNumber') ? lockedSurvey.questions.claNextQuestionNumber : 1,
+      });
+      await insertQuestions(lockedSurvey.name, title, normalized, lockedSurvey.id, client);
+      return normalized;
     });
-    await insertQuestions(survey.name, title, savedQuestions, survey.id);
-
     res.status(200).json({ message: 'Questions created successfully.', questions: savedQuestions });
   } catch (error) {
+    if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
     res.status(400).json({ message: error.message || 'Invalid questions schema.' });
   }
 });
 
 // PUT API endpoint for answer submission
 app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) => {
+  let client;
+  let committed = false;
   try {
     const data = req.body;
     const userId = data.userId;
     const surveyName = data.surveyName;
-
-    const validation = await validateRespondentToken(surveyName, userId);
-    if (!validation.ok) {
-      return res.status(validation.status).json({ message: validation.message });
-    }
-
+    // Cheap denial avoids reserving a connection for invalid public traffic;
+    // authorization is repeated under the lifecycle lock before any write.
+    const preliminary = await validateRespondentToken(surveyName, userId);
+    if (!preliminary.ok) return res.status(preliminary.status).json({ message: preliminary.message });
     let answers;
     try {
       answers = JSON.parse(data.answers);
@@ -2775,13 +2595,14 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
       return res.status(400).json({ message: 'Answers must be valid JSON.' });
     }
     if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
-      return res.status(400).json({
-        message: 'Invalid survey responses.',
-        errors: ['Answers must be an object.']
-      });
+      return res.status(400).json({ message: 'Invalid survey responses.', errors: ['Answers must be an object.'] });
     }
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const validation = await validateRespondentToken(surveyName, userId, client, true);
+    if (!validation.ok) return res.status(validation.status).json({ message: validation.message });
 
-    const schemaResult = await pool.query(
+    const schemaResult = await client.query(
       validation.respondent.survey_id
         ? 'SELECT questions FROM Survey WHERE id = $1'
         : 'SELECT questions FROM Survey WHERE name = $1',
@@ -2812,7 +2633,7 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
     }
     if (requestedLazyTagboxValues.size > 0) {
       const requestedValues = [...requestedLazyTagboxValues];
-      const choicesResult = await pool.query(
+      const choicesResult = await client.query(
         `SELECT r.name, r.contact_info
          FROM Respondent r
          WHERE ${legacySurveyPredicate('r')}
@@ -2829,11 +2650,17 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
     const answerTimeStamp = new Date().toLocaleString();
     answers.timeStamp = answerTimeStamp;
 
-    await insertResponses(answers, userId, surveyName, validation.respondent.survey_id);
+    const updateResult = await client.query('UPDATE respondent SET response=$1 WHERE uuid=$2 AND survey_id=$3', [answers, userId, validation.respondent.survey_id]);
+    if (!updateResult.rowCount) throw new Error('No matching respondent found for survey.');
+    await client.query('COMMIT');
+    committed = true;
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('Error submitting response:', error);
     res.status(500).json({ message: 'Failed to submit response.' });
+  } finally {
+    if (client && !committed) await client.query('ROLLBACK').catch(() => {});
+    if (client) client.release();
   }
 });
 
@@ -3094,14 +2921,22 @@ app.get('/api/results', requireAuth, async (req, res) => {
 app.get('/api/targets', requireAuth, async(req, res) => {
   const { surveyName = '' } = req.query;
 
-  const client = await pool.connect();
+  let client;
+  try { client = await pool.connect(); }
+  catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Failed to retrieve survey targets.' });
+  }
 
   const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: ANALYST_ROLES });
   if (!survey) { client.release(); return; }
 
-  const query = `SELECT name, contact_info, respondent_id, can_respond, lang, response IS NULL AS response_status 
-               FROM Respondent 
-               WHERE ${legacySurveyPredicate()}`;
+  const query = `SELECT r.name, r.contact_info, r.respondent_id, r.can_respond, r.lang, r.response IS NULL AS response_status,
+                 r.email_sent, d.status AS email_status, a.started_at AS last_email_attempt
+               FROM Respondent r
+               LEFT JOIN LATERAL (SELECT status,id FROM survey_email_deliveries WHERE respondent_id=r.respondent_id AND survey_id=r.survey_id ORDER BY created_at DESC LIMIT 1) d ON true
+               LEFT JOIN LATERAL (SELECT started_at FROM survey_email_attempts WHERE delivery_id=d.id ORDER BY attempt_number DESC LIMIT 1) a ON true
+               WHERE ${legacySurveyPredicate('r')}`;
   client.query(query, [survey.id, survey.name])
     .then(response => {
         const respondents = response.rows.map((row, index) => ({
@@ -3110,43 +2945,78 @@ app.get('/api/targets', requireAuth, async(req, res) => {
             email: row.contact_info,
             language: row.lang,
             canRespond: row.can_respond,
-            status: row.response_status ? 'Incomplete' : 'Complete'
+            status: row.response_status ? 'Incomplete' : 'Complete',
+            responseStatus: row.response_status ? 'incomplete' : 'complete',
+            emailStatus: row.email_status || (row.email_sent ? 'legacy_assumed_accepted' : 'not_queued'),
+            lastEmailAttempt: row.last_email_attempt || null
         }));
         res.status(200).json(respondents);
     })
-    .catch(e => console.error(e.stack))
+    .catch((error) => {
+      console.error(error.stack);
+      if (!res.headersSent) res.status(500).json({ message: 'Failed to retrieve survey targets.' });
+    })
     .finally(() => client.release());
 });
 
 // GET API endpoint for a list of current surveys
 app.get('/api/surveys', requireAuth, async (req, res) => {
   // NEW DB CODE
-  const client = await pool.connect();
+  let client;
+  try { client = await pool.connect(); }
+  catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Failed to retrieve surveys.' });
+  }
 
   const query = isPlatformAdmin(req.user) ? `
   SELECT s.id, s.name, s.organization_id, o.name AS organization_name,
          'owner'::text AS role,
-         s.creation_date,
+         s.creation_date, s.lifecycle_status, s.started_at, s.closed_at,
+         COALESCE(starter.display_name, starter.username) AS started_by_name,
+         (SELECT jsonb_build_object(
+           'id', l.id, 'targetCount', count(d.id),
+           'pendingCount', count(*) FILTER (WHERE d.status='pending'),
+           'leasedCount', count(*) FILTER (WHERE d.status='leased'),
+           'retryWaitCount', count(*) FILTER (WHERE d.status='retry_wait'),
+           'acceptedCount', count(*) FILTER (WHERE d.status='accepted'),
+           'failedCount', count(*) FILTER (WHERE d.status='failed'),
+           'uncertainCount', count(*) FILTER (WHERE d.status='uncertain'),
+           'cancelledCount', count(*) FILTER (WHERE d.status='cancelled')
+         ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,
          COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions
   FROM Survey s
   LEFT JOIN organizations o ON o.id = s.organization_id
+  LEFT JOIN users starter ON starter.id = s.started_by_user_id
   LEFT JOIN Respondent r ON (r.survey_id = s.id OR (r.survey_id IS NULL AND r.survey_name = s.name))
   WHERE s.archived_at IS NULL
-  GROUP BY s.id, s.name, s.organization_id, o.name, s.creation_date, s.questions
+  GROUP BY s.id, s.name, s.organization_id, o.name, starter.display_name, starter.username, s.creation_date, s.questions, s.lifecycle_status, s.started_at, s.closed_at
   ORDER BY s.creation_date DESC NULLS LAST
   ` : `
   SELECT s.id, s.name, s.organization_id, o.name AS organization_name,
          om.role,
-         s.creation_date,
+         s.creation_date, s.lifecycle_status, s.started_at, s.closed_at,
+         COALESCE(starter.display_name, starter.username) AS started_by_name,
+         (SELECT jsonb_build_object(
+           'id', l.id, 'targetCount', count(d.id),
+           'pendingCount', count(*) FILTER (WHERE d.status='pending'),
+           'leasedCount', count(*) FILTER (WHERE d.status='leased'),
+           'retryWaitCount', count(*) FILTER (WHERE d.status='retry_wait'),
+           'acceptedCount', count(*) FILTER (WHERE d.status='accepted'),
+           'failedCount', count(*) FILTER (WHERE d.status='failed'),
+           'uncertainCount', count(*) FILTER (WHERE d.status='uncertain'),
+           'cancelledCount', count(*) FILTER (WHERE d.status='cancelled')
+         ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,
          COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions
   FROM Survey s
   JOIN organization_memberships om ON om.organization_id = s.organization_id AND om.user_id = $1
   LEFT JOIN organizations o ON o.id = s.organization_id
+  LEFT JOIN users starter ON starter.id = s.started_by_user_id
   LEFT JOIN Respondent r ON (r.survey_id = s.id OR (r.survey_id IS NULL AND r.survey_name = s.name))
   WHERE s.archived_at IS NULL
-  GROUP BY s.id, s.name, s.organization_id, o.name, om.role, s.creation_date, s.questions
+  GROUP BY s.id, s.name, s.organization_id, o.name, om.role, starter.display_name, starter.username, s.creation_date, s.questions, s.lifecycle_status, s.started_at, s.closed_at
   ORDER BY s.creation_date DESC NULLS LAST
   `;
 
@@ -3161,13 +3031,18 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
         respondents: Math.max(0, Number(row.number_of_respondents || 0) - 1) + "",
         questions: row.number_of_questions + "",
         date: row.creation_date,
+        lifecycleStatus: row.lifecycle_status,
+        startedAt: row.started_at,
+        startedByName: row.started_by_name,
+        closedAt: row.closed_at,
+        latestLaunch: row.latest_launch,
       }));
       // Process the returned JSON data
       res.status(200).json({ surveys });
     })
     .catch(error => {
-      // Handle the error
       console.error(error);
+      if (!res.headersSent) res.status(500).json({ message: 'Failed to retrieve surveys.' });
     })
     .finally(() => client.release());
 });
@@ -3229,56 +3104,14 @@ app.get('/api/user/status', respondentRateLimiter, async (req, res) => {
   }
 });
 
-// Delete survey endpoint
+// Delete survey endpoint (soft archive with atomic cancellation/audit).
 app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
-  const surveyName = req.params.surveyName;
-  console.log("surveyName", surveyName);
-  if (!surveyName) {
-    return res.status(400).json({ message: 'Survey name is required.' });
-  }
-
-  const client = await pool.connect();
-
   try {
-    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: ADMIN_ROLES });
+    const survey = await resolveSurveyForUser(req, res, { surveyName: req.params.surveyName, allowedRoles: ADMIN_ROLES });
     if (!survey) return;
-    await client.query('BEGIN');
-    
-    // Archive survey; keep respondents and email templates for rollback/audit.
-    const result = await client.query(
-      'UPDATE survey SET archived_at = CURRENT_TIMESTAMP, archived_by_user_id = $1 WHERE id = $2 AND archived_at IS NULL RETURNING name',
-      [req.user.id, survey.id]
-    );
-    
-    await client.query('COMMIT');
-
-    await logAuditEvent({
-      organizationId: survey.organization_id,
-      actorUserId: req.user.id,
-      surveyId: survey.id,
-      eventType: 'survey.archived',
-      metadata: { surveyName: survey.name }
-    });
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'Survey not found.' });
-    }
-
-    res.status(200).json({ 
-      message: 'Survey archived successfully.',
-      archivedSurvey: result.rows[0].name
-    });
-
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('Error deleting survey:', error);
-    res.status(500).json({ 
-      message: 'Failed to delete survey', 
-      error: error.message 
-    });
-  } finally {
-    client.release();
-  }
+    const result = await lifecycle.transitionSurvey(pool, req.user, survey.id, 'archive');
+    res.status(200).json({ message: 'Survey archived successfully.', archivedSurvey: survey.name, ...result });
+  } catch (error) { sendLifecycleError(res, error); }
 });
 
 // Delete user endpoint
@@ -3298,10 +3131,10 @@ app.delete('/api/user', requireAuth, async (req, res) => {
   try {
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
-    const result = await client.query(
-      'DELETE FROM respondent WHERE name = $1 AND (survey_id = $2 OR (survey_id IS NULL AND survey_name = $3)) RETURNING name, survey_name',
-      [userName, survey.id, survey.name]
-    );
+    const result = await lifecycle.withEditableSurvey(pool, req.user, survey.id, (transactionClient, lockedSurvey) => transactionClient.query(
+      'DELETE FROM respondent WHERE name = $1 AND survey_id = $2 RETURNING name, survey_name',
+      [userName, lockedSurvey.id]
+    ));
 
     if (result.rowCount === 0) {
       return res.status(404).json({ 
@@ -3315,11 +3148,9 @@ app.delete('/api/user', requireAuth, async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
     console.error('Error deleting user:', error);
-    res.status(500).json({ 
-      message: 'Failed to delete user', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Failed to delete user' });
   } finally {
     client.release();
   }
@@ -3341,30 +3172,14 @@ app.delete('/api/question', requireAuth, async (req, res) => {
     // First, get the current questions
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
-    const currentCanonicalNames = new Set(
-      (Array.isArray(survey.questions?.elements) ? survey.questions.elements : [])
-        .map((question) => question?.name)
-        .filter((name) => typeof name === 'string' && /^question_[1-9]\d*$/.test(name))
-    );
-    // Normalize before removal so the highest allocated identity remains in
-    // the persisted watermark even when it has never appeared in a response.
-    const questions = normalizeQuestionNames(survey.questions, { currentCanonicalNames });
-
-    // Find and remove the question
-    const questionIndex = questions.elements.findIndex(q => q.name === questionName);
-    
-    if (questionIndex === -1) {
-      return res.status(404).json({ message: 'Question not found in survey.' });
-    }
-
-    // Remove the question
-    questions.elements.splice(questionIndex, 1);
-
-    // Update the survey with the modified questions
-    const updateResult = await client.query(
-      'UPDATE survey SET questions = $1 WHERE id = $2 RETURNING name',
-      [questions, survey.id]
-    );
+    const updateResult = await lifecycle.withEditableSurvey(pool, req.user, survey.id, async (transactionClient, lockedSurvey) => {
+      const currentCanonicalNames = new Set((lockedSurvey.questions?.elements || []).map((question) => question?.name).filter((name) => typeof name === 'string' && /^question_[1-9]\d*$/.test(name)));
+      const questions = normalizeQuestionNames(lockedSurvey.questions, { currentCanonicalNames });
+      const questionIndex = questions.elements.findIndex((question) => question.name === questionName);
+      if (questionIndex === -1) throw new lifecycle.LifecycleError(404, 'question_not_found', 'Question not found in survey.');
+      questions.elements.splice(questionIndex, 1);
+      return transactionClient.query('UPDATE survey SET questions=$1 WHERE id=$2 RETURNING name', [questions, lockedSurvey.id]);
+    });
 
     res.status(200).json({
       message: 'Question deleted successfully.',
@@ -3373,11 +3188,9 @@ app.delete('/api/question', requireAuth, async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
     console.error('Error deleting question:', error);
-    res.status(500).json({ 
-      message: 'Failed to delete question', 
-      error: error.message 
-    });
+    res.status(500).json({ message: 'Failed to delete question' });
   } finally {
     client.release();
   }
@@ -3442,4 +3255,5 @@ module.exports = {
   validateRequiredAnswers,
   normalizeQuestionNames,
   formatRespondentChoice,
+  isTrustedStateChangingOrigin,
 };

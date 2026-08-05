@@ -1,76 +1,83 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import MenuCell from './SurveyTableMenuCell';
+import { LifecycleChip } from './SurveyLifecyclePanel';
+import { launchCounts, lifecycleStatus } from './surveyLifecycle';
 
-const columns = [
-  { field: 'id', headerName: 'ID', width: 90, hidden: true },
-  { field: 'name', headerName: 'Survey Name', width: 150 },
-  { field: 'respondents', headerName: 'Respondents', width: 200 },
-  { field: 'questions', headerName: 'Questions', width: 200 },
-  { field: 'date', headerName: 'Creation Date', width: 200 },
-  {
-    field: 'actions',
-    headerName: 'Actions',
-    width: 100,
-    sortable: false,
-    filterable: false,
-    renderCell: (params) => (
-      <MenuCell
-        row={params.row}
-        onSurveyDeleted={params.row.onSurveyDeleted}
-        onSurveyCopied={params.row.onSurveyCopied}
-      />
-    )
-  },
-];
+const SurveyTable = ({
+  rows,
+  selectRow,
+  onSurveyDeleted,
+  onSurveyCopied,
+  selectedSurvey,
+  onLifecycleChange,
+}) => {
+  const tableRows = useMemo(() => (rows || []).map((row) => ({
+    ...row,
+    questions: row.questions === 'null' ? '0' : row.questions,
+  })), [rows]);
 
-const SurveyTable = ({ rows, selectRow, onSurveyDeleted, onSurveyCopied, selectedSurvey }) => {
-  const [tableRows, setTableRows] = useState([]);
-
-  useEffect(() => {
-    if (rows) {
-      const processedRows = rows.map(row => ({
-        ...row,
-        questions: row.questions === "null" ? "0" : row.questions,
-        onSurveyDeleted,
-        onSurveyCopied,
-      }));
-      setTableRows(processedRows);
-    }
-  }, [rows, onSurveyDeleted, onSurveyCopied]);
-
-  const handleRowClick = (params) => {
-    selectRow(params.row);
-  };
+  const columns = useMemo(() => [
+    { field: 'id', headerName: 'ID', width: 90 },
+    { field: 'name', headerName: 'Survey Name', minWidth: 170, flex: 1 },
+    {
+      field: 'lifecycle',
+      headerName: 'Lifecycle',
+      width: 110,
+      sortable: false,
+      renderCell: ({ row }) => <LifecycleChip status={lifecycleStatus(row)} />,
+    },
+    { field: 'respondents', headerName: 'Respondents', width: 125 },
+    { field: 'questions', headerName: 'Questions', width: 110 },
+    {
+      field: 'invitationSummary',
+      headerName: 'Invitation dispatch',
+      width: 210,
+      sortable: false,
+      renderCell: ({ row }) => {
+        const latest = row.latestLaunch || row.latest_launch;
+        if (!latest) return 'Not launched';
+        const counts = launchCounts(latest);
+        return `${counts.accepted} accepted / ${counts.target}${counts.failed ? ` · ${counts.failed} failed` : ''}${counts.uncertain ? ` · ${counts.uncertain} uncertain` : ''}`;
+      },
+    },
+    { field: 'date', headerName: 'Creation Date', width: 170 },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 90,
+      sortable: false,
+      filterable: false,
+      renderCell: ({ row }) => (
+        <MenuCell
+          row={row}
+          onSurveyDeleted={onSurveyDeleted}
+          onSurveyCopied={onSurveyCopied}
+          onLifecycleChange={onLifecycleChange}
+          onViewLifecycle={selectRow}
+        />
+      ),
+    },
+  ], [onSurveyDeleted, onSurveyCopied, onLifecycleChange, selectRow]);
 
   return (
     <div style={{ height: '100%', width: '100%' }}>
       <DataGrid
         rows={tableRows}
         columns={columns}
+        getRowId={(row) => row.id || row.name}
         initialState={{
           pagination: { paginationModel: { pageSize: 10 } },
-          columns: {
-            columnVisibilityModel: {
-              // Hide columns id and lastname.
-              // Other columns will remain visible
-              id: false,
-            },
-          }
+          columns: { columnVisibilityModel: { id: false } },
         }}
         pageSizeOptions={[5, 10, 25, 50, { value: -1, label: 'All' }]}
-        disableSelectionOnClick
-        onRowClick={handleRowClick}
-        components={{
-          Toolbar: GridToolbar,
-        }}
+        disableRowSelectionOnClick
+        onRowClick={(params) => selectRow(params.row)}
+        rowSelectionModel={selectedSurvey ? [selectedSurvey.id || selectedSurvey.name] : []}
+        slots={{ toolbar: GridToolbar }}
         sx={{
-          '& .MuiDataGrid-columnHeader:hover': {
-            backgroundColor: 'rgba(66, 179, 175, 0.3)',
-          },
-          '& .MuiDataGrid-row:hover': {
-            backgroundColor: 'rgba(0, 178, 140, 0.2)',
-          },
+          '& .MuiDataGrid-columnHeader:hover': { backgroundColor: 'rgba(66, 179, 175, 0.3)' },
+          '& .MuiDataGrid-row:hover': { backgroundColor: 'rgba(0, 178, 140, 0.2)' },
         }}
       />
     </div>

@@ -29,6 +29,7 @@ const {
   buildDashboardUrl,
   createDemoToken,
   verifyDemoToken,
+  prepareSurveyForDemo,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
@@ -1366,6 +1367,46 @@ test('demo links are signed, survey-bound, and expire without database state', (
   assert.equal(verifyDemoToken(token, issuedAt + (24 * 60 * 60 * 1000)), null);
 });
 
+test('demo survey preparation uses roster-backed choices without exposing legacy remote URLs', () => {
+  const persisted = {
+    pages: [{ elements: [
+      {
+        type: 'tagbox',
+        name: 'people',
+        choices: ['Stale Person (stale@example.com)'],
+        choicesByUrl: { url: 'https://user:secret@private.example/choices' },
+        defaultValue: ['Stale Person (stale@example.com)'],
+      },
+      {
+        type: 'dropdown',
+        name: 'people_source',
+        choices: ['Stale Source (source@example.com)'],
+      },
+      {
+        type: 'tagbox',
+        name: 'people_from_source',
+        choicesFromQuestion: 'people_source',
+      },
+    ] }],
+  };
+
+  const prepared = prepareSurveyForDemo(persisted);
+  const [tagbox, source, sourcedTagbox] = prepared.pages[0].elements;
+  for (const question of [tagbox, source, sourcedTagbox]) {
+    assert.deepEqual(question.choices, []);
+    assert.equal(question.choicesLazyLoadEnabled, true);
+    assert.equal(question.allowAddNewTag, false);
+    assert.equal(question.choicesFromQuestion, undefined);
+    assert.equal(question.defaultValue, undefined);
+  }
+  assert.equal(tagbox.choicesByUrl, undefined);
+  assert.deepEqual(
+    persisted.pages[0].elements[0].choices,
+    ['Stale Person (stale@example.com)'],
+    'persisted survey schema is not mutated'
+  );
+});
+
 test('signed demo links load configured questions and real respondents but cannot be used for a different survey', async (t) => {
   const originalConnect = pool.connect;
   const originalQuery = pool.query;
@@ -1390,18 +1431,21 @@ test('signed demo links load configured questions and real respondents but canno
         return { rows: [{
           title: 'Configured title',
           questions: { elements: [
-            { type: 'text', name: 'q1' },
+            {
+              type: 'text',
+              name: 'q1',
+              choicesByUrl: { url: 'https://user:secret@private.example/choices' },
+            },
             {
               type: 'tagbox',
               name: 'people',
-              choicesLazyLoadEnabled: true,
               choices: ['Configured Person (configured@example.com)'],
             },
           ] },
         }] };
       }
       assert.match(sql, /FROM Respondent r/);
-      assert.deepEqual(values, [surveyId, 'Survey A', null, '%%', 0, '2']);
+      assert.deepEqual(values, [surveyId, 'Survey A', null, '%%', 0, 100]);
       return { rows: [
         { name: 'Real Person One', contact_info: 'one@example.com', total_count: '2' },
         { name: 'Real Person Two', contact_info: 'two@example.com', total_count: '2' },
@@ -1413,13 +1457,11 @@ test('signed demo links load configured questions and real respondents but canno
   const valid = await request(app).get('/api/questions').query({ surveyName: 'Survey A', demoToken: token });
   assert.equal(valid.status, 200);
   assert.equal(valid.body.title, 'Configured title');
-  assert.deepEqual(
-    valid.body.questions.elements[1].choices,
-    ['Configured Person (configured@example.com)'],
-    'demo links preserve the configured survey schema'
-  );
+  assert.equal(valid.body.questions.elements[0].choicesByUrl, undefined);
+  assert.deepEqual(valid.body.questions.elements[1].choices, []);
+  assert.equal(valid.body.questions.elements[1].choicesLazyLoadEnabled, true);
 
-  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token, take: 2 });
+  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token, take: 1000 });
   assert.equal(names.status, 200);
   assert.deepEqual(names.body, {
     names: [
@@ -1428,6 +1470,12 @@ test('signed demo links load configured questions and real respondents but canno
     ],
     total: 2,
   });
+
+  const invalidPagination = await request(app)
+    .get('/api/names')
+    .query({ surveyName: 'Survey A', demoToken: token, skip: -1 });
+  assert.equal(invalidPagination.status, 400);
+  assert.equal(invalidPagination.body.message, 'Invalid pagination parameters.');
 
   const wrongSurvey = await request(app).get('/api/questions').query({ surveyName: 'Survey B', demoToken: token });
   assert.equal(wrongSurvey.status, 403);

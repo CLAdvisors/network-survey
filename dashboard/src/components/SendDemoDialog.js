@@ -73,6 +73,7 @@ const SendDemoDialog = ({ open, onClose, onSubmit, surveyName, loading = false }
       <DialogContent sx={{ mt: 2 }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Send a no-results demo of “{surveyName}” using its configured email text and survey.
+          The demo includes real respondent names and email addresses, so send it only to a trusted recipient.
         </Typography>
         <TextField
           autoFocus

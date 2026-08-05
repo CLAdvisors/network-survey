@@ -344,10 +344,6 @@ function buildDashboardUrl(path) {
 }
 
 const DEMO_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
-const DEMO_RESPONDENT_CHOICES = Array.from({ length: 100 }, (_, index) => {
-  const number = String(index + 1).padStart(3, '0');
-  return `Demo Person ${number} (demo-person-${number}@example.com)`;
-});
 
 function createDemoToken(surveyId, surveyName, now = Date.now()) {
   const payload = Buffer.from(JSON.stringify({
@@ -380,89 +376,6 @@ function verifyDemoToken(token, now = Date.now()) {
   } catch {
     return null;
   }
-}
-
-function sanitizeSurveyForDemo(value) {
-  const namedDefinitions = new Map();
-  const peopleChoiceSources = new Set();
-
-  const inspect = (node, inheritedTagbox = false) => {
-    if (Array.isArray(node)) {
-      node.forEach((entry) => inspect(entry, inheritedTagbox));
-      return;
-    }
-    if (!node || typeof node !== 'object') return;
-    if (typeof node.name === 'string') {
-      const definitions = namedDefinitions.get(node.name) || [];
-      definitions.push(node);
-      namedDefinitions.set(node.name, definitions);
-    }
-    const isTagbox = inheritedTagbox || node.type === 'tagbox' || node.cellType === 'tagbox';
-    if (isTagbox && typeof node.choicesFromQuestion === 'string') {
-      peopleChoiceSources.add(node.choicesFromQuestion);
-    }
-    Object.entries(node).forEach(([key, nestedValue]) => {
-      inspect(nestedValue, node.cellType === 'tagbox' && key === 'columns');
-    });
-  };
-  inspect(value);
-
-  // Follow chained choicesFromQuestion references so an indirect source cannot
-  // leak persisted respondent values into an externally forwarded demo.
-  const pendingSources = [...peopleChoiceSources];
-  while (pendingSources.length > 0) {
-    const sources = namedDefinitions.get(pendingSources.pop()) || [];
-    sources.forEach((source) => {
-      if (
-        typeof source.choicesFromQuestion === 'string'
-        && !peopleChoiceSources.has(source.choicesFromQuestion)
-      ) {
-        peopleChoiceSources.add(source.choicesFromQuestion);
-        pendingSources.push(source.choicesFromQuestion);
-      }
-    });
-  }
-
-  const sanitize = (node, inheritedTagbox = false) => {
-    if (Array.isArray(node)) {
-      return node.map((entry) => sanitize(entry, inheritedTagbox));
-    }
-    if (!node || typeof node !== 'object') return node;
-
-    const isTagbox = inheritedTagbox || node.type === 'tagbox' || node.cellType === 'tagbox';
-    const sanitized = Object.fromEntries(
-      Object.entries(node).map(([key, nestedValue]) => [
-        key,
-        sanitize(nestedValue, node.cellType === 'tagbox' && key === 'columns'),
-      ])
-    );
-
-    // Legacy schemas may contain remote choice URLs that current validation
-    // rejects. Never disclose or call those URLs from a public demo link.
-    delete sanitized.choicesByUrl;
-
-    if (isTagbox) {
-      sanitized.choices = [];
-      sanitized.choicesLazyLoadEnabled = true;
-      sanitized.choicesLazyLoadPageSize = Number(node.choicesLazyLoadPageSize) > 0
-        ? node.choicesLazyLoadPageSize
-        : 25;
-      sanitized.allowAddNewTag = false;
-      delete sanitized.choicesFromQuestion;
-      delete sanitized.choicesFromQuestionMode;
-      delete sanitized.defaultValue;
-      delete sanitized.defaultValueExpression;
-    } else if (typeof node.name === 'string' && peopleChoiceSources.has(node.name)) {
-      sanitized.choices = [...DEMO_RESPONDENT_CHOICES];
-      delete sanitized.choicesFromQuestion;
-      delete sanitized.choicesFromQuestionMode;
-      delete sanitized.defaultValue;
-      delete sanitized.defaultValueExpression;
-    }
-    return sanitized;
-  };
-
-  return sanitize(value);
 }
 
 app.use(express.json());
@@ -2899,27 +2812,22 @@ app.get('/api/names', respondentRateLimiter, async (req, res) => {
   if (demoToken && (!demoClaims || demoClaims.surveyName !== surveyName)) {
     return res.status(403).json({ message: 'This demo link is invalid or has expired.' });
   }
-  // Demo recipients may be outside the organization. Supply synthetic choices
-  // so people/tagbox questions remain testable without exposing respondent PII.
   if (demoClaims) {
-    const normalizedFilter = String(filter).toLowerCase();
-    const filteredChoices = DEMO_RESPONDENT_CHOICES.filter((choice) =>
-      choice.toLowerCase().includes(normalizedFilter)
+    const activeSurvey = await pool.query(
+      'SELECT 1 FROM Survey WHERE id = $1 AND name = $2 AND archived_at IS NULL',
+      [demoClaims.surveyId, demoClaims.surveyName]
     );
-    const safeSkip = Math.max(0, Number.parseInt(skip, 10) || 0);
-    const safeTake = Math.min(100, Math.max(1, Number.parseInt(take, 10) || 10));
-    return res.status(200).json({
-      names: filteredChoices.slice(safeSkip, safeSkip + safeTake),
-      total: filteredChoices.length,
-    });
+    if (activeSurvey.rows.length === 0) {
+      return res.status(404).json({ message: 'Survey not found.' });
+    }
   }
 
-  const validation = await validateRespondentToken(surveyName, userId);
-  if (!validation.ok) {
+  const validation = demoClaims ? null : await validateRespondentToken(surveyName, userId);
+  if (validation && !validation.ok) {
     return res.status(validation.status).json({ message: validation.message });
   }
 
-  const surveyId = validation.respondent.survey_id;
+  const surveyId = demoClaims?.surveyId || validation.respondent.survey_id;
   const client = await pool.connect();
   
   try {
@@ -2927,14 +2835,14 @@ app.get('/api/names', respondentRateLimiter, async (req, res) => {
       SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
       WHERE ${legacySurveyPredicate('r')}
-      AND r.uuid != $3
+      AND ($3::text IS NULL OR r.uuid != $3)
       AND (r.name ILIKE $4 OR r.contact_info ILIKE $4)
       ORDER BY r.name
       OFFSET $5
       LIMIT $6;
     `;
 
-    const values = [surveyId, surveyName, userId, `%${filter}%`, skip, take];
+    const values = [surveyId, surveyName, demoClaims ? null : userId, `%${filter}%`, skip, take];
     const result = await client.query(query, values);
 
     const filteredNames = result.rows.map(formatRespondentChoice);
@@ -3055,10 +2963,7 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
       return res.status(404).json({ message: 'Survey not found.' });
     }
 
-    const questions = demoClaims
-      ? sanitizeSurveyForDemo(result.rows[0].questions)
-      : result.rows[0].questions;
-    res.status(200).json({ title: result.rows[0].title, questions });
+    res.status(200).json({ title: result.rows[0].title, questions: result.rows[0].questions });
   } catch (error) {
     console.error('Error fetching survey questions:', error);
     res.status(500).json({ message: 'Failed to fetch survey questions.' });
@@ -3435,7 +3340,6 @@ module.exports = {
   buildDashboardUrl,
   createDemoToken,
   verifyDemoToken,
-  sanitizeSurveyForDemo,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,

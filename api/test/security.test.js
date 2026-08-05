@@ -29,7 +29,7 @@ const {
   buildDashboardUrl,
   createDemoToken,
   verifyDemoToken,
-  sanitizeSurveyForDemo,
+  prepareSurveyForDemo,
   READ_SURVEY_ROLES,
   ANALYST_ROLES,
   EDITOR_ROLES,
@@ -1367,84 +1367,89 @@ test('demo links are signed, survey-bound, and expire without database state', (
   assert.equal(verifyDemoToken(token, issuedAt + (24 * 60 * 60 * 1000)), null);
 });
 
-test('demo schema sanitization recursively replaces legacy people choices', () => {
-  const privateChoices = ['Private Person (private@example.com)'];
-  const schema = {
-    pages: [{
-      elements: [{
-        type: 'panel',
-        elements: [{ type: 'tagbox', name: 'nested', choices: privateChoices }],
-      }, {
-        type: 'paneldynamic',
-        templateElements: [{
-          type: 'matrixdropdown',
-          cellType: 'tagbox',
-          columns: [{ name: 'person', choicesFromQuestion: 'matrix_source', defaultValue: privateChoices }],
-        }],
-      }, {
-        type: 'dropdown', name: 'private_source', choicesFromQuestion: 'second_source', defaultValue: privateChoices[0],
-      }, {
-        type: 'tagbox', name: 'from_source', choicesFromQuestion: 'private_source', defaultValue: privateChoices,
-      }, {
-        type: 'dropdown', name: 'matrix_source', choices: privateChoices, defaultValue: privateChoices[0],
-      }, {
-        type: 'dropdown', name: 'second_source', choices: privateChoices,
-      }, {
-        type: 'text', name: 'private_source', choicesByUrl: { url: 'https://user:secret@private.example/choices' },
-      }],
-    }],
+test('demo survey preparation uses roster-backed choices without exposing legacy remote URLs', () => {
+  const persisted = {
+    pages: [{ elements: [
+      {
+        type: 'tagbox',
+        name: 'people',
+        choices: ['Stale Person (stale@example.com)'],
+        choicesByUrl: { url: 'https://user:secret@private.example/choices' },
+        defaultValue: ['Stale Person (stale@example.com)'],
+      },
+      {
+        type: 'dropdown',
+        name: 'people_source',
+        choices: ['Stale Source (source@example.com)'],
+      },
+      {
+        type: 'tagbox',
+        name: 'people_from_source',
+        choicesFromQuestion: 'people_source',
+      },
+    ] }],
   };
 
-  const sanitized = sanitizeSurveyForDemo(schema);
-  const elements = sanitized.pages[0].elements;
-  const nestedTagbox = elements[0].elements[0];
-  const matrixTagbox = elements[1].templateElements[0].columns[0];
-  const sourceQuestion = elements[2];
-  const sourceTagbox = elements[3];
-  const matrixSourceQuestion = elements[4];
-  const secondSourceQuestion = elements[5];
-  const duplicateSourceName = elements[6];
-  for (const question of [nestedTagbox, matrixTagbox, sourceTagbox]) {
+  const prepared = prepareSurveyForDemo(persisted);
+  const [tagbox, source, sourcedTagbox] = prepared.pages[0].elements;
+  for (const question of [tagbox, source, sourcedTagbox]) {
     assert.deepEqual(question.choices, []);
     assert.equal(question.choicesLazyLoadEnabled, true);
     assert.equal(question.allowAddNewTag, false);
     assert.equal(question.choicesFromQuestion, undefined);
     assert.equal(question.defaultValue, undefined);
   }
-  for (const source of [sourceQuestion, matrixSourceQuestion, secondSourceQuestion, duplicateSourceName]) {
-    assert.equal(source.choices.length, 100);
-    assert.equal(source.choices[0], 'Demo Person 001 (demo-person-001@example.com)');
-    assert.equal(source.choices.includes(privateChoices[0]), false);
-    assert.equal(source.defaultValue, undefined);
-    assert.equal(source.choicesByUrl, undefined);
-  }
-  assert.deepEqual(schema.pages[0].elements[0].elements[0].choices, privateChoices, 'persisted schema is not mutated');
+  assert.equal(tagbox.choicesByUrl, undefined);
+  assert.deepEqual(
+    persisted.pages[0].elements[0].choices,
+    ['Stale Person (stale@example.com)'],
+    'persisted survey schema is not mutated'
+  );
 });
 
-test('signed demo links load survey questions but cannot be used for a different survey', async (t) => {
+test('signed demo links load configured questions and real respondents but cannot be used for a different survey', async (t) => {
   const originalConnect = pool.connect;
-  t.after(() => { pool.connect = originalConnect; });
+  const originalQuery = pool.query;
+  t.after(() => {
+    pool.connect = originalConnect;
+    pool.query = originalQuery;
+  });
 
   const surveyId = '11111111-1111-4111-8111-111111111111';
   const token = createDemoToken(surveyId, 'Survey A');
   let queryCount = 0;
+  pool.query = async (sql, values) => {
+    assert.match(sql, /SELECT 1 FROM Survey/);
+    assert.deepEqual(values, [surveyId, 'Survey A']);
+    return { rows: [{ '?column?': 1 }] };
+  };
   pool.connect = async () => ({
     query: async (sql, values) => {
       queryCount += 1;
-      assert.match(sql, /WHERE \(id = \$1/);
-      assert.deepEqual(values, [surveyId, 'Survey A']);
-      return { rows: [{
-        title: 'Configured title',
-        questions: { elements: [
-          { type: 'text', name: 'q1' },
-          {
-            type: 'tagbox',
-            name: 'people',
-            choicesLazyLoadEnabled: true,
-            choices: ['Private Person (private@example.com)'],
-          },
-        ] },
-      }] };
+      if (/SELECT questions, title/.test(sql)) {
+        assert.deepEqual(values, [surveyId, 'Survey A']);
+        return { rows: [{
+          title: 'Configured title',
+          questions: { elements: [
+            {
+              type: 'text',
+              name: 'q1',
+              choicesByUrl: { url: 'https://user:secret@private.example/choices' },
+            },
+            {
+              type: 'tagbox',
+              name: 'people',
+              choices: ['Configured Person (configured@example.com)'],
+            },
+          ] },
+        }] };
+      }
+      assert.match(sql, /FROM Respondent r/);
+      assert.deepEqual(values, [surveyId, 'Survey A', null, '%%', 0, 100]);
+      return { rows: [
+        { name: 'Real Person One', contact_info: 'one@example.com', total_count: '2' },
+        { name: 'Real Person Two', contact_info: 'two@example.com', total_count: '2' },
+      ] };
     },
     release() {},
   });
@@ -1452,21 +1457,29 @@ test('signed demo links load survey questions but cannot be used for a different
   const valid = await request(app).get('/api/questions').query({ surveyName: 'Survey A', demoToken: token });
   assert.equal(valid.status, 200);
   assert.equal(valid.body.title, 'Configured title');
-  assert.deepEqual(valid.body.questions.elements[1].choices, [], 'demo schemas scrub persisted people choices');
+  assert.equal(valid.body.questions.elements[0].choicesByUrl, undefined);
+  assert.deepEqual(valid.body.questions.elements[1].choices, []);
+  assert.equal(valid.body.questions.elements[1].choicesLazyLoadEnabled, true);
 
-  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token, take: 2 });
+  const names = await request(app).get('/api/names').query({ surveyName: 'Survey A', demoToken: token, take: 1000 });
   assert.equal(names.status, 200);
   assert.deepEqual(names.body, {
     names: [
-      'Demo Person 001 (demo-person-001@example.com)',
-      'Demo Person 002 (demo-person-002@example.com)',
+      'Real Person One (one@example.com)',
+      'Real Person Two (two@example.com)',
     ],
-    total: 100,
-  }, 'demo links use synthetic choices instead of exposing respondent PII');
+    total: 2,
+  });
+
+  const invalidPagination = await request(app)
+    .get('/api/names')
+    .query({ surveyName: 'Survey A', demoToken: token, skip: -1 });
+  assert.equal(invalidPagination.status, 400);
+  assert.equal(invalidPagination.body.message, 'Invalid pagination parameters.');
 
   const wrongSurvey = await request(app).get('/api/questions').query({ surveyName: 'Survey B', demoToken: token });
   assert.equal(wrongSurvey.status, 403);
-  assert.equal(queryCount, 1);
+  assert.equal(queryCount, 2);
 });
 
 test('dashboard/admin endpoints require authentication', async () => {

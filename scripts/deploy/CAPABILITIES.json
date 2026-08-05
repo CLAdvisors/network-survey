@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "webhook_ingest": 1,
+  "webhook_projection": 1,
+  "suppression_enforcement": 1,
+  "schema": {
+    "email_delivery": 6,
+    "webhook_delivery_truth": 1
+  }
+}

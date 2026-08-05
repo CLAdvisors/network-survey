@@ -16,11 +16,14 @@ SOURCE_DIR=${1:?usage: remote-deploy.sh <extracted-artifact-dir>}
 SERVICE_DIR=/opt/service
 PM2_APP=ona-api
 PM2_WORKER=ona-email-worker
+PM2_WEBHOOK_WORKER=ona-email-webhook-worker
 
 source "$SERVICE_DIR/deploy.env"
 export AWS_DEFAULT_REGION
 
 REVISION=$(cat "$SOURCE_DIR/REVISION")
+node "$SOURCE_DIR/deploy/validate-release-capabilities.js" "$SOURCE_DIR"
+test -f "$SOURCE_DIR/api/webhook-worker.js" || { echo "Release lacks dedicated webhook worker" >&2; exit 1; }
 DEPLOYMENT_ID="${REVISION}-$(date +%s)-$$"
 PREVIOUS_RELEASE=$(readlink -f "$SERVICE_DIR/current" 2>/dev/null || true)
 RELEASE_DIR="$SERVICE_DIR/releases/$REVISION"
@@ -83,6 +86,34 @@ echo "==> Resolving runtime secrets from SSM Parameter Store"
 append_secret_from_ssm DB_PASSWORD DB_PASSWORD_PARAMETER
 append_secret_from_ssm SESSION_SECRET SESSION_SECRET_PARAMETER
 append_secret_from_ssm RESEND_API_KEY RESEND_API_KEY_PARAMETER
+if [ "$(get_env_value RESEND_WEBHOOK_INGEST_ENABLED)" = "true" ]; then
+  append_secret_from_ssm RESEND_WEBHOOK_SECRET RESEND_WEBHOOK_SECRET_PARAMETER
+fi
+PREVIOUS_WEBHOOK_PARAMETER=$(get_env_value RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER)
+if [ -n "$PREVIOUS_WEBHOOK_PARAMETER" ]; then
+  OPTIONAL_SSM_ERROR=$(mktemp)
+  set +e
+  PREVIOUS_WEBHOOK_SECRET=$(aws ssm get-parameter --name "$PREVIOUS_WEBHOOK_PARAMETER" --with-decryption --query 'Parameter.Value' --output text 2>"$OPTIONAL_SSM_ERROR")
+  OPTIONAL_SSM_STATUS=$?
+  set -e
+  if [ "$OPTIONAL_SSM_STATUS" -ne 0 ]; then
+    if grep -q 'ParameterNotFound' "$OPTIONAL_SSM_ERROR"; then
+      PREVIOUS_WEBHOOK_SECRET=
+    else
+      rm -f "$OPTIONAL_SSM_ERROR"
+      echo "Unable to read optional previous webhook secret parameter" >&2
+      exit 1
+    fi
+  fi
+  rm -f "$OPTIONAL_SSM_ERROR"
+  if [ -n "$PREVIOUS_WEBHOOK_SECRET" ] && [ "$PREVIOUS_WEBHOOK_SECRET" != "None" ]; then
+    ENV_KEY=RESEND_WEBHOOK_PREVIOUS_SECRET SECRET_VALUE="$PREVIOUS_WEBHOOK_SECRET" node - <<'NODE' >> "$RELEASE_DIR/api/.env.prod"
+const value = process.env.SECRET_VALUE || '';
+process.stdout.write(`RESEND_WEBHOOK_PREVIOUS_SECRET=${JSON.stringify(value)}\n`);
+NODE
+  fi
+  unset PREVIOUS_WEBHOOK_SECRET
+fi
 WORKER_ENV=$(get_env_value EMAIL_WORKER_ENV)
 case "$WORKER_ENV" in
   staging|prod) ;;
@@ -121,6 +152,11 @@ liquibase \
   --searchPath="$RELEASE_DIR/db" \
   update
 
+# Registration/suppression activation can raise the rollback floor. Validate
+# the artifact marker against durable controls before any process or symlink is
+# changed.
+node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$RELEASE_DIR" --database
+
 if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
   echo "==> Ensuring bootstrap dashboard administrator"
   BOOTSTRAP_ADMIN_PASSWORD=$(get_secret_from_ssm BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)
@@ -137,6 +173,49 @@ if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
   unset BOOTSTRAP_ADMIN_PASSWORD
 fi
 
+CLAIMING_WAS_ENABLED=false
+WEBHOOK_PROCESSING_WAS_ENABLED=false
+SENDING_WAS_ENABLED=false
+SENDING_CONTROL_REVISION=0
+WEBHOOK_CONTROL_REVISION=0
+PREVIOUS_WEBHOOK_DEPLOYMENT_ID=""
+restore_pre_activation_handoff() {
+  local status=$?
+  if [ "$status" -ne 0 ] && { [ "$CLAIMING_WAS_ENABLED" = true ] || [ "$SENDING_WAS_ENABLED" = true ] || [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ]; } && [ -n "$PREVIOUS_RELEASE" ]; then
+    local previous_revision
+    previous_revision=$(cat "$PREVIOUS_RELEASE/REVISION" 2>/dev/null || true)
+    if [ -n "$previous_revision" ]; then
+      set +e
+      if [ "$CLAIMING_WAS_ENABLED" = true ]; then
+        (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$previous_revision" NODE_ENV=prod node ../deploy/set-email-claiming.js true failed-pre-activation-handoff)
+      fi
+      if [ "$SENDING_WAS_ENABLED" = true ]; then
+        (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$previous_revision" NODE_ENV=prod node ../deploy/set-email-sending.js true "$SENDING_CONTROL_REVISION" deploy failed-pre-activation-handoff)
+      fi
+      if [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ] && [ -n "$PREVIOUS_WEBHOOK_DEPLOYMENT_ID" ]; then
+        (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$previous_revision" EXPECTED_DEPLOYMENT_ID="$PREVIOUS_WEBHOOK_DEPLOYMENT_ID" NODE_ENV=prod node ../deploy/set-webhook-processing.js true "$WEBHOOK_CONTROL_REVISION" deploy failed-pre-activation-handoff)
+      fi
+      set -e
+    fi
+  fi
+}
+trap restore_pre_activation_handoff EXIT
+
+SENDING_CONTROL=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
+require('dotenv').config({path:'.env.prod'});
+const {Pool}=require('pg');
+const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+pool.query('SELECT sending_enabled,control_revision FROM email_sending_control WHERE environment=$1',[process.env.EMAIL_WORKER_ENV]).then(r=>process.stdout.write(`${r.rows[0]?.sending_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}`)).finally(()=>pool.end());
+NODE
+)
+SENDING_WAS_ENABLED=${SENDING_CONTROL%%:*}
+SENDING_CONTROL_REVISION=${SENDING_CONTROL#*:}
+if [ "$SENDING_WAS_ENABLED" = true ]; then
+  echo "==> Pausing all application email sends for release handoff"
+  (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" NODE_ENV=prod node ../deploy/set-email-sending.js false "$SENDING_CONTROL_REVISION" deploy release-handoff)
+  SENDING_CONTROL_REVISION=$((SENDING_CONTROL_REVISION + 1))
+fi
+
 CLAIMING_WAS_ENABLED=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
 require('dotenv').config({path:'.env.prod'});
 const {Pool}=require('pg');
@@ -149,17 +228,52 @@ if [ "$CLAIMING_WAS_ENABLED" = true ]; then
   (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" NODE_ENV=prod node ../deploy/set-email-claiming.js false release-handoff)
 fi
 
+WEBHOOK_CONTROL=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
+require('dotenv').config({path:'.env.prod'});
+const {Pool}=require('pg');
+const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+pool.query(`SELECT c.processing_enabled,c.control_revision,(SELECT split_part(h.worker_instance,'/',1) FROM email_webhook_worker_heartbeats h WHERE h.environment=c.environment AND h.heartbeat_at>now()-interval '45 seconds' ORDER BY h.heartbeat_at DESC LIMIT 1) AS deployment_id FROM email_webhook_worker_control c WHERE c.environment=$1`,[process.env.EMAIL_WORKER_ENV]).then(r=>process.stdout.write(`${r.rows[0]?.processing_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}:${r.rows[0]?.deployment_id??''}`)).finally(()=>pool.end());
+NODE
+)
+WEBHOOK_PROCESSING_WAS_ENABLED=${WEBHOOK_CONTROL%%:*}
+WEBHOOK_CONTROL_REST=${WEBHOOK_CONTROL#*:}
+WEBHOOK_CONTROL_REVISION=${WEBHOOK_CONTROL_REST%%:*}
+PREVIOUS_WEBHOOK_DEPLOYMENT_ID=${WEBHOOK_CONTROL_REST#*:}
+if [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ]; then
+  echo "==> Pausing webhook projection for release handoff"
+  (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" NODE_ENV=prod node ../deploy/set-webhook-processing.js false "$WEBHOOK_CONTROL_REVISION" deploy release-handoff)
+  WEBHOOK_CONTROL_REVISION=$((WEBHOOK_CONTROL_REVISION + 1))
+fi
+
 echo "==> Activating release"
 chown -R ubuntu:ubuntu "$RELEASE_DIR"
 ACTIVATED=false
 HANDOFF_REENABLED=false
+WEBHOOK_HANDOFF_REENABLED=false
+SENDING_HANDOFF_REENABLED=false
 restore_previous_release() {
   local status=$?
   if [ "$status" -ne 0 ] && [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+    echo "!! Validating previous release before automatic restore" >&2
+    if ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database; then
+      echo "!! Previous release is below the active capability floor; refusing unsafe automatic restore" >&2
+      set +e
+      run_pm2 stop "$PM2_APP" "$PM2_WORKER" "$PM2_WEBHOOK_WORKER" >/dev/null 2>&1
+      set -e
+      return
+    fi
     echo "!! Restoring previous release $PREVIOUS_RELEASE" >&2
     set +e
     if [ "$ACTIVATED" = true ]; then ln -sfn "$PREVIOUS_RELEASE" "$SERVICE_DIR/current"; fi
     REVISION=$(cat "$PREVIOUS_RELEASE/REVISION" 2>/dev/null || basename "$PREVIOUS_RELEASE")
+    if [ "$WEBHOOK_HANDOFF_REENABLED" = true ]; then
+      (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" NODE_ENV=prod node ../deploy/set-webhook-processing.js false "$WEBHOOK_CONTROL_REVISION" deploy failed-release-handoff)
+      WEBHOOK_CONTROL_REVISION=$((WEBHOOK_CONTROL_REVISION + 1))
+    fi
+    if [ "$SENDING_HANDOFF_REENABLED" = true ]; then
+      (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" NODE_ENV=prod node ../deploy/set-email-sending.js false "$SENDING_CONTROL_REVISION" deploy failed-release-handoff)
+      SENDING_CONTROL_REVISION=$((SENDING_CONTROL_REVISION + 1))
+    fi
     if [ -f "$PREVIOUS_RELEASE/deploy/set-email-claiming.js" ]; then
       (cd "$PREVIOUS_RELEASE/api" && EMAIL_WORKER_ENV="$WORKER_ENV" NODE_ENV=prod node ../deploy/set-email-claiming.js false failed-release-handoff)
     else
@@ -173,10 +287,34 @@ restore_previous_release() {
       run_pm2 start "$PREVIOUS_RELEASE/api/server.js" --name "$PM2_APP" --cwd "$PREVIOUS_RELEASE/api"
     fi
     run_pm2 save
+    echo "!! Verifying restored API and fresh paused worker heartbeats before restoring traffic" >&2
+    RESTORE_HEALTHY=false
+    for _ in $(seq 1 15); do
+      if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && (cd "$PREVIOUS_RELEASE/api" && EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
+require('dotenv').config({path:'.env.prod'});const{Pool}=require('pg');const fs=require('fs');const p=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});Promise.all([p.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID]),p.query(`SELECT 1 FROM email_webhook_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID])]).then(r=>process.exitCode=r.every(x=>x.rowCount)?0:1).catch(()=>process.exitCode=1).finally(()=>p.end());
+NODE
+      ); then RESTORE_HEALTHY=true; break; fi
+      sleep 2
+    done
+    if [ "$RESTORE_HEALTHY" != true ]; then
+      echo "!! Restored release did not become healthy; leaving all outbound controls paused" >&2
+      run_pm2 stop "$PM2_APP" "$PM2_WORKER" "$PM2_WEBHOOK_WORKER" >/dev/null 2>&1 || true
+      set -e
+      return
+    fi
+    if [ "$SENDING_WAS_ENABLED" = true ] && [ -f "$PREVIOUS_RELEASE/deploy/set-email-sending.js" ]; then
+      (cd "$PREVIOUS_RELEASE/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$REVISION" NODE_ENV=prod node ../deploy/set-email-sending.js true "$SENDING_CONTROL_REVISION" deploy failed-release-restore)
+      SENDING_CONTROL_REVISION=$((SENDING_CONTROL_REVISION + 1))
+    fi
     if [ "$CLAIMING_WAS_ENABLED" = true ]; then
       if [ -f "$PREVIOUS_RELEASE/deploy/set-email-claiming.js" ]; then
         (cd "$PREVIOUS_RELEASE/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$REVISION" NODE_ENV=prod node ../deploy/set-email-claiming.js true failed-release-restore)
       fi
+    fi
+    if [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ] && [ -f "$PREVIOUS_RELEASE/deploy/set-webhook-processing.js" ]; then
+      sleep 2
+      (cd "$PREVIOUS_RELEASE/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$REVISION" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" NODE_ENV=prod node ../deploy/set-webhook-processing.js true "$WEBHOOK_CONTROL_REVISION" deploy failed-release-restore)
+      WEBHOOK_CONTROL_REVISION=$((WEBHOOK_CONTROL_REVISION + 1))
     fi
     set -e
   fi
@@ -195,14 +333,28 @@ run_pm2 save
 
 echo "==> Waiting for health check"
 for i in $(seq 1 15); do
-  if curl -fsS http://localhost:3000/health >/dev/null 2>&1; then
+  if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && \
+    run_pm2 jlist | EXPECTED_REVISION="$REVISION" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node -e '
+      let input=""; process.stdin.on("data",d=>input+=d); process.stdin.on("end",()=>{const app=JSON.parse(input).find(p=>p.name==="ona-api"); process.exit(app?.pm2_env?.RELEASE_REVISION===process.env.EXPECTED_REVISION&&app?.pm2_env?.DEPLOYMENT_ID===process.env.EXPECTED_DEPLOYMENT_ID?0:1);});
+    '; then
     if (cd "$RELEASE_DIR/api" && EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
-require('dotenv-flow').config();
+require('dotenv').config({path:'.env.prod'});
 const { Pool } = require('pg');
 const pool = new Pool({ user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined });
-pool.query(`SELECT 1 FROM email_worker_heartbeats h JOIN email_worker_control c USING(environment) WHERE h.environment=$2 AND h.release_revision=$1 AND h.worker_instance LIKE $3||'/%' AND h.enabled=true AND h.claiming=c.claiming_enabled AND h.heartbeat_at>now()-interval '45 seconds' LIMIT 1`,[process.env.EXPECTED_REVISION,process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_DEPLOYMENT_ID]).then((r)=>{process.exitCode=r.rowCount?0:1;}).catch(()=>{process.exitCode=1;}).finally(()=>pool.end());
+Promise.all([
+  pool.query(`SELECT 1 FROM email_worker_heartbeats h JOIN email_worker_control c USING(environment) WHERE h.environment=$2 AND h.release_revision=$1 AND h.worker_instance LIKE $3||'/%' AND h.enabled=true AND h.claiming=c.claiming_enabled AND h.heartbeat_at>now()-interval '45 seconds' LIMIT 1`,[process.env.EXPECTED_REVISION,process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_DEPLOYMENT_ID]),
+  pool.query(`SELECT 1 FROM email_webhook_worker_heartbeats h JOIN email_webhook_worker_control c USING(environment) WHERE h.environment=$2 AND h.release_revision=$1 AND h.worker_instance LIKE $3||'/%' AND h.enabled=true AND h.processing=c.processing_enabled AND h.heartbeat_at>now()-interval '45 seconds' LIMIT 1`,[process.env.EXPECTED_REVISION,process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_DEPLOYMENT_ID]),
+]).then((results)=>{process.exitCode=results.every((r)=>r.rowCount)?0:1;}).catch(()=>{process.exitCode=1;}).finally(()=>pool.end());
 NODE
     ); then
+      if [ "$SENDING_WAS_ENABLED" = true ] && [ "$SENDING_HANDOFF_REENABLED" = false ]; then
+        echo "==> Fencing all application email sends to release $REVISION"
+        (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$REVISION" NODE_ENV=prod node ../deploy/set-email-sending.js true "$SENDING_CONTROL_REVISION" deploy release-handoff-complete)
+        SENDING_HANDOFF_REENABLED=true
+        SENDING_CONTROL_REVISION=$((SENDING_CONTROL_REVISION + 1))
+        sleep 2
+        continue
+      fi
       if [ "$CLAIMING_WAS_ENABLED" = true ] && [ "$HANDOFF_REENABLED" = false ]; then
         echo "==> Fencing email claims to release $REVISION"
         (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$REVISION" NODE_ENV=prod node ../deploy/set-email-claiming.js true release-handoff-complete)
@@ -210,7 +362,15 @@ NODE
         sleep 2
         continue
       fi
-      echo "==> Deploy of $REVISION succeeded (API and worker healthy)"
+      if [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ] && [ "$WEBHOOK_HANDOFF_REENABLED" = false ]; then
+        echo "==> Fencing webhook projection to release $REVISION"
+        (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$REVISION" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" NODE_ENV=prod node ../deploy/set-webhook-processing.js true "$WEBHOOK_CONTROL_REVISION" deploy release-handoff-complete)
+        WEBHOOK_HANDOFF_REENABLED=true
+        WEBHOOK_CONTROL_REVISION=$((WEBHOOK_CONTROL_REVISION + 1))
+        sleep 2
+        continue
+      fi
+      echo "==> Deploy of $REVISION succeeded (API, delivery worker, and webhook worker healthy)"
       # Keep the five most recent releases
       ls -1dt "$SERVICE_DIR"/releases/* | tail -n +6 | xargs -r rm -rf
       trap - EXIT
@@ -223,4 +383,5 @@ done
 echo "!! Health check failed after deploy of $REVISION" >&2
 run_pm2 logs "$PM2_APP" --nostream --lines 50 || true
 run_pm2 logs "$PM2_WORKER" --nostream --lines 50 || true
+run_pm2 logs "$PM2_WEBHOOK_WORKER" --nostream --lines 50 || true
 exit 1

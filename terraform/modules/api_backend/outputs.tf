@@ -33,3 +33,13 @@ output "alb_arn" {
 output "target_group_arn" {
   value = aws_lb_target_group.backend_targets.arn
 }
+
+output "operations_alert_topic_arn" {
+  value       = aws_sns_topic.operations_alerts.arn
+  description = "Environment-specific SNS topic used by runtime and webhook alarms."
+}
+
+output "runtime_log_group_names" {
+  value       = { for name, group in aws_cloudwatch_log_group.runtime : name => group.name }
+  description = "CloudWatch log groups for the API and dedicated workers."
+}

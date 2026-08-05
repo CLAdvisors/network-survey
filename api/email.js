@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 
 const DEFAULT_SENDER = 'CLA Survey <survey@cladvisors.com>';
-const RENDERER_VERSION = 'survey-invitation-v1';
+const RENDERER_VERSION = 'survey-invitation-v2';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -45,10 +45,18 @@ function renderInvitation({ bodyText, link, language = 'en' }) {
   return { html, text };
 }
 
-function buildInvitationPayload({ to, sender = DEFAULT_SENDER, subject = 'CLA Network Survey', bodyText, surveyBaseUrl, surveyName, token, language }) {
+function buildInvitationPayload({ to, sender = DEFAULT_SENDER, subject = 'CLA Network Survey', bodyText, surveyBaseUrl, surveyName, token, language, deliveryId, environment }) {
   const link = buildSurveyLink(surveyBaseUrl, surveyName, token);
   const rendered = renderInvitation({ bodyText, link, language });
-  return { from: sender, to, subject, html: rendered.html, text: rendered.text };
+  const payload = { from: sender, to, subject, html: rendered.html, text: rendered.text };
+  if (deliveryId && environment) {
+    payload.tags = [
+      { name: 'app', value: 'network_survey' },
+      { name: 'environment', value: String(environment).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 256) },
+      { name: 'delivery_id', value: String(deliveryId) },
+    ];
+  }
+  return payload;
 }
 
 function payloadHash(payload) {
@@ -122,26 +130,31 @@ class ResendProvider {
   }
 }
 
-async function reserveProviderRate(pool, environment, rate) {
-  const client = await pool.connect();
+async function reserveProviderRateInTransaction(client, environment, rate) {
+  await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`email-rate-budget:${environment}`]);
+  await client.query(`DELETE FROM email_rate_reservations WHERE environment=$1 AND reserved_at<clock_timestamp()-interval '10 minutes'`, [environment]);
+  const used = await client.query(`SELECT count(*)::int AS count FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()-interval '1 second'`, [environment]);
+  if (Number(used.rows[0]?.count || 0) >= rate) return false;
+  await client.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp())`, [environment]);
+  return true;
+}
+
+async function reserveProviderRateOnClient(client, environment, rate) {
   try {
     await client.query('BEGIN');
-    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`email-rate-budget:${environment}`]);
-    await client.query(`DELETE FROM email_rate_reservations WHERE environment=$1 AND reserved_at<clock_timestamp()-interval '10 minutes'`, [environment]);
-    const used = await client.query(`SELECT count(*)::int AS count FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()-interval '1 second'`, [environment]);
-    if (Number(used.rows[0]?.count || 0) >= rate) {
-      await client.query('COMMIT');
-      return false;
-    }
-    await client.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp())`, [environment]);
+    const reserved=await reserveProviderRateInTransaction(client,environment,rate);
     await client.query('COMMIT');
-    return true;
+    return reserved;
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     throw error;
-  } finally {
-    client.release();
   }
+}
+
+async function reserveProviderRate(pool, environment, rate) {
+  const client = await pool.connect();
+  try { return await reserveProviderRateOnClient(client, environment, rate); }
+  finally { client.release(); }
 }
 
 function classifyProviderError(error) {
@@ -152,4 +165,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate };
+module.exports = { DEFAULT_SENDER, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction };

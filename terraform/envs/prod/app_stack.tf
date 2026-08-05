@@ -23,11 +23,13 @@ locals {
   app_name_prefix = "${var.project_name}-${var.environment}-v2"
 
   # Runtime secrets intentionally keep the existing production Parameter Store paths.
-  ssm_parameter_prefix                    = "/network-survey/${var.environment}"
-  db_password_parameter_name              = "${local.ssm_parameter_prefix}/db/password"
-  session_secret_parameter_name           = "${local.ssm_parameter_prefix}/api/session-secret"
-  resend_api_key_parameter_name           = "${local.ssm_parameter_prefix}/api/resend-api-key"
-  bootstrap_admin_password_parameter_name = "${local.ssm_parameter_prefix}/api/bootstrap-admin-password"
+  ssm_parameter_prefix                          = "/network-survey/${var.environment}"
+  db_password_parameter_name                    = "${local.ssm_parameter_prefix}/db/password"
+  session_secret_parameter_name                 = "${local.ssm_parameter_prefix}/api/session-secret"
+  resend_api_key_parameter_name                 = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  resend_webhook_secret_parameter_name          = "${local.ssm_parameter_prefix}/api/resend-webhook-secret"
+  resend_webhook_previous_secret_parameter_name = "${local.ssm_parameter_prefix}/api/resend-webhook-secret-previous"
+  bootstrap_admin_password_parameter_name       = "${local.ssm_parameter_prefix}/api/bootstrap-admin-password"
 
   frontend_url        = "https://${var.dashboard_domain}"
   survey_url          = "https://${var.survey_domain}"
@@ -100,29 +102,35 @@ module "api_backend" {
   cloud_init_template_path = "${path.module}/../../cloud-init-template.sh"
   env_template_path        = "${path.module}/../../templates/env.tmpl"
 
-  db_host                                 = local.api_config_db_host
-  db_port                                 = aws_db_instance.prod_replacement.port
-  db_name                                 = aws_db_instance.prod_replacement.db_name
-  db_user                                 = var.db_user
-  db_password_parameter_name              = local.db_password_parameter_name
-  session_secret_parameter_name           = local.session_secret_parameter_name
-  resend_api_key_parameter_name           = local.resend_api_key_parameter_name
-  bootstrap_admin_username                = var.enable_cla_owner_bootstrap ? "sgarcia@cladvisors.com" : null
-  bootstrap_admin_email                   = var.enable_cla_owner_bootstrap ? "sgarcia@cladvisors.com" : null
-  bootstrap_admin_password_parameter_name = var.enable_cla_owner_bootstrap ? local.bootstrap_admin_password_parameter_name : null
-  bootstrap_organization_name             = "CLA"
-  bootstrap_organization_slug             = "cla"
-  bootstrap_platform_admin                = false
-  bootstrap_account_mode                  = "create-or-verify"
-  cla_production_cutover                  = var.enable_cla_production_cutover
-  frontend_url                            = local.frontend_url
-  survey_url                              = local.survey_url
-  session_cookie_name                     = local.session_cookie_name
-  email_worker_environment                = "prod"
-  survey_delivery_v2_enabled              = var.survey_delivery_v2_enabled
-  legacy_start_enabled                    = false
-  email_rate_per_second                   = var.email_rate_per_second
-  email_rate_budget_environment           = "prod"
+  db_host                                       = local.api_config_db_host
+  db_port                                       = aws_db_instance.prod_replacement.port
+  db_name                                       = aws_db_instance.prod_replacement.db_name
+  db_user                                       = var.db_user
+  db_password_parameter_name                    = local.db_password_parameter_name
+  session_secret_parameter_name                 = local.session_secret_parameter_name
+  resend_api_key_parameter_name                 = local.resend_api_key_parameter_name
+  resend_webhook_secret_parameter_name          = local.resend_webhook_secret_parameter_name
+  resend_webhook_previous_secret_parameter_name = local.resend_webhook_previous_secret_parameter_name
+  resend_provider_account_scope                 = var.resend_provider_account_scope
+  resend_webhook_ingest_enabled                 = var.resend_webhook_ingest_enabled
+  webhook_payload_retention_days                = var.webhook_payload_retention_days
+  operations_alert_email                        = var.operations_alert_email
+  bootstrap_admin_username                      = var.enable_cla_owner_bootstrap ? "sgarcia@cladvisors.com" : null
+  bootstrap_admin_email                         = var.enable_cla_owner_bootstrap ? "sgarcia@cladvisors.com" : null
+  bootstrap_admin_password_parameter_name       = var.enable_cla_owner_bootstrap ? local.bootstrap_admin_password_parameter_name : null
+  bootstrap_organization_name                   = "CLA"
+  bootstrap_organization_slug                   = "cla"
+  bootstrap_platform_admin                      = false
+  bootstrap_account_mode                        = "create-or-verify"
+  cla_production_cutover                        = var.enable_cla_production_cutover
+  frontend_url                                  = local.frontend_url
+  survey_url                                    = local.survey_url
+  session_cookie_name                           = local.session_cookie_name
+  email_worker_environment                      = "prod"
+  survey_delivery_v2_enabled                    = var.survey_delivery_v2_enabled
+  legacy_start_enabled                          = false
+  email_rate_per_second                         = var.email_rate_per_second
+  email_rate_budget_environment                 = "prod"
 
   common_tags           = local.app_common_tags
   config_bucket_tags    = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-config", App = "ona-config" })

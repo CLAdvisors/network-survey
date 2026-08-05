@@ -12,6 +12,14 @@ export AWS_DEFAULT_REGION=${aws_region}
 apt-get update -y
 apt-get install -y curl unzip awscli openjdk-17-jre-headless postgresql-client build-essential python3
 
+# CloudWatch Agent forwards bounded API/worker JSON and Embedded Metric Format
+# records. Application code must never write payloads, addresses, signatures, or
+# secrets to these files.
+curl -fsSL https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb \
+  -o /tmp/amazon-cloudwatch-agent.deb
+dpkg -i /tmp/amazon-cloudwatch-agent.deb
+rm -f /tmp/amazon-cloudwatch-agent.deb
+
 # Node.js 20 LTS
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 apt-get install -y nodejs
@@ -47,6 +55,29 @@ ENVIRONMENT=${environment}
 EOF
 chown ubuntu:ubuntu $SERVICE_DIR/deploy.env
 
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
+{
+  "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          { "file_path": "/home/ubuntu/.pm2/logs/ona-api-out.log", "log_group_name": "${api_log_group}", "log_stream_name": "{instance_id}/stdout", "timezone": "UTC" },
+          { "file_path": "/home/ubuntu/.pm2/logs/ona-api-error.log", "log_group_name": "${api_log_group}", "log_stream_name": "{instance_id}/stderr", "timezone": "UTC" },
+          { "file_path": "/home/ubuntu/.pm2/logs/ona-email-worker-out.log", "log_group_name": "${email_worker_log_group}", "log_stream_name": "{instance_id}/stdout", "timezone": "UTC" },
+          { "file_path": "/home/ubuntu/.pm2/logs/ona-email-worker-error.log", "log_group_name": "${email_worker_log_group}", "log_stream_name": "{instance_id}/stderr", "timezone": "UTC" },
+          { "file_path": "/home/ubuntu/.pm2/logs/ona-email-webhook-worker-out.log", "log_group_name": "${webhook_worker_log_group}", "log_stream_name": "{instance_id}/stdout", "timezone": "UTC" },
+          { "file_path": "/home/ubuntu/.pm2/logs/ona-email-webhook-worker-error.log", "log_group_name": "${webhook_worker_log_group}", "log_stream_name": "{instance_id}/stderr", "timezone": "UTC" }
+        ]
+      }
+    }
+  }
+}
+EOF
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+
 # Host firewall (the security group is the real boundary; this is defense in depth).
 # SSH is intentionally not opened; use SSM Session Manager for access.
 ufw allow 3000
@@ -55,13 +86,13 @@ ufw --force enable
 # Bootstrap the latest release if CI has published one; otherwise the first
 # run of the deploy workflow will bring the app up.
 BOOTSTRAP_DIR=/tmp/ona-bootstrap
-if aws s3 cp "s3://${artifacts_bucket}/api/latest.tar.gz" /tmp/ona-latest.tar.gz; then
+if aws s3 cp "s3://${artifacts_bucket}/api/latest-compatible.tar.gz" /tmp/ona-latest.tar.gz; then
   mkdir -p $BOOTSTRAP_DIR
   tar -xzf /tmp/ona-latest.tar.gz -C $BOOTSTRAP_DIR
   bash $BOOTSTRAP_DIR/deploy/remote-deploy.sh $BOOTSTRAP_DIR
   rm -rf $BOOTSTRAP_DIR /tmp/ona-latest.tar.gz
 else
-  echo "No release artifact found in s3://${artifacts_bucket}/api/latest.tar.gz — run the deploy workflow to install the app."
+  echo "No capability-verified release artifact found in s3://${artifacts_bucket}/api/latest-compatible.tar.gz — run the deploy workflow to install the app."
 fi
 
 echo "Setup complete."

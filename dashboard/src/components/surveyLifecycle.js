@@ -34,6 +34,109 @@ export const launchCounts = (launch) => {
   };
 };
 
+const finiteCount = (value) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const firstValue = (source, keys) => keys.map((key) => source?.[key]).find((value) => value !== undefined && value !== null);
+
+export const providerCounts = (launch) => {
+  const nested = launch?.providerOutcomeCounts || launch?.provider_outcome_counts
+    || launch?.providerCounts || launch?.provider_counts || launch?.providerOutcomes || launch?.provider_outcomes;
+  const sources = [nested, launch?.counts, launch?.dispatchCounts, launch?.dispatch_counts, launch].filter(Boolean);
+  const aliases = {
+    sent: ['sent', 'sentCount', 'sent_count', 'providerSent', 'provider_sent', 'providerSentCount', 'provider_sent_count'],
+    delivered: ['delivered', 'deliveredCount', 'delivered_count', 'providerDelivered', 'provider_delivered', 'providerDeliveredCount', 'provider_delivered_count'],
+    delayed: ['delayed', 'delayedCount', 'delayed_count', 'providerDelayed', 'provider_delayed', 'providerDelayedCount', 'provider_delayed_count'],
+    bounced: ['bounced', 'bouncedCount', 'bounced_count', 'providerBounced', 'provider_bounced', 'providerBouncedCount', 'provider_bounced_count'],
+    complained: ['complained', 'complainedCount', 'complained_count', 'providerComplained', 'provider_complained', 'providerComplainedCount', 'provider_complained_count'],
+    suppressed: ['suppressed', 'suppressedCount', 'suppressed_count', 'providerSuppressed', 'provider_suppressed', 'providerSuppressedCount', 'provider_suppressed_count'],
+    providerFailed: ['providerFailed', 'provider_failed', 'providerFailedCount', 'provider_failed_count', 'failedProvider', 'failed_provider'],
+    acceptedUnverified: ['acceptedUnverified', 'accepted_unverified', 'acceptedUnverifiedCount', 'accepted_unverified_count', 'unverifiedAccepted', 'unverified_accepted', 'unverifiedAcceptedCount', 'unverified_accepted_count'],
+  };
+  const raw = (keys) => sources.map((source) => firstValue(source, keys)).find((value) => value !== undefined && value !== null);
+  const hasProviderData = Boolean(nested) || Object.values(aliases).flat().some((key) => sources.some((source) => source?.[key] !== undefined && source?.[key] !== null));
+  const acceptedUnverified = raw(aliases.acceptedUnverified);
+  const nestedFailed = nested && firstValue(nested, ['failed', 'failedCount', 'failed_count']);
+
+  return {
+    sent: finiteCount(raw(aliases.sent)),
+    delivered: finiteCount(raw(aliases.delivered)),
+    delayed: finiteCount(raw(aliases.delayed)),
+    bounced: finiteCount(raw(aliases.bounced)),
+    complained: finiteCount(raw(aliases.complained)),
+    suppressed: finiteCount(raw(aliases.suppressed)),
+    providerFailed: finiteCount(nestedFailed ?? raw(aliases.providerFailed)),
+    acceptedUnverified: acceptedUnverified === undefined
+      ? (hasProviderData ? 0 : launchCounts(launch).accepted)
+      : finiteCount(acceptedUnverified),
+  };
+};
+
+const timestampAliases = {
+  sent: ['sentAt', 'sent_at', 'providerSentAt', 'provider_sent_at'],
+  delivered: ['deliveredAt', 'delivered_at', 'providerDeliveredAt', 'provider_delivered_at'],
+  delayed: ['delayedAt', 'delayed_at', 'providerDelayedAt', 'provider_delayed_at'],
+  bounced: ['bouncedAt', 'bounced_at', 'providerBouncedAt', 'provider_bounced_at'],
+  complained: ['complainedAt', 'complained_at', 'providerComplainedAt', 'provider_complained_at'],
+  suppressed: ['suppressedAt', 'suppressed_at', 'providerSuppressedAt', 'provider_suppressed_at'],
+  providerFailed: ['providerFailedAt', 'provider_failed_at', 'failedAt', 'failed_at'],
+};
+
+export const providerTimestamps = (delivery) => {
+  const nested = delivery?.providerTimestamps || delivery?.provider_timestamps
+    || delivery?.providerOutcomeTimestamps || delivery?.provider_outcome_timestamps || {};
+  const sources = [nested, delivery || {}];
+  return Object.fromEntries(Object.entries(timestampAliases).map(([outcome, keys]) => [
+    outcome,
+    sources.map((source) => firstValue(source, keys)).find((value) => value !== undefined && value !== null) || null,
+  ]));
+};
+
+const normalizeStatus = (value) => String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+export const providerOutcome = (delivery) => {
+  const rawOutcome = delivery?.providerOutcome || delivery?.provider_outcome;
+  const explicit = normalizeStatus(typeof rawOutcome === 'object'
+    ? (rawOutcome?.outcome || rawOutcome?.status || rawOutcome?.effectiveOutcome || rawOutcome?.effective_outcome)
+    : rawOutcome);
+  const aliases = {
+    complaint: 'complained', email_complained: 'complained', bounce: 'bounced', email_bounced: 'bounced',
+    delivery_delayed: 'delayed', email_delivery_delayed: 'delayed', email_delivered: 'delivered',
+    failed: 'provider_failed', provider_failure: 'provider_failed', email_failed: 'provider_failed',
+    provider_suppressed: 'suppressed', email_suppressed: 'suppressed', sent: 'sent', email_sent: 'sent',
+    accepted: 'accepted_unverified', legacy_assumed_accepted: 'accepted_unverified',
+    none: 'none', not_queued: 'none', unverified: 'accepted_unverified',
+  };
+  if (explicit) return aliases[explicit] || explicit;
+
+  const timestamps = providerTimestamps(delivery);
+  const timestampOutcome = [
+    ['complained', timestamps.complained], ['bounced', timestamps.bounced],
+    ['suppressed', timestamps.suppressed], ['provider_failed', timestamps.providerFailed],
+    ['delivered', timestamps.delivered], ['delayed', timestamps.delayed], ['sent', timestamps.sent],
+  ].find(([, value]) => value)?.[0];
+  if (timestampOutcome) return timestampOutcome;
+
+  const dispatch = normalizeStatus(delivery?.dispatchStatus || delivery?.dispatch_status || delivery?.emailStatus || delivery?.email_status || delivery?.status);
+  return ['accepted', 'legacy_assumed_accepted'].includes(dispatch) ? 'accepted_unverified' : 'none';
+};
+
+export const providerOutcomeLabel = (outcome) => ({
+  complained: 'Complained', bounced: 'Bounced', suppressed: 'Suppressed',
+  provider_failed: 'Provider failed', delivered: 'Delivered', delayed: 'Delayed',
+  sent: 'Provider accepted', accepted_unverified: 'Accepted / unverified', none: 'No provider outcome',
+}[normalizeStatus(outcome)] || String(outcome || 'No provider outcome').replaceAll('_', ' '));
+
+export const providerOutcomeTimestamp = (delivery, outcome = providerOutcome(delivery)) => {
+  const key = normalizeStatus(outcome) === 'provider_failed' ? 'providerFailed' : normalizeStatus(outcome);
+  const rawOutcome = delivery?.providerOutcome || delivery?.provider_outcome;
+  return providerTimestamps(delivery)[key]
+    || (typeof rawOutcome === 'object' && (rawOutcome.occurredAt || rawOutcome.occurred_at || rawOutcome.timestamp))
+    || delivery?.providerOutcomeAt || delivery?.provider_outcome_at || null;
+};
+
 export const launchStatus = (launch) => {
   const explicit = launch?.status || launch?.launchStatus;
   if (explicit) return String(explicit).toLowerCase();
@@ -45,6 +148,17 @@ export const launchStatus = (launch) => {
   return 'queued';
 };
 export const isLaunchRunning = (launch) => ['queued', 'processing'].includes(launchStatus(launch));
+
+export const PROVIDER_RECONCILIATION_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const shouldPollLaunch = (launch, now = Date.now()) => {
+  if (!launch) return false;
+  if (isLaunchRunning(launch)) return true;
+  const value = launch.providerUpdatedAt || launch.provider_updated_at || launch.finishedAt
+    || launch.finished_at || launch.updatedAt || launch.updated_at || launch.createdAt || launch.created_at;
+  const occurredAt = new Date(value).getTime();
+  return Number.isFinite(occurredAt) && occurredAt >= now - PROVIDER_RECONCILIATION_HORIZON_MS;
+};
 
 export const formatDateTime = (value) => {
   if (!value) return '—';

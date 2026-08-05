@@ -1,0 +1,11 @@
+'use strict';
+const path=require('path'),fs=require('fs');
+require(path.join(process.cwd(),'node_modules/dotenv')).config({path:path.join(process.cwd(),'.env.prod')});
+const{Pool}=require(path.join(process.cwd(),'node_modules/pg'));
+const[idArg,actorArg,...reasonParts]=process.argv.slice(2);
+if(!/^\d+$/.test(idArg||'')||!actorArg||!reasonParts.length)throw new Error('usage: replay-webhook-event.js <event-id> <platform-operator-actor> <audit-reason>');
+const environment=process.env.EMAIL_WORKER_ENV;
+if(!['staging','prod'].includes(environment))throw new Error('EMAIL_WORKER_ENV must be staging or prod');
+const actor=actorArg.slice(0,255),reason=reasonParts.join(' ').slice(0,500);
+const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+(async()=>{const result=await pool.query(`UPDATE email_webhook_events SET status='pending',next_attempt_at=now(),unmatched_since_at=NULL,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_message=NULL,processed_at=NULL,dead_lettered_at=NULL,replay_count=replay_count+1,last_replayed_at=now(),last_replayed_by_actor=$3,last_replay_reason=$4,updated_at=now() WHERE id=$1 AND receiving_environment=$2 AND status IN ('processed','ignored','dead_letter','unmatched') AND raw_payload IS NOT NULL RETURNING id,replay_count`,[idArg,environment,actor,reason]);if(!result.rowCount)throw new Error('event not found, not terminal/unmatched, foreign environment, or raw payload already expired');console.log(`webhook event ${result.rows[0].id} queued for audited local replay ${result.rows[0].replay_count}`);})().catch(e=>{console.error(e.message);process.exitCode=1;}).finally(()=>pool.end());

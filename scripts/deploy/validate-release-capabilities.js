@@ -1,0 +1,56 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const releaseDir = path.resolve(process.argv[2] || '.');
+const checkDatabase = process.argv.includes('--database');
+const markerPath = path.join(releaseDir, 'deploy', 'CAPABILITIES.json');
+const required = ['webhook_ingest', 'webhook_projection', 'suppression_enforcement'];
+
+let marker;
+try {
+  marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+} catch (_) {
+  throw new Error('release is missing a valid deploy/CAPABILITIES.json marker');
+}
+if (marker.format_version !== 1) throw new Error('unsupported capability marker format');
+for (const capability of required) {
+  if (!Number.isSafeInteger(marker[capability]) || marker[capability] < 1) {
+    throw new Error(`release lacks required ${capability} capability`);
+  }
+}
+if (!Number.isSafeInteger(marker.schema?.webhook_delivery_truth) || marker.schema.webhook_delivery_truth < 1) {
+  throw new Error('release lacks webhook delivery-truth schema capability');
+}
+async function validateDatabaseFloor() {
+  if (!checkDatabase) return;
+  const apiDir = path.join(releaseDir, 'api');
+  require(path.join(apiDir, 'node_modules', 'dotenv')).config({ path: path.join(apiDir, '.env.prod') });
+  const { Pool } = require(path.join(apiDir, 'node_modules', 'pg'));
+  const env = process.env.EMAIL_WORKER_ENV;
+  const pool = new Pool({
+    user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,
+    port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',
+    ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined,
+  });
+  try {
+    const result = await pool.query(
+      `SELECT
+         COALESCE((SELECT ingestion_required FROM email_webhook_registration_control WHERE environment=$1),false) AS ingestion_required,
+         COALESCE((SELECT processing_enabled FROM email_webhook_worker_control WHERE environment=$1),false) AS projection_required,
+         COALESCE((SELECT enforcement_enabled FROM email_suppression_control WHERE environment=$1),false) AS suppression_required`,
+      [env]
+    );
+    const floor = result.rows[0];
+    if (floor.ingestion_required && marker.webhook_ingest < 1) throw new Error('registration requires webhook ingestion capability');
+    if (floor.projection_required && marker.webhook_projection < 1) throw new Error('processing control requires webhook projection capability');
+    if (floor.suppression_required && marker.suppression_enforcement < 1) throw new Error('suppression latch requires suppression enforcement capability');
+  } finally {
+    await pool.end();
+  }
+}
+
+validateDatabaseFloor()
+  .then(() => process.stdout.write(`release capability marker valid${checkDatabase ? ' for database floor' : ''}\n`))
+  .catch((error) => { console.error(error.message); process.exit(1); });

@@ -115,6 +115,13 @@ data "aws_ami" "ubuntu" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "runtime" {
+  for_each          = toset(["api", "email-worker", "webhook-worker"])
+  name              = "/network-survey/${local.environment}/${each.value}"
+  retention_in_days = 30
+  tags              = local.common_tags
+}
+
 resource "aws_instance" "backend" {
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
@@ -125,10 +132,13 @@ resource "aws_instance" "backend" {
   key_name                    = length(var.ssh_allowed_cidrs) > 0 ? var.ssh_key_name : null
 
   user_data = templatefile("cloud-init-template.sh", {
-    config_bucket    = aws_s3_bucket.config_bucket.bucket
-    artifacts_bucket = aws_s3_bucket.artifacts.bucket
-    aws_region       = var.aws_region
-    environment      = local.environment
+    config_bucket            = aws_s3_bucket.config_bucket.bucket
+    artifacts_bucket         = aws_s3_bucket.artifacts.bucket
+    aws_region               = var.aws_region
+    environment              = local.environment
+    api_log_group            = aws_cloudwatch_log_group.runtime["api"].name
+    email_worker_log_group   = aws_cloudwatch_log_group.runtime["email-worker"].name
+    webhook_worker_log_group = aws_cloudwatch_log_group.runtime["webhook-worker"].name
   })
 
   lifecycle {
@@ -255,29 +265,35 @@ resource "aws_s3_object" "api_config" {
   bucket = aws_s3_bucket.config_bucket.id
   key    = "configs/.env.prod"
   content = templatefile("./templates/env.tmpl", {
-    db_host                                 = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
-    db_port                                 = aws_db_instance.postgres.port
-    db_name                                 = aws_db_instance.postgres.db_name
-    db_user                                 = var.db_user
-    db_password_parameter_name              = local.db_password_parameter_name
-    frontend_url                            = local.frontend_url
-    survey_url                              = local.survey_url
-    session_secret_parameter_name           = local.session_secret_parameter_name
-    session_cookie_name                     = local.session_cookie_name
-    email_worker_environment                = local.is_prod ? "prod" : "staging"
-    survey_delivery_v2_enabled              = false
-    legacy_start_enabled                    = false
-    email_rate_per_second                   = local.is_prod ? 4 : 1
-    email_rate_budget_environment           = local.is_prod ? "prod" : "staging"
-    resend_api_key_parameter_name           = local.resend_api_key_parameter_name
-    cla_production_cutover                  = false
-    bootstrap_admin_username                = null
-    bootstrap_admin_password_parameter_name = null
-    bootstrap_admin_email                   = null
-    bootstrap_organization_name             = ""
-    bootstrap_organization_slug             = ""
-    bootstrap_platform_admin                = false
-    bootstrap_account_mode                  = "local"
+    db_host                                       = coalesce(var.api_config_db_host_override, aws_db_instance.postgres.address)
+    db_port                                       = aws_db_instance.postgres.port
+    db_name                                       = aws_db_instance.postgres.db_name
+    db_user                                       = var.db_user
+    db_password_parameter_name                    = local.db_password_parameter_name
+    frontend_url                                  = local.frontend_url
+    survey_url                                    = local.survey_url
+    session_secret_parameter_name                 = local.session_secret_parameter_name
+    session_cookie_name                           = local.session_cookie_name
+    email_worker_environment                      = local.is_prod ? "prod" : "staging"
+    survey_delivery_v2_enabled                    = false
+    legacy_start_enabled                          = false
+    email_rate_per_second                         = local.is_prod ? 4 : 1
+    email_rate_budget_environment                 = local.is_prod ? "prod" : "staging"
+    resend_api_key_parameter_name                 = local.resend_api_key_parameter_name
+    resend_webhook_secret_parameter_name          = local.resend_webhook_secret_parameter_name
+    resend_webhook_previous_secret_parameter_name = local.resend_webhook_previous_secret_parameter_name
+    resend_provider_account_scope                 = var.resend_provider_account_scope
+    resend_webhook_ingest_enabled                 = false
+    webhook_payload_retention_days                = 30
+    webhook_metric_namespace                      = "NetworkSurvey/Webhooks"
+    cla_production_cutover                        = false
+    bootstrap_admin_username                      = null
+    bootstrap_admin_password_parameter_name       = null
+    bootstrap_admin_email                         = null
+    bootstrap_organization_name                   = ""
+    bootstrap_organization_slug                   = ""
+    bootstrap_platform_admin                      = false
+    bootstrap_account_mode                        = "local"
   })
 }
 
@@ -376,7 +392,19 @@ data "aws_iam_policy_document" "s3_access_policy" {
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.db_password_parameter_name}",
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.session_secret_parameter_name}",
       "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.resend_api_key_parameter_name}",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.resend_webhook_secret_parameter_name}",
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.resend_webhook_previous_secret_parameter_name}",
     ]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:DescribeLogStreams",
+      "logs:PutLogEvents",
+    ]
+    resources = [for group in aws_cloudwatch_log_group.runtime : "${group.arn}:*"]
   }
 
   statement {

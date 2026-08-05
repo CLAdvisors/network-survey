@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, classifyProviderError, ProviderError } = require('../email');
+const { renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
 const { evaluateReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous } = require('../email-worker');
 
@@ -45,6 +45,15 @@ test('resolved provider error objects fail and retry classification is conservat
   assert.equal(classifyProviderError(new ProviderError('still processing',{status:409,code:'concurrent_idempotent_requests'})), 'ambiguous');
   assert.equal(classifyProviderError(new ProviderError('plan exhausted',{status:429,code:'monthly_quota_exceeded'})), 'quota');
   assert.equal(classifyProviderError(new ProviderError('timeout',{uncertain:true})), 'ambiguous');
+});
+
+test('retained provider-boundary clients reserve rate capacity without reconnecting', async () => {
+  const calls=[];
+  const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return {rows:[{count:0}]};return {rowCount:1,rows:[]};}};
+  assert.equal(await reserveProviderRateOnClient(client,'test',1),true);
+  assert.match(calls[0].sql,/BEGIN/);
+  assert.ok(calls.some(({values})=>values.includes('email-rate-budget:test')));
+  assert.match(calls.at(-1).sql,/COMMIT/);
 });
 
 test('readiness validates the entire audience and exact normalized template coverage', () => {
@@ -106,6 +115,7 @@ test('transactional launch locks control then survey, snapshots all work, activa
   const calls=[];
   const client={release(){},async query(sql,values=[]){calls.push({sql,values});
     if (/SELECT \* FROM email_worker_control/.test(sql)) return {rows:[{claiming_enabled:true,minimum_release:''}]};
+    if (/SELECT \* FROM email_sending_control/.test(sql)) return {rows:[{sending_enabled:true,minimum_release:'release-pinned-by-sending'}]};
     if (/SELECT s\.\*, om\.role/.test(sql)) return {rows:[{id:surveyId,name:'Survey A',organization_id:orgId,role:'editor',lifecycle_status:'draft',archived_at:null,questions:{elements:[{name:'q1',type:'text'}]}}]};
     if (/SELECT respondent_id/.test(sql)) return {rows:[{respondent_id:7,name:'Person',contact_info:'person@example.com',uuid:'secret-token',lang:'English'}]};
     if (/SELECT lang,text FROM email/.test(sql)) return {rows:[{lang:'English',text:'Please participate'}]};
@@ -116,7 +126,9 @@ test('transactional launch locks control then survey, snapshots all work, activa
   }};
   const result=await launchSurvey({connect:async()=>client},{id:9,isPlatformAdmin:false},surveyId,{kind:'initial',idempotencyKey:'33333333-3333-4333-8333-333333333333'},{NODE_ENV:'test',SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key',SURVEY_DELIVERY_V2_ENABLED:'true'});
   assert.equal(result.status,'queued');assert.equal(result.target_count,1);
-  assert.match(calls[1].sql,/FOR SHARE/);assert.match(calls[2].sql,/FOR UPDATE OF s/);
+  assert.match(calls[1].sql,/FOR SHARE/);assert.match(calls[2].sql,/email_sending_control/);assert.match(calls[3].sql,/FOR UPDATE OF s/);
+  const heartbeatCall=calls.find(({sql})=>/SELECT 1 FROM email_worker_heartbeats/.test(sql));
+  assert.equal(heartbeatCall.values[2],'release-pinned-by-sending');
   assert.equal(calls.some(({sql})=>/INSERT INTO survey_email_deliveries/.test(sql)),true);
   assert.equal(calls.filter(({sql})=>/INSERT INTO audit_events/.test(sql)).length,2);
   assert.match(calls.at(-1).sql,/COMMIT/);
@@ -132,6 +144,12 @@ test('close atomically cancels queued work, fences leased work, and writes stric
   assert.ok(calls.some(({sql})=>/status IN \('pending','retry_wait','leased'\)/.test(sql)&&/cancellation_requested_at/.test(sql)));
   assert.ok(calls.some(({sql})=>/INSERT INTO audit_events/.test(sql)));
   assert.match(calls.at(-1).sql,/COMMIT/);
+});
+
+test('Phase 2 payload tags carry only non-secret environment and delivery correlation', () => {
+  const payload=buildInvitationPayload({to:'a@example.com',bodyText:'Welcome',surveyBaseUrl:'https://survey.test',surveyName:'S',token:'secret-token',language:'en',deliveryId:'11111111-1111-4111-8111-111111111111',environment:'staging'});
+  assert.deepEqual(payload.tags,[{name:'app',value:'network_survey'},{name:'environment',value:'staging'},{name:'delivery_id',value:'11111111-1111-4111-8111-111111111111'}]);
+  assert.equal(JSON.stringify(payload.tags).includes('secret-token'),false);
 });
 
 test('payload hash changes for token, template, or address without persisting rendered token separately', () => {

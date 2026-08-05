@@ -30,10 +30,12 @@ output "artifacts_bucket_name" {
 
 output "runtime_secret_parameter_names" {
   value = {
-    db_password              = local.db_password_parameter_name
-    session_secret           = local.session_secret_parameter_name
-    resend_api_key           = local.resend_api_key_parameter_name
-    bootstrap_admin_password = local.bootstrap_admin_password_parameter_name
+    db_password                    = local.db_password_parameter_name
+    session_secret                 = local.session_secret_parameter_name
+    resend_api_key                 = local.resend_api_key_parameter_name
+    resend_webhook_secret          = local.resend_webhook_secret_parameter_name
+    resend_webhook_previous_secret = local.resend_webhook_previous_secret_parameter_name
+    bootstrap_admin_password       = local.bootstrap_admin_password_parameter_name
   }
   description = "SSM Parameter Store names that must exist as SecureString values before deploys run"
 }
@@ -90,6 +92,15 @@ output "ssl_cert_survey_validation_records" {
       value = dvo.resource_record_value
     }
   ]
+}
+
+output "operations_alert_topic_arn" {
+  value       = module.api_backend.operations_alert_topic_arn
+  description = "SNS topic for staging webhook and runtime alarms."
+}
+
+output "runtime_log_group_names" {
+  value = module.api_backend.runtime_log_group_names
 }
 
 output "alb_dns_name" {

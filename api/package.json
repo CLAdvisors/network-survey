@@ -8,6 +8,8 @@
     "start": "node server.js",
     "worker": "node email-worker.js",
     "worker:dev": "nodemon email-worker.js",
+    "webhook-worker": "node webhook-worker.js",
+    "webhook-worker:dev": "nodemon webhook-worker.js",
     "test": "node --test"
   },
   "author": "",

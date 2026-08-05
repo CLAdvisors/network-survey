@@ -9,6 +9,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
 import { LANGUAGES } from '@network-survey/frontend-shared';
+import { formatDateTime, providerOutcome, providerOutcomeLabel, providerOutcomeTimestamp } from './surveyLifecycle';
 
 const TEMPLATE_DATA = [
   'First,Last,Email,Respondent,Location,Level,Gender,Race,Manager,VP,Business Group,Business Group - 1,Business Group - 2,Language',
@@ -91,10 +92,23 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
       valueGetter: (_, row) => row.responseStatus || row.response_status || row.status || 'Not started'
     },
     {
-      field: 'emailStatus',
-      headerName: 'Email status',
-      width: 140,
-      valueGetter: (_, row) => row.emailStatus || row.email_status || 'Not queued'
+      field: 'dispatchStatus',
+      headerName: 'Dispatch status',
+      width: 150,
+      valueGetter: (_, row) => row.dispatchStatus || row.dispatch_status || row.emailStatus || row.email_status || 'Not queued'
+    },
+    {
+      field: 'providerOutcome',
+      headerName: 'Provider outcome',
+      width: 175,
+      valueGetter: (_, row) => providerOutcomeLabel(providerOutcome(row))
+    },
+    {
+      field: 'providerOutcomeAt',
+      headerName: 'Provider outcome time',
+      width: 190,
+      valueGetter: (_, row) => providerOutcomeTimestamp(row),
+      valueFormatter: (value) => formatDateTime(value)
     },
     {
       field: 'lastEmailAttempt',

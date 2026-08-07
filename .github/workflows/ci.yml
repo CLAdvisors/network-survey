@@ -54,7 +54,7 @@ jobs:
           PGPASSWORD=postgres createdb -h 127.0.0.1 -U postgres ONA_upgrade
           rm -rf /tmp/db-pre-lifecycle
           cp -a db /tmp/db-pre-lifecycle
-          sed -i '/v1_6_survey_lifecycle_email_delivery.sql/d' /tmp/db-pre-lifecycle/changelogs/master-changelog.xml
+          sed -i -e '/v1_6_survey_lifecycle_email_delivery.sql/d' -e '/v1_7_email_webhook_delivery_truth.sql/d' /tmp/db-pre-lifecycle/changelogs/master-changelog.xml
           docker run --rm --network host \
             -v /tmp/db-pre-lifecycle:/db \
             liquibase/liquibase:4.29 \
@@ -140,6 +140,16 @@ jobs:
 
       - name: Smoke test API against migrated database
         run: bash scripts/ci/api-smoke.sh
+
+      - name: Smoke test webhook projection and suppression fencing
+        env:
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_NAME: ONA
+          SURVEY_URL: http://localhost:3002
+        run: node scripts/ci/webhook-worker-smoke.js
 
   frontend:
     name: Build & test (${{ matrix.app }})

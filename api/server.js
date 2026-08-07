@@ -2,7 +2,6 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
-const { Resend } = require('resend');
 const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
 const session = require('express-session');
@@ -16,8 +15,9 @@ const { Model, Serializer, Question } = require('survey-core');
 
 dotenvFlow.config();
 
-const { ResendProvider, reserveProviderRate } = require('./email');
+const { ResendProvider, reserveProviderRateOnClient } = require('./email');
 const lifecycle = require('./lifecycle');
+const { createResendWebhookHandler } = require('./webhooks');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -40,31 +40,69 @@ const pool = new Pool({
         rejectUnauthorized: Boolean(process.env.DB_SSL_CA) }
     : undefined,
 });
-const resend = resendApiKey ? new Resend(resendApiKey) : null;
 const directSurveyProvider = resendApiKey ? new ResendProvider({ apiKey: resendApiKey }) : null;
 
-async function reserveSynchronousEmailRate() {
+async function reserveSynchronousEmailRate(client) {
   const environment = process.env.EMAIL_RATE_BUDGET_ENV || lifecycle.environmentName(process.env);
   const rate = Math.max(1, Number(process.env.EMAIL_RATE_PER_SECOND || 5));
-  const deadline = Date.now() + Math.max(1000, Number(process.env.SYNC_EMAIL_RATE_WAIT_MS || 10000));
-  while (Date.now() < deadline) {
-    if (await reserveProviderRate(pool, environment, rate)) return;
-    await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 150)));
-  }
+  if (await reserveProviderRateOnClient(client, environment, rate)) return;
   const error = new Error('Email provider rate budget is busy; retry shortly.');
   error.statusCode = 503;
   throw error;
 }
 
+async function invokeSynchronousProvider(toAddress, factory) {
+  const environment = lifecycle.environmentName(process.env);
+  const hosted=['staging','prod'].includes(environment);
+  const scope = process.env.RESEND_PROVIDER_ACCOUNT_SCOPE || (hosted ? '' : 'local-resend-account');
+  if (!scope) { const error=new Error('Provider account suppression scope is not configured.'); error.statusCode=503; throw error; }
+  const normalizedAddress = String(toAddress || '').trim().toLowerCase();
+  const globalKey = `email-provider-boundary:${environment}`;
+  const addressKey = `email-suppression-boundary:${scope}:${normalizedAddress}`;
+  const client = await pool.connect();
+  let globalLocked = false, addressLocked = false;
+  try {
+    await client.query('SELECT pg_advisory_lock(hashtextextended($1,0))', [globalKey]);
+    globalLocked = true;
+    await client.query('SELECT pg_advisory_lock(hashtextextended($1,0))', [addressKey]);
+    addressLocked = true;
+    const control = await client.query('SELECT sending_enabled,minimum_release FROM email_sending_control WHERE environment=$1', [environment]);
+    const row = control.rows[0];
+    const release = process.env.RELEASE_REVISION || process.env.REVISION || 'local';
+    if (!row?.sending_enabled || (row.minimum_release && row.minimum_release !== release)) {
+      const error = new Error('Application email sending is disabled.');
+      error.statusCode = 503;
+      throw error;
+    }
+    const enforcement = await client.query('SELECT enforcement_enabled FROM email_suppression_control WHERE environment=$1', [environment]);
+    if (enforcement.rows[0]?.enforcement_enabled) {
+      const suppressed = await client.query(`SELECT 1 FROM email_suppressions WHERE provider_account_scope=$1 AND normalized_address=$2 AND (provider_active OR locally_overridden_at IS NULL) LIMIT 1`, [scope, normalizedAddress]);
+      if (suppressed.rowCount) {
+        const error = new Error('Recipient is suppressed.');
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+    await reserveSynchronousEmailRate(client);
+    return await factory();
+  } finally {
+    if (addressLocked) await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))', [addressKey]).catch(() => {});
+    if (globalLocked) await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))', [globalKey]).catch(() => {});
+    client.release();
+  }
+}
+
 // Account/demo mail remains bounded request work in Phase 1. Resend resolves
 // provider errors in {error}; only a response containing an id is accepted.
 async function sendAccountEmail({ to, subject, html, text }) {
-  if (!resend) return { sent: false, message: 'Email is not configured; deliver the returned link manually.' };
+  if (!directSurveyProvider) return { sent: false, message: 'Email is not configured; deliver the returned link manually.' };
   try {
-    await reserveSynchronousEmailRate();
-    const result = await resend.emails.send({ from: 'CLA Survey <survey@cladvisors.com>', to, subject, html, text });
-    if (result?.error || !result?.data?.id) throw new Error(result?.error?.message || 'Provider response did not include a message ID');
-    return { sent: true, providerMessageId: result.data.id };
+    const result = await invokeSynchronousProvider(to, () => directSurveyProvider.send(
+      { from: 'CLA Survey <survey@cladvisors.com>', to, subject, html, text },
+      { idempotencyKey: `account-email/${crypto.randomUUID()}` }
+    ));
+    if (!result?.id) throw new Error('Provider response did not include a message ID');
+    return { sent: true, providerMessageId: result.id };
   } catch (error) {
     console.error('Account email provider request failed:', String(error.message || error).slice(0, 500));
     return { sent: false, message: 'Email provider request failed; deliver the returned link manually.' };
@@ -77,11 +115,12 @@ function buildSurveyEmailHtml(text, link, language = 'en') {
 
 async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Network Survey', language = 'en') {
   if (!directSurveyProvider) throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
-  await reserveSynchronousEmailRate();
   const link = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(survey.name)}&demoToken=${encodeURIComponent(demoToken)}`;
   const rendered = require('./email').renderInvitation({ bodyText: text, link, language });
-  return directSurveyProvider.send({ from: 'CLA Survey <survey@cladvisors.com>', to: email, subject: `[Demo] ${subject}`, ...rendered },
-    { idempotencyKey: `survey-demo/${crypto.randomUUID()}` });
+  return invokeSynchronousProvider(email, () => directSurveyProvider.send(
+    { from: 'CLA Survey <survey@cladvisors.com>', to: email, subject: `[Demo] ${subject}`, ...rendered },
+    { idempotencyKey: `survey-demo/${crypto.randomUUID()}` }
+  ));
 }
 
 // Function to execute a query
@@ -220,6 +259,8 @@ function prepareSurveyForDemo(value) {
   return prepare(value);
 }
 
+// Resend signatures cover the exact bytes; this route must precede JSON parsing.
+app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '256kb' }), createResendWebhookHandler({ pool, env: process.env }));
 app.use(express.json());
 
 app.use(cors({
@@ -2932,9 +2973,12 @@ app.get('/api/targets', requireAuth, async(req, res) => {
   if (!survey) { client.release(); return; }
 
   const query = `SELECT r.name, r.contact_info, r.respondent_id, r.can_respond, r.lang, r.response IS NULL AS response_status,
-                 r.email_sent, d.status AS email_status, a.started_at AS last_email_attempt
+                 r.email_sent, d.status AS email_status, d.provider_outcome, d.provider_outcome_at, a.started_at AS last_email_attempt
                FROM Respondent r
-               LEFT JOIN LATERAL (SELECT status,id FROM survey_email_deliveries WHERE respondent_id=r.respondent_id AND survey_id=r.survey_id ORDER BY created_at DESC LIMIT 1) d ON true
+               LEFT JOIN LATERAL (SELECT status,id,
+                 CASE WHEN provider_complained_at IS NOT NULL THEN 'complained' WHEN provider_bounced_at IS NOT NULL THEN 'bounced' WHEN provider_suppressed_at IS NOT NULL THEN 'suppressed' WHEN provider_failed_at IS NOT NULL THEN 'failed' WHEN provider_delivered_at IS NOT NULL THEN 'delivered' WHEN provider_delayed_at IS NOT NULL THEN 'delayed' WHEN provider_sent_at IS NOT NULL THEN 'sent' WHEN status='accepted' THEN 'accepted_unverified' ELSE NULL END AS provider_outcome,
+                 CASE WHEN provider_complained_at IS NOT NULL THEN provider_complained_at WHEN provider_bounced_at IS NOT NULL THEN provider_bounced_at WHEN provider_suppressed_at IS NOT NULL THEN provider_suppressed_at WHEN provider_failed_at IS NOT NULL THEN provider_failed_at WHEN provider_delivered_at IS NOT NULL THEN provider_delivered_at WHEN provider_delayed_at IS NOT NULL THEN provider_delayed_at WHEN provider_sent_at IS NOT NULL THEN provider_sent_at ELSE dispatch_accepted_at END AS provider_outcome_at
+                 FROM survey_email_deliveries WHERE respondent_id=r.respondent_id AND survey_id=r.survey_id ORDER BY created_at DESC LIMIT 1) d ON true
                LEFT JOIN LATERAL (SELECT started_at FROM survey_email_attempts WHERE delivery_id=d.id ORDER BY attempt_number DESC LIMIT 1) a ON true
                WHERE ${legacySurveyPredicate('r')}`;
   client.query(query, [survey.id, survey.name])
@@ -2948,6 +2992,9 @@ app.get('/api/targets', requireAuth, async(req, res) => {
             status: row.response_status ? 'Incomplete' : 'Complete',
             responseStatus: row.response_status ? 'incomplete' : 'complete',
             emailStatus: row.email_status || (row.email_sent ? 'legacy_assumed_accepted' : 'not_queued'),
+            dispatchStatus: row.email_status || (row.email_sent ? 'legacy_assumed_accepted' : 'not_queued'),
+            providerOutcome: row.provider_outcome || (row.email_sent ? 'accepted_unverified' : null),
+            providerOutcomeAt: row.provider_outcome_at || null,
             lastEmailAttempt: row.last_email_attempt || null
         }));
         res.status(200).json(respondents);
@@ -2982,7 +3029,15 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
            'acceptedCount', count(*) FILTER (WHERE d.status='accepted'),
            'failedCount', count(*) FILTER (WHERE d.status='failed'),
            'uncertainCount', count(*) FILTER (WHERE d.status='uncertain'),
-           'cancelledCount', count(*) FILTER (WHERE d.status='cancelled')
+           'cancelledCount', count(*) FILTER (WHERE d.status='cancelled'),
+           'providerSentCount', count(*) FILTER (WHERE d.provider_sent_at IS NOT NULL),
+           'providerDeliveredCount', count(*) FILTER (WHERE d.provider_delivered_at IS NOT NULL),
+           'providerDelayedCount', count(*) FILTER (WHERE d.provider_delayed_at IS NOT NULL),
+           'providerBouncedCount', count(*) FILTER (WHERE d.provider_bounced_at IS NOT NULL),
+           'providerComplainedCount', count(*) FILTER (WHERE d.provider_complained_at IS NOT NULL),
+           'providerSuppressedCount', count(*) FILTER (WHERE d.provider_suppressed_at IS NOT NULL),
+           'providerFailedCount', count(*) FILTER (WHERE d.provider_failed_at IS NOT NULL),
+           'acceptedUnverifiedCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)
          ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,
          COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions
@@ -3006,7 +3061,15 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
            'acceptedCount', count(*) FILTER (WHERE d.status='accepted'),
            'failedCount', count(*) FILTER (WHERE d.status='failed'),
            'uncertainCount', count(*) FILTER (WHERE d.status='uncertain'),
-           'cancelledCount', count(*) FILTER (WHERE d.status='cancelled')
+           'cancelledCount', count(*) FILTER (WHERE d.status='cancelled'),
+           'providerSentCount', count(*) FILTER (WHERE d.provider_sent_at IS NOT NULL),
+           'providerDeliveredCount', count(*) FILTER (WHERE d.provider_delivered_at IS NOT NULL),
+           'providerDelayedCount', count(*) FILTER (WHERE d.provider_delayed_at IS NOT NULL),
+           'providerBouncedCount', count(*) FILTER (WHERE d.provider_bounced_at IS NOT NULL),
+           'providerComplainedCount', count(*) FILTER (WHERE d.provider_complained_at IS NOT NULL),
+           'providerSuppressedCount', count(*) FILTER (WHERE d.provider_suppressed_at IS NOT NULL),
+           'providerFailedCount', count(*) FILTER (WHERE d.provider_failed_at IS NOT NULL),
+           'acceptedUnverifiedCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)
          ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,
          COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions

@@ -72,9 +72,10 @@ const pool = new Pool({
   await boundaryBlocker.query(`SELECT pg_advisory_unlock(hashtextextended($1,0))`, [`survey-provider-boundary:${process.env.SURVEY_ID}`]);
   boundaryBlocker.release();
   await providerStarted;
+  assert.equal(closeResolved,false,'close must remain fenced for the full provider invocation');
+  acceptProviderRequest({ id: 'ci-provider-message-id' });
   const closed = await closeRequest;
   assert.equal(closed.lifecycleStatus, 'closed');
-  acceptProviderRequest({ id: 'ci-provider-message-id' });
   await processing;
 
   const delivery = (await pool.query(
@@ -86,7 +87,8 @@ const pool = new Pool({
     [process.env.SURVEY_ID]
   )).rows[0];
   assert.equal(delivery.status, 'accepted');
-  assert.ok(delivery.cancellation_requested_at);
+  // Close waited for the provider invocation. Depending on finalizer scheduling,
+  // it either observed an accepted delivery or recorded a cancellation request.
   assert.equal(delivery.provider_message_id, 'ci-provider-message-id');
   assert.ok(attempt.provider_started_at);
   assert.equal(attempt.outcome, 'accepted');

@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import MenuCell from './SurveyTableMenuCell';
 import { LifecycleChip } from './SurveyLifecyclePanel';
-import { launchCounts, lifecycleStatus } from './surveyLifecycle';
+import { launchCounts, lifecycleStatus, providerCounts } from './surveyLifecycle';
 
 const SurveyTable = ({
   rows,
@@ -39,6 +39,18 @@ const SurveyTable = ({
         if (!latest) return 'Not launched';
         const counts = launchCounts(latest);
         return `${counts.accepted} accepted / ${counts.target}${counts.failed ? ` · ${counts.failed} failed` : ''}${counts.uncertain ? ` · ${counts.uncertain} uncertain` : ''}`;
+      },
+    },
+    {
+      field: 'providerSummary',
+      headerName: 'Provider outcomes',
+      width: 310,
+      sortable: false,
+      renderCell: ({ row }) => {
+        const latest = row.latestLaunch || row.latest_launch;
+        if (!latest) return 'No provider outcomes';
+        const counts = providerCounts(latest);
+        return `${counts.delivered} delivered · ${counts.delayed} delayed · ${counts.bounced} bounced · ${counts.complained} complained · ${counts.suppressed} suppressed · ${counts.providerFailed} provider failed · ${counts.acceptedUnverified} accepted / unverified`;
       },
     },
     { field: 'date', headerName: 'Creation Date', width: 170 },

@@ -106,6 +106,63 @@ variable "resend_api_key_parameter_name" {
   type        = string
 }
 
+variable "resend_webhook_secret_parameter_name" {
+  description = "Environment-specific SSM parameter name for the primary Resend webhook signing secret. Terraform never manages the value."
+  type        = string
+}
+
+variable "resend_webhook_previous_secret_parameter_name" {
+  description = "Optional environment-specific SSM parameter name used only during signing-secret rotation overlap. Terraform never manages the value."
+  type        = string
+  default     = null
+}
+
+variable "resend_provider_account_scope" {
+  description = "Stable non-secret scope shared by every environment using the same Resend account."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_-]{1,128}$", var.resend_provider_account_scope))
+    error_message = "resend_provider_account_scope must be a stable 1-128 character identifier containing only letters, digits, underscore, or dash."
+  }
+}
+
+variable "resend_webhook_ingest_enabled" {
+  description = "Exact-true release gate for webhook ingestion. Keep false until the disabled provider endpoint and SSM secret are reconciled."
+  type        = bool
+  default     = false
+}
+
+variable "webhook_payload_retention_days" {
+  description = "Retention period for raw webhook payloads; metadata and projections are retained separately."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.webhook_payload_retention_days >= 1 && var.webhook_payload_retention_days <= 365
+    error_message = "webhook_payload_retention_days must be between 1 and 365."
+  }
+}
+
+variable "cloudwatch_log_retention_days" {
+  description = "Retention for API and worker CloudWatch log groups."
+  type        = number
+  default     = 30
+}
+
+variable "operations_alert_email" {
+  description = "Optional operations email subscribed to the environment SNS alert topic. Confirm the AWS subscription before relying on alerts."
+  type        = string
+  default     = "bgarcia2324@gmail.com"
+  nullable    = true
+}
+
+variable "webhook_metric_namespace" {
+  description = "CloudWatch namespace used by webhook worker EMF metrics."
+  type        = string
+  default     = "NetworkSurvey/Webhooks"
+}
+
 variable "bootstrap_admin_username" {
   description = "Username for the deploy-time initial dashboard administrator. Null disables bootstrapping."
   type        = string

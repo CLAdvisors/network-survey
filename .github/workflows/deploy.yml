@@ -135,13 +135,11 @@ jobs:
           mkdir -p "$STAGE_DIR/deploy" "$STAGE_DIR/db"
           rsync -a --exclude node_modules api "$STAGE_DIR/"
           cp -a db/changelogs "$STAGE_DIR/db/"
-          cp scripts/deploy/remote-deploy.sh \
-             scripts/deploy/bootstrap-admin.js \
-             scripts/deploy/finalize-legacy-accounts.js \
-             scripts/deploy/ecosystem.config.js \
-             scripts/deploy/set-email-claiming.js \
-             "$STAGE_DIR/deploy/"
+          cp scripts/deploy/remote-deploy.sh scripts/deploy/*.js \
+             scripts/deploy/CAPABILITIES.json "$STAGE_DIR/deploy/"
           echo "$GITHUB_SHA" > "$STAGE_DIR/REVISION"
+          node "$STAGE_DIR/deploy/validate-release-capabilities.js" "$STAGE_DIR"
+          test -f "$STAGE_DIR/api/webhook-worker.js"
           tar -czf api-release.tar.gz -C "$STAGE_DIR" .
 
       - name: Upload artifact to S3
@@ -198,6 +196,15 @@ jobs:
               --query StandardErrorContent --output text >&2
             exit 1
           fi
+
+      - name: Promote bootstrappable API artifact
+        # The on-instance installer has already verified the exact API and both
+        # workers. Promote this pointer before unrelated frontend publication so
+        # replacement instances cannot bootstrap an older capability floor.
+        run: |
+          aws s3 cp \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/$GITHUB_SHA.tar.gz" \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest-compatible.tar.gz"
 
       # ---------- Frontends: build → S3 sync → CloudFront invalidation ----------
 

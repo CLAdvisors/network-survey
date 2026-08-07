@@ -130,7 +130,8 @@ jobs:
               "rm -rf /tmp/ona-deploy && mkdir -p /tmp/ona-deploy",
               "aws s3 cp s3://\($bucket)/api/\($sha).tar.gz /tmp/ona-deploy/release.tar.gz",
               "tar -xzf /tmp/ona-deploy/release.tar.gz -C /tmp/ona-deploy",
-              "test -f /tmp/ona-deploy/api/lifecycle.js && test -f /tmp/ona-deploy/api/email-worker.js && test -f /tmp/ona-deploy/deploy/ecosystem.config.js && test -f /tmp/ona-deploy/deploy/set-email-claiming.js || { echo Refusing rollback to an invalid or pre-lifecycle artifact >&2; exit 1; }",
+              "test -f /tmp/ona-deploy/api/lifecycle.js && test -f /tmp/ona-deploy/api/email-worker.js && test -f /tmp/ona-deploy/api/webhook-worker.js && test -f /tmp/ona-deploy/deploy/ecosystem.config.js && test -f /tmp/ona-deploy/deploy/set-email-claiming.js && test -f /tmp/ona-deploy/deploy/CAPABILITIES.json && test -f /tmp/ona-deploy/deploy/validate-release-capabilities.js || { echo Refusing rollback to an invalid or capability-incompatible artifact >&2; exit 1; }",
+              "node /tmp/ona-deploy/deploy/validate-release-capabilities.js /tmp/ona-deploy",
               "bash /tmp/ona-deploy/deploy/remote-deploy.sh /tmp/ona-deploy",
               "rm -rf /tmp/ona-deploy"
             ]
@@ -174,3 +175,6 @@ jobs:
           aws s3 cp \
             "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/${{ inputs.artifact_sha }}.tar.gz" \
             "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest.tar.gz"
+          aws s3 cp \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/${{ inputs.artifact_sha }}.tar.gz" \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest-compatible.tar.gz"

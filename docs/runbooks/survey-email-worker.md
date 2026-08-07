@@ -1,5 +1,7 @@
 # Survey email worker rollout and control
 
+This runbook covers Phase 1 dispatch. After Phase 2 webhook registration or suppression activation, `docs/runbooks/resend-webhook-operations.md` supplies the stricter capability-aware deploy and rollback procedure and takes precedence.
+
 Durable launch rows may be created only when `SURVEY_DELIVERY_V2_ENABLED=true`. Provider dispatch is independently controlled by `email_worker_control.claiming_enabled`; migrations seed hosted environments with claiming disabled.
 
 ## Deployment order
@@ -43,7 +45,7 @@ Use `prod` only on the production instance. Never update the control row manuall
 
 ## Rollback
 
-The rollback workflow validates the target artifact before disabling claiming. It refuses pre-lifecycle artifacts. If activation fails, it restores the prior symlink/processes and attempts to re-enable the prior revision. If automatic re-enable cannot verify a fresh heartbeat, claiming stays disabled for safety and must be restored with the command above.
+Before Phase 2 activation, the rollback workflow validates the target artifact before disabling claiming. Once webhook registration or suppression is active, only a capability-compatible artifact is allowed: pause projection, keep ingestion and suppression active, verify both worker heartbeats, and follow `resend-webhook-operations.md`. A Phase 1 artifact must never be restored after that floor is raised.
 
 ## Ambiguous provider calls
 

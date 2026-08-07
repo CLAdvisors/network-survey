@@ -125,15 +125,38 @@ function evaluateReadiness(survey, data, config = process.env) {
   };
 }
 
+async function applySuppressionReadiness(client, readiness, data, config) {
+  const environment = environmentName(config);
+  const control = await client.query('SELECT enforcement_enabled FROM email_suppression_control WHERE environment=$1', [environment]);
+  if (!control.rows[0]?.enforcement_enabled) return readiness;
+  const scope = String(config.RESEND_PROVIDER_ACCOUNT_SCOPE || '').trim();
+  if (!scope) {
+    readiness.blockers.push({ code:'provider_account_scope_missing', message:'Provider account scope is not configured.' });
+    readiness.blockerCount += 1;
+    readiness.canLaunch = false;
+    return readiness;
+  }
+  const addresses = data.recipients.map((row) => String(row.contact_info || '').trim().toLowerCase());
+  const result = await client.query(`SELECT count(DISTINCT normalized_address)::int AS suppressed_count FROM email_suppressions WHERE provider_account_scope=$1 AND normalized_address=ANY($2::text[]) AND (provider_active OR locally_overridden_at IS NULL)`, [scope,addresses]);
+  const count = Number(result.rows[0]?.suppressed_count || 0);
+  if (count > 0) {
+    readiness.blockers.push({ code:'recipients_suppressed', count, message:`${count} eligible recipient${count === 1 ? ' is' : 's are'} suppressed. Resolve suppression before launching.` });
+    readiness.blockerCount += 1;
+    readiness.canLaunch = false;
+  }
+  return readiness;
+}
+
 async function getReadiness(pool, user, surveyId, config = process.env) {
   const client = await pool.connect();
   try {
     const survey = await loadAuthorizedSurvey(client, user, surveyId, 'editor');
     const data = await loadReadinessData(client, survey);
     const readiness = evaluateReadiness(survey, data, config);
+    await applySuppressionReadiness(client, readiness, data, config);
     const env = environmentName(config);
     const maxAge = Math.max(5, Number(config.EMAIL_WORKER_HEARTBEAT_MAX_AGE_SECONDS || 45));
-    const worker = await client.query(`SELECT 1 FROM email_worker_control c WHERE c.environment=$1 AND c.claiming_enabled=true AND EXISTS(SELECT 1 FROM email_worker_heartbeats h WHERE h.environment=c.environment AND h.enabled=true AND h.claiming=true AND h.heartbeat_at>now()-($2::text||' seconds')::interval AND (c.minimum_release='' OR h.release_revision=c.minimum_release))`, [env,maxAge]);
+    const worker = await client.query(`SELECT 1 FROM email_worker_control c JOIN email_sending_control s USING(environment) WHERE c.environment=$1 AND c.claiming_enabled=true AND s.sending_enabled=true AND (s.minimum_release='' OR c.minimum_release='' OR s.minimum_release=c.minimum_release) AND EXISTS(SELECT 1 FROM email_worker_heartbeats h WHERE h.environment=c.environment AND h.enabled=true AND h.claiming=true AND h.heartbeat_at>now()-($2::text||' seconds')::interval AND (c.minimum_release='' OR h.release_revision=c.minimum_release) AND (s.minimum_release='' OR h.release_revision=s.minimum_release))`, [env,maxAge]);
     if (!worker.rowCount) readiness.blockers.push({code:'worker_unavailable',message:'No fresh compatible email worker is available.'});
     readiness.canLaunch = readiness.blockers.length === 0;
     return readiness;
@@ -150,6 +173,14 @@ function aggregateSelect(whereSql) {
     count(DISTINCT d.id) FILTER(WHERE d.status='failed')::int AS failed_count,
     count(DISTINCT d.id) FILTER(WHERE d.status='uncertain')::int AS uncertain_count,
     count(DISTINCT d.id) FILTER(WHERE d.status='cancelled')::int AS cancelled_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_sent_at IS NOT NULL)::int AS provider_sent_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_delivered_at IS NOT NULL)::int AS provider_delivered_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_delayed_at IS NOT NULL)::int AS provider_delayed_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_bounced_at IS NOT NULL)::int AS provider_bounced_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_complained_at IS NOT NULL)::int AS provider_complained_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_suppressed_at IS NOT NULL)::int AS provider_suppressed_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_failed_at IS NOT NULL)::int AS provider_failed_count,
+    count(DISTINCT d.id) FILTER(WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)::int AS accepted_unverified_count,
     min(a.started_at) AS started_at,max(a.finished_at) FILTER(WHERE d.status IN ('accepted','failed','uncertain','cancelled')) AS finished_at,
     CASE
       WHEN count(DISTINCT d.id)>0 AND count(DISTINCT d.id) FILTER(WHERE d.status='pending')=count(DISTINCT d.id) AND count(a.id)=0 THEN 'queued'
@@ -172,6 +203,8 @@ async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotenc
     const env = environmentName(config);
     const controlResult = await client.query('SELECT * FROM email_worker_control WHERE environment=$1 FOR SHARE', [env]);
     if (!controlResult.rows[0]) throw new LifecycleError(503, 'worker_unavailable', 'Email worker control is not configured.');
+    const sendingResult = await client.query('SELECT * FROM email_sending_control WHERE environment=$1 FOR SHARE', [env]);
+    if (!sendingResult.rows[0]?.sending_enabled || (sendingResult.rows[0].minimum_release && controlResult.rows[0].minimum_release && sendingResult.rows[0].minimum_release !== controlResult.rows[0].minimum_release)) throw new LifecycleError(503, 'sending_disabled', 'Application email sending is disabled.');
     const survey = await loadAuthorizedSurvey(client, user, surveyId, 'editor', 'UPDATE');
     const data = await loadReadinessData(client, survey);
     const targetIds = data.recipients.map((row) => Number(row.respondent_id)).sort((a,b) => a-b);
@@ -191,9 +224,11 @@ async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotenc
       return { ...result.rows[0], lifecycleStatus: survey.lifecycle_status, replayed: true };
     }
     const heartbeatSeconds = Math.max(5, Number(config.EMAIL_WORKER_HEARTBEAT_MAX_AGE_SECONDS || 45));
-    const heartbeat = await client.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND enabled=true AND claiming=true AND heartbeat_at > now()-($2::text||' seconds')::interval AND ($3='' OR release_revision = $3) LIMIT 1`, [env, heartbeatSeconds, controlResult.rows[0].minimum_release || '']);
+    const requiredRelease = sendingResult.rows[0].minimum_release || controlResult.rows[0].minimum_release || '';
+    const heartbeat = await client.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND enabled=true AND claiming=true AND heartbeat_at > now()-($2::text||' seconds')::interval AND ($3='' OR release_revision = $3) LIMIT 1`, [env, heartbeatSeconds, requiredRelease]);
     if (!controlResult.rows[0].claiming_enabled || heartbeat.rowCount === 0) throw new LifecycleError(503, 'worker_unavailable', 'No fresh compatible email worker is available.');
     const readiness = evaluateReadiness(survey, data, config);
+    await applySuppressionReadiness(client, readiness, data, config);
     if (!readiness.canLaunch) throw new LifecycleError(422, 'survey_not_ready', 'Survey is not ready to launch.', readiness);
 
     const launchResult = await client.query(`INSERT INTO survey_launches(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id) VALUES($1,$2,'initial',$3,$4,$5) RETURNING id,created_at`, [survey.id,survey.organization_id,effectiveKey,requestFingerprint,user.id]);
@@ -206,15 +241,15 @@ async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotenc
     for (const recipient of data.recipients) {
       const language = normalizeLanguage(recipient.lang);
       const bodyText = readiness.templateMap.get(language);
-      const payload = buildInvitationPayload({ to:String(recipient.contact_info).trim().toLowerCase(),sender,subject,bodyText,surveyBaseUrl:config.SURVEY_URL,surveyName:survey.name,token:recipient.uuid,language });
       const deliveryId = crypto.randomUUID();
+      const payload = buildInvitationPayload({ to:String(recipient.contact_info).trim().toLowerCase(),sender,subject,bodyText,surveyBaseUrl:config.SURVEY_URL,surveyName:survey.name,token:recipient.uuid,language,deliveryId,environment:env });
       await client.query(`INSERT INTO survey_email_deliveries(id,launch_id,survey_id,organization_id,respondent_id,to_address,recipient_display_name,language,sender,subject,template_hash,survey_base_url,renderer_version,render_inputs,expected_payload_hash,provider_idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16)`, [deliveryId,launch.id,survey.id,survey.organization_id,recipient.respondent_id,String(recipient.contact_info).trim().toLowerCase(),recipient.name,language,sender,subject,fingerprint(bodyText),config.SURVEY_URL,RENDERER_VERSION,JSON.stringify({surveyName:survey.name}),payloadHash(payload),`survey-delivery-${deliveryId}`]);
     }
     await client.query(`UPDATE survey SET lifecycle_status='active',started_at=now(),started_by_user_id=$1,closed_at=NULL,closed_by_user_id=NULL,lifecycle_version=lifecycle_version+1 WHERE id=$2`, [user.id,survey.id]);
     await strictAudit(client,{organizationId:survey.organization_id,actorUserId:user.id,surveyId:survey.id,eventType:'survey.launch_requested',metadata:{launchId:launch.id,targetCount:data.recipients.length}});
     await strictAudit(client,{organizationId:survey.organization_id,actorUserId:user.id,surveyId:survey.id,eventType:'survey.lifecycle_changed',metadata:{from:'draft',to:'active',launchId:launch.id}});
     await client.query('COMMIT');
-    return { id:launch.id,survey_id:survey.id,kind,status:'queued',target_count:data.recipients.length,pending_count:data.recipients.length,leased_count:0,retry_wait_count:0,accepted_count:0,failed_count:0,uncertain_count:0,cancelled_count:0,created_at:launch.created_at,lifecycleStatus:'active',replayed:false };
+    return { id:launch.id,survey_id:survey.id,kind,status:'queued',target_count:data.recipients.length,pending_count:data.recipients.length,leased_count:0,retry_wait_count:0,accepted_count:0,failed_count:0,uncertain_count:0,cancelled_count:0,provider_sent_count:0,provider_delivered_count:0,provider_delayed_count:0,provider_bounced_count:0,provider_complained_count:0,provider_suppressed_count:0,provider_failed_count:0,accepted_unverified_count:0,created_at:launch.created_at,lifecycleStatus:'active',replayed:false };
   } catch (error) { await client.query('ROLLBACK').catch(()=>{}); if (error.code === '23505') throw new LifecycleError(409,'launch_conflict','An initial launch already exists.'); throw error; }
   finally { client.release(); }
 }
@@ -228,7 +263,7 @@ async function listDeliveries(pool,user,surveyId,{status,cursor,limit=50}={}) {
   const client=await pool.connect();
   try { await loadAuthorizedSurvey(client,user,surveyId,'analyst'); const values=[surveyId]; const clauses=['d.survey_id=$1'];
     if(status){values.push(status);clauses.push(`d.status=$${values.length}`);} if(cursor){values.push(cursor);clauses.push(`d.id < $${values.length}`);} values.push(Math.min(100,Math.max(1,Number(limit)||50)));
-    const result=await client.query(`SELECT d.id,d.launch_id,d.respondent_id,d.recipient_display_name,d.to_address,d.language,d.status,d.attempt_count,d.dispatch_accepted_at,d.dispatch_failed_at,d.last_error_code,d.last_error_message,d.created_at,d.updated_at,(SELECT max(started_at) FROM survey_email_attempts WHERE delivery_id=d.id) AS last_attempt_at FROM survey_email_deliveries d WHERE ${clauses.join(' AND ')} ORDER BY d.id DESC LIMIT $${values.length}`,values);
+    const result=await client.query(`SELECT d.id,d.launch_id,d.respondent_id,d.recipient_display_name,d.to_address,d.language,d.status,d.attempt_count,d.dispatch_accepted_at,d.dispatch_failed_at,d.provider_sent_at,d.provider_delivered_at,d.provider_delayed_at,d.provider_bounced_at,d.provider_complained_at,d.provider_suppressed_at,d.provider_failed_at,CASE WHEN d.provider_complained_at IS NOT NULL THEN 'complained' WHEN d.provider_bounced_at IS NOT NULL THEN 'bounced' WHEN d.provider_suppressed_at IS NOT NULL THEN 'suppressed' WHEN d.provider_failed_at IS NOT NULL THEN 'failed' WHEN d.provider_delivered_at IS NOT NULL THEN 'delivered' WHEN d.provider_delayed_at IS NOT NULL THEN 'delayed' WHEN d.provider_sent_at IS NOT NULL THEN 'sent' WHEN d.status='accepted' THEN 'accepted_unverified' ELSE NULL END AS provider_outcome,d.last_error_code,d.last_error_message,d.created_at,d.updated_at,(SELECT max(started_at) FROM survey_email_attempts WHERE delivery_id=d.id) AS last_attempt_at FROM survey_email_deliveries d WHERE ${clauses.join(' AND ')} ORDER BY d.id DESC LIMIT $${values.length}`,values);
     return {deliveries:result.rows,nextCursor:result.rows.length===values[values.length-1]?result.rows.at(-1).id:null};
   } finally {client.release();}
 }

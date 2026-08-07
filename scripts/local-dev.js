@@ -423,6 +423,14 @@ async function main() {
     env: { EMAIL_WORKER_ENV: 'local', RELEASE_REVISION: 'local' },
   });
 
+  console.log('Starting webhook projection worker...');
+  startService({
+    name: 'email-webhook-worker',
+    cwd: path.join(repoRoot, 'api'),
+    command: `${npmCommand} run webhook-worker:dev`,
+    env: { EMAIL_WORKER_ENV: 'local', RELEASE_REVISION: 'local', RESEND_PROVIDER_ACCOUNT_SCOPE: 'network-survey-resend-team' },
+  });
+
   console.log('Starting dashboard and survey app...');
   startService({
     name: 'dashboard',

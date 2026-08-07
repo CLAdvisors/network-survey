@@ -93,6 +93,31 @@ variable "survey_delivery_v2_enabled" {
   default     = false
 }
 
+variable "resend_provider_account_scope" {
+  description = "Stable scope shared with production because both use the same Resend team."
+  type        = string
+  default     = "network-survey-resend-team"
+}
+
+variable "resend_webhook_ingest_enabled" {
+  description = "Release gate for signed Resend webhook ingestion. Enable only after secret bootstrap and disabled-endpoint reconciliation."
+  type        = bool
+  default     = false
+}
+
+variable "webhook_payload_retention_days" {
+  description = "Days to retain bounded raw webhook payloads."
+  type        = number
+  default     = 30
+}
+
+variable "operations_alert_email" {
+  description = "Optional initial SNS email subscriber for staging infrastructure alarms."
+  type        = string
+  default     = "bgarcia2324@gmail.com"
+  nullable    = true
+}
+
 variable "email_rate_per_second" {
   description = "Approved aggregate Resend account request budget shared with production."
   type        = number

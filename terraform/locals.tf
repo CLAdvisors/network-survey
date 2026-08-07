@@ -21,10 +21,12 @@ locals {
   # runtime config consistent if it is used for a plan/import operation.
   session_cookie_name = local.is_prod ? "ona-session-prod-v2" : "ona-session-${local.environment}-v2"
 
-  ssm_parameter_prefix          = "/network-survey/${local.environment}"
-  db_password_parameter_name    = "${local.ssm_parameter_prefix}/db/password"
-  session_secret_parameter_name = "${local.ssm_parameter_prefix}/api/session-secret"
-  resend_api_key_parameter_name = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  ssm_parameter_prefix                          = "/network-survey/${local.environment}"
+  db_password_parameter_name                    = "${local.ssm_parameter_prefix}/db/password"
+  session_secret_parameter_name                 = "${local.ssm_parameter_prefix}/api/session-secret"
+  resend_api_key_parameter_name                 = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  resend_webhook_secret_parameter_name          = "${local.ssm_parameter_prefix}/api/resend-webhook-secret"
+  resend_webhook_previous_secret_parameter_name = "${local.ssm_parameter_prefix}/api/resend-webhook-secret-previous"
 
   common_tags = {
     Project     = "network-survey"

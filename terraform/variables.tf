@@ -87,6 +87,19 @@ variable "artifact_retention_days" {
   default     = 30
 }
 
+variable "resend_provider_account_scope" {
+  description = "Stable non-secret scope shared by environments using the same Resend team."
+  type        = string
+  default     = "network-survey-resend-team"
+}
+
+variable "operations_alert_email" {
+  description = "Optional initial SNS email subscriber for infrastructure alarms."
+  type        = string
+  default     = "bgarcia2324@gmail.com"
+  nullable    = true
+}
+
 variable "api_config_db_host_override" {
   description = "Optional DB host written to the API runtime config instead of this stack's RDS address. Temporary safety valve while prod DB ownership is split during the infra refactor. Leave null for normal environments."
   type        = string

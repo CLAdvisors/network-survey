@@ -32,14 +32,22 @@ API runtime secrets are stored in SSM Parameter Store SecureString values, e.g.:
 /network-survey/staging/db/password
 /network-survey/staging/api/session-secret
 /network-survey/staging/api/resend-api-key
+/network-survey/staging/api/resend-webhook-secret
+/network-survey/staging/api/resend-webhook-secret-previous  # optional rotation overlap
 /network-survey/staging/api/bootstrap-admin-password
 /network-survey/prod/db/password
 /network-survey/prod/api/session-secret
 /network-survey/prod/api/resend-api-key
+/network-survey/prod/api/resend-webhook-secret
+/network-survey/prod/api/resend-webhook-secret-previous  # optional rotation overlap
 /network-survey/prod/api/bootstrap-admin-password
 ```
 
-Never commit secret values or local `*.local.tfvars` files.
+Never commit secret values or local `*.local.tfvars` files. Terraform stores only the webhook parameter names and grants each EC2 runtime role read-only access to its own environment paths; webhook registration writes values only under separately authorized operator credentials.
+
+The shared non-secret `resend_provider_account_scope` must be configured identically in staging and production because they use one Resend team. `resend_webhook_ingest_enabled` defaults false and is the only Phase 2 database-independent release gate. Processing, suppression enforcement, and all-email sending are audited database controls.
+
+Each backend has separate API, delivery-worker, and webhook-worker CloudWatch log groups, a Terraform-managed SNS alarm topic/subscription, and environment-only webhook metric alarms. Terraform also applies an SSM Association so the CloudWatch Agent is configured in place on existing hosts rather than relying only on cloud-init.
 
 ### Staging dashboard bootstrap administrator
 

@@ -3,7 +3,10 @@ import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import api from '../api/axios';
 import SurveyLifecyclePanel from './SurveyLifecyclePanel';
-import { launchCounts, launchStatus } from './surveyLifecycle';
+import {
+  launchCounts, launchStatus, providerCounts, providerOutcome, providerOutcomeLabel,
+  providerOutcomeTimestamp, providerTimestamps, shouldPollLaunch,
+} from './surveyLifecycle';
 
 vi.mock('../api/axios', () => ({ default: { get: vi.fn() } }));
 
@@ -24,6 +27,56 @@ test('normalizes the real snake_case launch aggregate contract', () => {
   expect(launchStatus({ targetCount: 42, acceptedCount: 42 })).toBe('completed');
 });
 
+test('normalizes additive provider counts, timestamps, and old accepted deliveries', () => {
+  expect(providerCounts({
+    accepted_count: '5',
+    provider_outcome_counts: {
+      sent_count: '4', delivered_count: '2', delayed_count: 1, bounced_count: '1',
+      complained_count: 1, suppressed_count: 0, provider_failed_count: '1', accepted_unverified_count: '1',
+    },
+  })).toEqual({
+    sent: 4, delivered: 2, delayed: 1, bounced: 1, complained: 1,
+    suppressed: 0, providerFailed: 1, acceptedUnverified: 1,
+  });
+  expect(providerCounts({ acceptedCount: 3 }).acceptedUnverified).toBe(3);
+
+  const delivery = {
+    dispatch_status: 'accepted',
+    provider_timestamps: { delivered_at: '2026-01-02T03:04:05Z' },
+    provider_complained_at: '2026-01-03T03:04:05Z',
+  };
+  expect(providerTimestamps(delivery)).toMatchObject({
+    delivered: '2026-01-02T03:04:05Z', complained: '2026-01-03T03:04:05Z',
+  });
+  expect(providerOutcome(delivery)).toBe('complained');
+  expect(providerOutcomeTimestamp(delivery)).toBe('2026-01-03T03:04:05Z');
+  expect(providerOutcome({ emailStatus: 'legacy_assumed_accepted' })).toBe('accepted_unverified');
+  expect(providerOutcomeLabel('accepted_unverified')).toBe('Accepted / unverified');
+});
+
+test('keeps terminal provider reconciliation polling bounded', () => {
+  const now = Date.parse('2026-02-01T00:00:00Z');
+  expect(shouldPollLaunch({ status: 'processing', created_at: '2020-01-01T00:00:00Z' }, now)).toBe(true);
+  expect(shouldPollLaunch({ status: 'completed', created_at: '2026-01-31T00:00:00Z' }, now)).toBe(true);
+  expect(shouldPollLaunch({ status: 'completed', created_at: '2026-01-01T00:00:00Z' }, now)).toBe(false);
+});
+
+test('renders provider outcomes separately without changing dispatch arithmetic', async () => {
+  api.get.mockResolvedValue({ data: { launches: [{
+    id: 'launch-1', status: 'completed', created_at: new Date().toISOString(),
+    target_count: 3, accepted_count: 3,
+    provider_outcome_counts: { delivered_count: 2, complained_count: 1, accepted_unverified_count: 1 },
+  }] } });
+  render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'First', lifecycleStatus: 'active' }} />);
+
+  expect(await screen.findByRole('status')).toHaveTextContent('3 of 3 finished');
+  const providerSummary = screen.getByRole('region', { name: 'Provider outcome summary' });
+  expect(providerSummary).toHaveTextContent('2 delivered');
+  expect(providerSummary).toHaveTextContent('1 complained');
+  expect(providerSummary).toHaveTextContent('1 accepted / unverified');
+  expect(providerSummary).not.toHaveTextContent('3 delivered');
+});
+
 test('does not render prior survey history while the next survey is loading', async () => {
   const second = deferred();
   api.get
@@ -37,6 +90,20 @@ test('does not render prior survey history while the next survey is loading', as
     second.resolve({ data: { launches: [] } });
     await second.promise;
   });
+});
+
+test('stops automatic terminal polling after the reconciliation horizon', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-02-01T00:00:00Z'));
+  api.get.mockResolvedValue({ data: { launches: [{
+    id: 'old', status: 'completed', created_at: '2026-01-01T00:00:00Z',
+    target_count: 1, accepted_count: 1,
+  }] } });
+  render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'First', lifecycleStatus: 'active' }} />);
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(api.get).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+  expect(api.get).toHaveBeenCalledTimes(1);
 });
 
 test('retries launch history with backoff after a transient failure', async () => {

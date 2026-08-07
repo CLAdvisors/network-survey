@@ -14,11 +14,13 @@ locals {
   # as a host-only cookie, but distinct names keep environments unambiguous.
   session_cookie_name = "ona-session-${local.environment}-v2"
 
-  ssm_parameter_prefix                    = "/network-survey/${local.environment}"
-  db_password_parameter_name              = "${local.ssm_parameter_prefix}/db/password"
-  session_secret_parameter_name           = "${local.ssm_parameter_prefix}/api/session-secret"
-  resend_api_key_parameter_name           = "${local.ssm_parameter_prefix}/api/resend-api-key"
-  bootstrap_admin_password_parameter_name = "${local.ssm_parameter_prefix}/api/bootstrap-admin-password"
+  ssm_parameter_prefix                          = "/network-survey/${local.environment}"
+  db_password_parameter_name                    = "${local.ssm_parameter_prefix}/db/password"
+  session_secret_parameter_name                 = "${local.ssm_parameter_prefix}/api/session-secret"
+  resend_api_key_parameter_name                 = "${local.ssm_parameter_prefix}/api/resend-api-key"
+  resend_webhook_secret_parameter_name          = "${local.ssm_parameter_prefix}/api/resend-webhook-secret"
+  resend_webhook_previous_secret_parameter_name = "${local.ssm_parameter_prefix}/api/resend-webhook-secret-previous"
+  bootstrap_admin_password_parameter_name       = "${local.ssm_parameter_prefix}/api/bootstrap-admin-password"
 
   common_tags = {
     Project     = "network-survey"

@@ -1,27 +1,31 @@
 import React, { useState } from 'react';
 import {
+  Alert,
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   IconButton,
   Menu,
   MenuItem,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
-  Button,
-  TextField,
-  Typography,
   Snackbar,
-  Alert,
-  Box
+  TextField,
 } from '@mui/material';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayCircle from '@mui/icons-material/PlayCircle';
 import EmailIcon from '@mui/icons-material/Email';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import HistoryIcon from '@mui/icons-material/History';
+import StopCircleIcon from '@mui/icons-material/StopCircle';
+import ReplayIcon from '@mui/icons-material/Replay';
 import api from '../api/axios';
 import SendDemoDialog from './SendDemoDialog';
+import StartSurveyDialog from './StartSurveyDialog';
+import { capability, errorMessage, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
 const buildDefaultCopiedName = (name) => {
@@ -31,84 +35,40 @@ const buildDefaultCopiedName = (name) => {
   return candidate === sourceName ? `${sourceName.slice(0, 250)}Copy2` : candidate;
 };
 
-const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
+const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onViewLifecycle }) => {
   const [anchorEl, setAnchorEl] = useState(null);
-  const [startConfirmOpen, setStartConfirmOpen] = useState(false);
+  const [startOpen, setStartOpen] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [copiedName, setCopiedName] = useState(buildDefaultCopiedName(row.name));
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState('');
+  const [transition, setTransition] = useState(null);
+  const [transitioning, setTransitioning] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [demoDialogOpen, setDemoDialogOpen] = useState(false);
   const [demoSending, setDemoSending] = useState(false);
-  const [snackbar, setSnackbar] = useState({
-    open: false,
-    message: '',
-    severity: 'success'
-  });
-  const open = Boolean(anchorEl);
-  const { canEditSurvey, canArchiveSurvey } = useAuth();
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const { canEditSurvey, canArchiveSurvey, hasSurveyRole } = useAuth();
+  const status = lifecycleStatus(row);
+  const id = surveyId(row);
+  const canEdit = canEditSurvey(row);
+  const canLaunch = status === 'draft' && capability(row, 'canLaunch', canEdit);
+  const canClose = status === 'active' && capability(row, 'canClose', canEdit);
+  const canReopen = status === 'closed' && capability(row, 'canReopen', hasSurveyRole(row, 'admin'));
 
-  // Add handler for closing snackbar
-  const handleCloseSnackbar = (event, reason) => {
-    if (reason === 'clickaway') {
-      return;
-    }
-    setSnackbar(prev => ({ ...prev, open: false }));
-  };
-
-  
-  const handleClick = (event) => {
-    event.stopPropagation();
-    setAnchorEl(event.currentTarget);
-  };
-  
-  const handleClose = (event) => {
-    if (event) {
-      event.stopPropagation();
-    }
-    setAnchorEl(null);
-  };
-
-  const handleStartClick = (event) => {
-    event.stopPropagation();
-    setStartConfirmOpen(true);
-    handleClose();
-  };
-
-  // Modify handleStartConfirm
-  const handleStartConfirm = async () => {
-    try {
-      await api.post('/startSurvey', { surveyName: row.id || row.name });
-      setStartConfirmOpen(false);
-      setSnackbar({
-        open: true,
-        message: 'Survey started successfully',
-        severity: 'success'
-      });
-    } catch (error) {
-      console.error('Error starting survey:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to start survey. Please try again.',
-        severity: 'error'
-      });
-    }
-  };
-
-  const handleStartCancel = (event) => {
-    if (event) {
-      event.stopPropagation();
-    }
-    setStartConfirmOpen(false);
-  };
+  const notify = (message, severity = 'success') => setSnackbar({ open: true, message, severity });
+  const handleCloseSnackbar = (_, reason) => reason !== 'clickaway' && setSnackbar((value) => ({ ...value, open: false }));
+  const stop = (event) => event?.stopPropagation();
+  const closeMenu = (event) => { stop(event); setAnchorEl(null); };
+  const openAction = (setter) => (event) => { stop(event); setter(true); setAnchorEl(null); };
 
   const handleCopyClick = (event) => {
-    event.stopPropagation();
+    stop(event);
     setCopiedName(buildDefaultCopiedName(row.name));
     setCopyError('');
     setCopyDialogOpen(true);
-    handleClose();
+    setAnchorEl(null);
   };
 
   const handleCopyClose = () => {
@@ -131,13 +91,9 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
     setCopying(true);
     setCopyError('');
     try {
-      const response = await api.post(`/surveys/${row.id || row.name}/copy`, { name });
+      const response = await api.post(`/surveys/${id}/copy`, { name });
       setCopyDialogOpen(false);
-      setSnackbar({
-        open: true,
-        message: response.data?.message || `Survey copied successfully as "${name}".`,
-        severity: 'success'
-      });
+      notify(response.data?.message || `Survey copied successfully as "${name}".`);
       await onSurveyCopied?.(response.data?.survey);
     } catch (error) {
       setCopyError(error.response?.data?.message || 'Failed to copy survey. Please try again.');
@@ -146,166 +102,87 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
     }
   };
 
-  const handleDemoClick = (event) => {
-    event.stopPropagation();
-    setDemoDialogOpen(true);
-    handleClose();
-  };
-
   const handleDemoSubmit = async (email, language) => {
     setDemoSending(true);
     try {
-      const response = await api.post(`/surveys/${row.id || row.name}/demo-email`, { email, language });
+      const response = await api.post(`/surveys/${id}/demo-email`, { email, language });
       setDemoDialogOpen(false);
-      setSnackbar({
-        open: true,
-        message: response.data?.message || 'Demo survey email sent successfully',
-        severity: 'success'
-      });
+      notify(response.data?.message || 'Demo survey email sent successfully');
     } catch (error) {
-      setSnackbar({
-        open: true,
-        message: error.response?.data?.message || 'Failed to send demo survey email. Please try again.',
-        severity: 'error'
-      });
+      notify(error.response?.data?.message || 'Failed to send demo survey email. Please try again.', 'error');
     } finally {
       setDemoSending(false);
     }
   };
 
-  const handleDeleteClick = (event) => {
-    event.stopPropagation();
-    setDeleteConfirmOpen(true);
-    handleClose();
+  const handleLaunchAccepted = (payload) => {
+    setStartOpen(false);
+    notify('Invitation launch queued. Track acceptance and failures in delivery status.');
+    onLifecycleChange?.(id, payload);
+    onViewLifecycle?.(row);
+  };
+
+  const handleTransition = async () => {
+    if (!transition || transitioning) return;
+    setTransitioning(true);
+    try {
+      await api.post(`/surveys/${id}/${transition}`);
+      notify(transition === 'close'
+        ? 'Survey closed. Unsent invitations are being cancelled.'
+        : 'Survey reopened. Cancelled invitations were not resumed.');
+      setTransition(null);
+      onLifecycleChange?.(id);
+    } catch (error) {
+      notify(errorMessage(error, `Unable to ${transition} this survey.`), 'error');
+    } finally {
+      setTransitioning(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
+    if (archiving) return;
+    setArchiving(true);
     try {
-      const response = await api.delete(`/survey/${row.id || row.name}`);
-      if (response.status === 200) {
-        onSurveyDeleted(row.name);
-      }
+      const response = await api.delete(`/survey/${id}`);
+      if (response.status === 200) onSurveyDeleted?.(row.name);
+      setDeleteConfirmOpen(false);
     } catch (error) {
-      console.error('Error deleting survey:', error);
+      notify(errorMessage(error, 'Unable to archive this survey.'), 'error');
+    } finally {
+      setArchiving(false);
     }
-    setDeleteConfirmOpen(false);
-  };
-
-  const handleDeleteCancel = (event) => {
-    if (event) {
-      event.stopPropagation();
-    }
-    setDeleteConfirmOpen(false);
   };
 
   return (
     <>
       <IconButton
-        onClick={handleClick}
+        onClick={(event) => { stop(event); setAnchorEl(event.currentTarget); }}
         size="small"
-        aria-label={`Survey actions for ${row.name}`}
-        sx={{
-          '&:hover': {
-            backgroundColor: 'rgba(66, 179, 175, 0.1)',
-          }
-        }}
+        aria-label={`${status === 'draft' ? 'Survey actions' : 'Actions'} for ${row.name}`}
       >
         <MoreHorizIcon />
       </IconButton>
-
-      <Snackbar 
-        open={snackbar.open} 
-        autoHideDuration={6000} 
-        onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        <Alert 
-          onClose={handleCloseSnackbar} 
-          severity={snackbar.severity}
-          variant="filled"
-          sx={{ width: '100%' }}
-        >
-          {snackbar.message}
-        </Alert>
+      <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={handleCloseSnackbar} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
+        <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} variant="filled" sx={{ width: '100%' }}>{snackbar.message}</Alert>
       </Snackbar>
-      
-      <Menu
-        anchorEl={anchorEl}
-        open={open}
-        onClose={handleClose}
-        onClick={handleClose}
-        PaperProps={{
-          elevation: 3,
-          sx: {
-            minWidth: 150,
-            '& .MuiMenuItem-root': {
-              px: 2,
-              py: 1,
-              gap: 1.5,
-            },
-          },
-        }}
-        transformOrigin={{ horizontal: 'right', vertical: 'top' }}
-        anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
-      >
-        {canEditSurvey(row) && (
-          <MenuItem onClick={handleStartClick}>
-            <PlayCircle fontSize="small" />
-            Start Survey
-          </MenuItem>
-        )}
-        {canEditSurvey(row) && (
-          <MenuItem onClick={handleCopyClick}>
-            <ContentCopyIcon fontSize="small" />
-            Copy Survey
-          </MenuItem>
-        )}
-        {canEditSurvey(row) && (
-          <MenuItem onClick={handleDemoClick}>
-            <EmailIcon fontSize="small" />
-            Send Email Demo
-          </MenuItem>
-        )}
-        {canArchiveSurvey(row) && (
-          <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
-            <DeleteIcon fontSize="small" />
-            Archive Survey
-          </MenuItem>
-        )}
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={closeMenu} PaperProps={{ sx: { minWidth: 190 } }}>
+        {canLaunch && <MenuItem onClick={openAction(setStartOpen)}><PlayCircle fontSize="small" sx={{ mr: 1 }} />Launch Survey</MenuItem>}
+        {status !== 'draft' && <MenuItem onClick={(event) => { closeMenu(event); onViewLifecycle?.(row); }}><HistoryIcon fontSize="small" sx={{ mr: 1 }} />{status === 'closed' ? 'View History' : 'View Delivery Status'}</MenuItem>}
+        {canClose && <MenuItem onClick={(event) => { closeMenu(event); setTransition('close'); }}><StopCircleIcon fontSize="small" sx={{ mr: 1 }} />Close Survey</MenuItem>}
+        {canReopen && <MenuItem onClick={(event) => { closeMenu(event); setTransition('reopen'); }}><ReplayIcon fontSize="small" sx={{ mr: 1 }} />Reopen Survey</MenuItem>}
+        {canEdit && <MenuItem onClick={handleCopyClick}><ContentCopyIcon fontSize="small" sx={{ mr: 1 }} />Copy Survey</MenuItem>}
+        {canEdit && <MenuItem onClick={openAction(setDemoDialogOpen)}><EmailIcon fontSize="small" sx={{ mr: 1 }} />Send Email Demo</MenuItem>}
+        {canArchiveSurvey(row) && <MenuItem onClick={openAction(setDeleteConfirmOpen)} sx={{ color: 'error.main' }}><DeleteIcon fontSize="small" sx={{ mr: 1 }} />Archive Survey</MenuItem>}
       </Menu>
 
-      <Dialog
-        open={startConfirmOpen}
-        onClose={handleStartCancel}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <DialogTitle>Start Survey</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Are you sure you want to start the survey "{row.name}"? This will initiate the survey process for all respondents.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleStartCancel}>Cancel</Button>
-          <Button onClick={handleStartConfirm} variant="contained" color="primary">
-            Start Survey
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <StartSurveyDialog open={startOpen} survey={row} onClose={() => setStartOpen(false)} onAccepted={handleLaunchAccepted} />
 
-      <Dialog
-        open={copyDialogOpen}
-        onClose={handleCopyClose}
-        onClick={(event) => event.stopPropagation()}
-        fullWidth
-        maxWidth="sm"
-      >
+      <Dialog open={copyDialogOpen} onClose={handleCopyClose} onClick={stop} fullWidth maxWidth="sm">
         <DialogTitle>Copy survey</DialogTitle>
-        <Box component="form" onSubmit={(event) => { event.preventDefault(); handleCopyConfirm(); }}>
+        <Box component="form" noValidate onSubmit={(event) => { event.preventDefault(); handleCopyConfirm(); }}>
           <DialogContent>
             <DialogContentText sx={{ mb: 2 }}>
-              Copy the complete configuration and respondent roster from “{row.name}”.
-              Responses, invitation delivery history, completion state, and access links will be reset.
+              Copy the complete configuration and respondent roster from “{row.name}”. Responses, invitation delivery history, completion state, and access links will be reset.
             </DialogContentText>
             <TextField
               autoFocus
@@ -316,9 +193,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
               onChange={(event) => {
                 const nextName = event.target.value;
                 setCopiedName(nextName);
-                setCopyError(nextName && !/^[A-Za-z0-9]*$/.test(nextName)
-                  ? 'Only letters and numbers are allowed.'
-                  : '');
+                setCopyError(nextName && !/^[A-Za-z0-9]*$/.test(nextName) ? 'Only letters and numbers are allowed.' : '');
               }}
               error={Boolean(copyError)}
               helperText={copyError || 'The survey title and invitation templates will be preserved.'}
@@ -327,40 +202,38 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied }) => {
           </DialogContent>
           <DialogActions>
             <Button onClick={handleCopyClose} disabled={copying}>Cancel</Button>
-            <Button type="submit" variant="contained" disabled={copying}>
-              {copying ? 'Copying…' : 'Copy survey'}
-            </Button>
+            <Button type="submit" variant="contained" disabled={copying}>{copying ? 'Copying…' : 'Copy survey'}</Button>
           </DialogActions>
         </Box>
       </Dialog>
 
-      <SendDemoDialog
-        open={demoDialogOpen}
-        onClose={() => setDemoDialogOpen(false)}
-        onSubmit={handleDemoSubmit}
-        surveyName={row.name}
-        loading={demoSending}
-      />
+      <SendDemoDialog open={demoDialogOpen} onClose={() => setDemoDialogOpen(false)} onSubmit={handleDemoSubmit} surveyName={row.name} loading={demoSending} />
 
-      <Dialog
-        open={deleteConfirmOpen}
-        onClose={handleDeleteCancel}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <DialogTitle>Delete Survey</DialogTitle>
+      <Dialog open={Boolean(transition)} onClose={() => !transitioning && setTransition(null)} aria-describedby="transition-description">
+        <DialogTitle>{transition === 'close' ? 'Close survey' : 'Reopen survey'}</DialogTitle>
         <DialogContent>
-          <Typography>
-            Are you sure you want to archive the survey "{row.name}"? Respondents and email templates will be preserved.
-          </Typography>
+          <DialogContentText id="transition-description">
+            {transition === 'close'
+              ? `Close “${row.name}”? Respondents will no longer be able to load or submit it, and unsent invitations will be cancelled.`
+              : `Reopen “${row.name}”? Respondents can use existing links again. Cancelled invitations will not resume.`}
+          </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleDeleteCancel}>Cancel</Button>
-          <Button onClick={handleDeleteConfirm} variant="contained" color="error">
-            Archive Survey
+          <Button onClick={() => setTransition(null)} disabled={transitioning}>Cancel</Button>
+          <Button variant="contained" color={transition === 'close' ? 'error' : 'primary'} onClick={handleTransition} disabled={transitioning}>
+            {transitioning ? 'Updating…' : transition === 'close' ? 'Close survey' : 'Reopen survey'}
           </Button>
         </DialogActions>
       </Dialog>
 
+      <Dialog open={deleteConfirmOpen} onClose={() => !archiving && setDeleteConfirmOpen(false)} aria-describedby="archive-description" aria-busy={archiving}>
+        <DialogTitle>Archive Survey</DialogTitle>
+        <DialogContent><DialogContentText id="archive-description">Archive “{row.name}”? Respondents and delivery history will be preserved.</DialogContentText></DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteConfirmOpen(false)} disabled={archiving}>Cancel</Button>
+          <Button onClick={handleDeleteConfirm} variant="contained" color="error" disabled={archiving}>{archiving ? 'Archiving…' : 'Archive Survey'}</Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 };

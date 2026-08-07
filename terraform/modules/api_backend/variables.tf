@@ -174,6 +174,50 @@ variable "session_cookie_name" {
   type        = string
 }
 
+variable "email_worker_environment" {
+  description = "Durable email worker control namespace (staging or prod)."
+  type        = string
+
+  validation {
+    condition     = contains(["staging", "prod"], var.email_worker_environment)
+    error_message = "email_worker_environment must be staging or prod."
+  }
+}
+
+variable "survey_delivery_v2_enabled" {
+  description = "Explicit rollout gate for durable survey launch enqueue."
+  type        = bool
+  default     = false
+}
+
+variable "legacy_start_enabled" {
+  description = "Compatibility start adapter gate; keep false for hosted rollouts."
+  type        = bool
+  default     = false
+}
+
+variable "email_rate_per_second" {
+  description = "Approved aggregate provider-account email request budget."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.email_rate_per_second >= 1 && var.email_rate_per_second <= 100
+    error_message = "email_rate_per_second must be between 1 and 100."
+  }
+}
+
+variable "email_rate_budget_environment" {
+  description = "Shared reservation namespace for deployments using the same provider account."
+  type        = string
+  default     = "prod"
+
+  validation {
+    condition     = contains(["staging", "prod"], var.email_rate_budget_environment)
+    error_message = "email_rate_budget_environment must name a seeded hosted control namespace."
+  }
+}
+
 variable "cloud_init_template_path" {
   description = "Path to cloud-init template."
   type        = string

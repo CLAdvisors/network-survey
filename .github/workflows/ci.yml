@@ -49,8 +49,89 @@ jobs:
             --searchPath=/db \
             update
 
+      - name: Verify production-shaped upgrade and migration rerun
+        run: |
+          PGPASSWORD=postgres createdb -h 127.0.0.1 -U postgres ONA_upgrade
+          rm -rf /tmp/db-pre-lifecycle
+          cp -a db /tmp/db-pre-lifecycle
+          sed -i '/v1_6_survey_lifecycle_email_delivery.sql/d' /tmp/db-pre-lifecycle/changelogs/master-changelog.xml
+          docker run --rm --network host \
+            -v /tmp/db-pre-lifecycle:/db \
+            liquibase/liquibase:4.29 \
+            --url=jdbc:postgresql://127.0.0.1:5432/ONA_upgrade \
+            --username=postgres --password=postgres \
+            --changeLogFile=changelogs/master-changelog.xml --searchPath=/db update
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d ONA_upgrade -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO survey(name,title,creation_date,questions,organization_id,archived_at)
+          SELECT 'Upgrade Active','Active',now(),'{"elements":[{"type":"text","name":"question_1"}]}'::jsonb,id,NULL FROM organizations WHERE slug='default-imported';
+          INSERT INTO survey(name,title,creation_date,questions,organization_id,archived_at)
+          SELECT 'Upgrade Draft','Draft',now(),'{"elements":[{"type":"text","name":"question_1"}]}'::jsonb,id,NULL FROM organizations WHERE slug='default-imported';
+          INSERT INTO survey(name,title,creation_date,questions,organization_id,archived_at)
+          SELECT 'Upgrade Archived','Archived',now(),'{"elements":[]}'::jsonb,id,now() FROM organizations WHERE slug='default-imported';
+          INSERT INTO respondent(name,contact_info,survey_name,can_respond,uuid,lang,response,email_sent,survey_id)
+          SELECT 'Active Person','active@example.test',name,true,'upgrade-active-token','English','{"question_1":"yes"}'::jsonb,true,id FROM survey WHERE name='Upgrade Active';
+          INSERT INTO email(survey_name,lang,text,survey_id)
+          SELECT name,'English','Please participate',id FROM survey WHERE name IN ('Upgrade Active','Upgrade Draft');
+          SQL
+          PGPASSWORD=postgres createdb -h 127.0.0.1 -U postgres -T ONA_upgrade ONA_conflict
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d ONA_conflict -v ON_ERROR_STOP=1 \
+            -c "UPDATE respondent SET survey_id=gen_random_uuid() WHERE survey_name='Upgrade Active'"
+          if docker run --rm --network host -v "$PWD/db:/db" liquibase/liquibase:4.29 \
+            --url=jdbc:postgresql://127.0.0.1:5432/ONA_conflict --username=postgres --password=postgres \
+            --changeLogFile=changelogs/master-changelog.xml --searchPath=/db update; then
+            echo 'Expected orphaned stable-ID preflight to fail' >&2
+            exit 1
+          fi
+          PGPASSWORD=postgres createdb -h 127.0.0.1 -U postgres -T ONA_upgrade ONA_lock_timeout
+          (PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d ONA_lock_timeout -v ON_ERROR_STOP=1 -c 'BEGIN; LOCK TABLE survey IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(20); COMMIT') &
+          LOCK_PID=$!
+          sleep 1
+          if docker run --rm --network host -v "$PWD/db:/db" liquibase/liquibase:4.29 \
+            --url=jdbc:postgresql://127.0.0.1:5432/ONA_lock_timeout --username=postgres --password=postgres \
+            --changeLogFile=changelogs/master-changelog.xml --searchPath=/db update; then
+            echo 'Expected lifecycle migration lock timeout' >&2
+            exit 1
+          fi
+          wait "$LOCK_PID"
+          docker run --rm --network host -v "$PWD/db:/db" liquibase/liquibase:4.29 \
+            --url=jdbc:postgresql://127.0.0.1:5432/ONA_lock_timeout --username=postgres --password=postgres \
+            --changeLogFile=changelogs/master-changelog.xml --searchPath=/db update
+          if PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d ONA_upgrade -v ON_ERROR_STOP=1 \
+            -c 'CREATE UNIQUE INDEX CONCURRENTLY idx_survey_id_org_unique ON survey ((1))'; then
+            echo 'Expected duplicate-key concurrent index build to leave a recoverable invalid index' >&2
+            exit 1
+          fi
+          trap 'kill "${WRITER_PID:-}" 2>/dev/null || true' EXIT
+          (
+            while true; do
+              PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d ONA_upgrade -c "UPDATE survey SET title=title WHERE name='Upgrade Draft'" >/dev/null
+              sleep 0.1
+            done
+          ) &
+          WRITER_PID=$!
+          docker run --rm --network host \
+            -v "$PWD/db:/db" \
+            liquibase/liquibase:4.29 \
+            --url=jdbc:postgresql://127.0.0.1:5432/ONA_upgrade \
+            --username=postgres --password=postgres \
+            --changeLogFile=changelogs/master-changelog.xml --searchPath=/db update
+          kill "$WRITER_PID" 2>/dev/null || true
+          wait "$WRITER_PID" 2>/dev/null || true
+          unset WRITER_PID
+          trap - EXIT
+          docker run --rm --network host \
+            -v "$PWD/db:/db" \
+            liquibase/liquibase:4.29 \
+            --url=jdbc:postgresql://127.0.0.1:5432/ONA_upgrade \
+            --username=postgres --password=postgres \
+            --changeLogFile=changelogs/master-changelog.xml --searchPath=/db update
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d ONA_upgrade -v ON_ERROR_STOP=1 \
+            -c "SELECT lifecycle_status,count(*) FROM survey WHERE name LIKE 'Upgrade %' GROUP BY lifecycle_status ORDER BY lifecycle_status" \
+            -c "SELECT c.relname,i.indisvalid,i.indisready FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname IN ('survey_id_key','idx_survey_id_org_unique','idx_respondent_id_survey_unique') AND (NOT i.indisvalid OR NOT i.indisready)" \
+            -c 'DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname IN ('\''survey_id_key'\'','\''idx_survey_id_org_unique'\'','\''idx_respondent_id_survey_unique'\'') AND (NOT i.indisvalid OR NOT i.indisready)) THEN RAISE EXCEPTION '\''invalid lifecycle index remains'\''; END IF; IF (SELECT count(*) FROM email_worker_control) <> 4 THEN RAISE EXCEPTION '\''worker controls missing'\''; END IF; IF (SELECT count(*) FROM survey WHERE name LIKE '\''Upgrade %'\'' AND lifecycle_status='\''active'\'') <> 1 THEN RAISE EXCEPTION '\''active backfill mismatch'\''; END IF; IF (SELECT count(*) FROM survey WHERE name LIKE '\''Upgrade %'\'' AND lifecycle_status='\''draft'\'') <> 1 THEN RAISE EXCEPTION '\''draft backfill mismatch'\''; END IF; IF (SELECT count(*) FROM survey WHERE name LIKE '\''Upgrade %'\'' AND lifecycle_status='\''closed'\'') <> 1 THEN RAISE EXCEPTION '\''closed backfill mismatch'\''; END IF; END $$;'
+
       - name: Install API dependencies
-        run: npm ci
+        run: npm ci --workspaces=false
         working-directory: api
 
       - name: Run API unit/security tests
@@ -78,9 +159,8 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.app }}/package-lock.json
 
-      - name: Install dependencies
+      - name: Install workspace dependencies
         run: npm ci
-        working-directory: ${{ matrix.app }}
 
       - name: Test
         run: npm test

@@ -148,6 +148,22 @@ variable "artifact_retention_days" {
   default     = 30
 }
 
+variable "survey_delivery_v2_enabled" {
+  description = "Explicit production rollout gate for durable survey launches."
+  type        = bool
+  default     = false
+}
+
+variable "email_rate_per_second" {
+  description = "Approved aggregate Resend account request budget shared with staging."
+  type        = number
+  default     = 4
+  validation {
+    condition     = var.email_rate_per_second >= 1 && var.email_rate_per_second <= 4
+    error_message = "Production is capped at 4 requests/second so staging plus production remain within the shared budget."
+  }
+}
+
 variable "enable_frontend_custom_domains" {
   description = "Attach demo dashboard/survey aliases and imported ACM certs to the replacement CloudFront distributions. This is true after prod-v2 DNS cutover."
   type        = bool

@@ -11,6 +11,11 @@ export DB_PORT=${DB_PORT:-5432}
 export DB_NAME=${DB_NAME:-ONA}
 export SESSION_SECRET=${SESSION_SECRET:-ci-smoke-secret}
 export PORT=${PORT:-3000}
+export SURVEY_URL=${SURVEY_URL:-http://survey.example.test}
+export RESEND_API_KEY=${RESEND_API_KEY:-ci-not-used-provider-key}
+export EMAIL_WORKER_ENV=${EMAIL_WORKER_ENV:-test}
+export SURVEY_DELIVERY_V2_ENABLED=true
+export LEGACY_START_ENABLED=true
 
 BASE="http://127.0.0.1:$PORT"
 COOKIES=$(mktemp)
@@ -89,6 +94,45 @@ echo "==> Authenticated survey CRUD"
 curl -fsS -b "$COOKIES" -X POST "$BASE/api/survey" \
   -H 'Content-Type: application/json' \
   -d '{"surveyName":"CISmokeSurvey"}' >/dev/null
-curl -fsS -b "$COOKIES" "$BASE/api/surveys" | grep -q 'CISmokeSurvey'
+SURVEYS=$(curl -fsS -b "$COOKIES" "$BASE/api/surveys")
+echo "$SURVEYS" | grep -q 'CISmokeSurvey'
+SURVEY_ID=$(printf '%s' "$SURVEYS" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s).surveys.find(x=>x.name==='CISmokeSurvey').id))")
+
+echo "==> Seed launch readiness and worker heartbeat"
+SURVEY_ID="$SURVEY_ID" node <<'NODE'
+const { createRequire } = require('module');
+const path = require('path');
+const apiRequire = createRequire(path.resolve(process.cwd(), 'api/package.json'));
+const { Pool } = apiRequire('pg');
+const pool = new Pool({ user:process.env.DB_USER, password:process.env.DB_PASSWORD, host:process.env.DB_HOST, port:Number(process.env.DB_PORT), database:process.env.DB_NAME });
+(async () => {
+  const survey = await pool.query(`UPDATE survey SET questions=$2::jsonb WHERE id=$1 RETURNING id,name`, [process.env.SURVEY_ID, JSON.stringify({elements:[{type:'text',name:'question_1',title:'Smoke question'}]})]);
+  await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES
+    ('Smoke Respondent','smoke@example.test',$1,$2,true,'ci-smoke-respondent-token','English',false),
+    ('Smoke Respondent Two','smoke2@example.test',$1,$2,true,'ci-smoke-respondent-token-2','English',false),
+    ('Smoke Respondent Three','smoke3@example.test',$1,$2,true,'ci-smoke-respondent-token-3','English',false)`, [survey.rows[0].name,survey.rows[0].id]);
+  await pool.query(`INSERT INTO email(survey_name,survey_id,lang,text) VALUES($1,$2,'English','Please complete the smoke survey.')`, [survey.rows[0].name,survey.rows[0].id]);
+  await pool.query(`INSERT INTO email_worker_heartbeats(environment,worker_instance,release_revision,enabled,claiming,heartbeat_at) VALUES('test','ci-smoke','local',true,true,now()) ON CONFLICT(environment,worker_instance) DO UPDATE SET heartbeat_at=now(),enabled=true,claiming=true`);
+  await pool.end();
+})().catch(async (error) => { console.error(error); await pool.end().catch(()=>{}); process.exit(1); });
+NODE
+
+echo "==> Durable lifecycle launch is ready and idempotent"
+curl -fsS -b "$COOKIES" "$BASE/api/surveys/$SURVEY_ID/launch-readiness" | grep -q '"canLaunch":true'
+LAUNCH_HEADERS=$(mktemp)
+LAUNCH_BODY=$(mktemp)
+curl -fsS -D "$LAUNCH_HEADERS" -o "$LAUNCH_BODY" -b "$COOKIES" -X POST "$BASE/api/surveys/$SURVEY_ID/launches" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: 11111111-1111-4111-8111-111111111111' -d '{"kind":"initial"}'
+grep -q '202' "$LAUNCH_HEADERS"
+grep -q 'Invitation launch queued' "$LAUNCH_BODY"
+curl -fsS -b "$COOKIES" -X POST "$BASE/api/surveys/$SURVEY_ID/launches" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: 11111111-1111-4111-8111-111111111111' -d '{"kind":"initial"}' | grep -q '"replayed":true'
+curl -fsS -b "$COOKIES" "$BASE/api/surveys/$SURVEY_ID/launches" | grep -q '"status":"queued"'
+
+echo "==> Real PostgreSQL worker/provider-boundary close race is fenced and recorded"
+SURVEY_ID="$SURVEY_ID" node scripts/ci/lifecycle-worker-smoke.js
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/questions?surveyName=CISmokeSurvey&userId=ci-smoke-respondent-token")
+[ "$STATUS" = "403" ] || { echo "!! expected closed respondent link to return 403, got $STATUS" >&2; exit 1; }
+rm -f "$LAUNCH_HEADERS" "$LAUNCH_BODY"
 
 echo "==> Smoke test passed"

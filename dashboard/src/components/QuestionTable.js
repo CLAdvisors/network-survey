@@ -38,6 +38,9 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
       }));
       setTableRows(updatedRows);
       setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+    } else {
+      setTableRows([]);
+      setOriginalRows([]);
     }
   }, [rows]);
 

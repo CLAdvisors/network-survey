@@ -119,6 +119,11 @@ resource "aws_s3_object" "api_config" {
     survey_url                              = var.survey_url
     session_secret_parameter_name           = var.session_secret_parameter_name
     session_cookie_name                     = var.session_cookie_name
+    email_worker_environment                = var.email_worker_environment
+    survey_delivery_v2_enabled              = var.survey_delivery_v2_enabled
+    legacy_start_enabled                    = var.legacy_start_enabled
+    email_rate_per_second                   = var.email_rate_per_second
+    email_rate_budget_environment           = var.email_rate_budget_environment
     resend_api_key_parameter_name           = var.resend_api_key_parameter_name
     bootstrap_admin_username                = var.bootstrap_admin_username
     bootstrap_admin_password_parameter_name = var.bootstrap_admin_password_parameter_name

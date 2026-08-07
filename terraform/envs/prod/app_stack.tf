@@ -118,6 +118,11 @@ module "api_backend" {
   frontend_url                            = local.frontend_url
   survey_url                              = local.survey_url
   session_cookie_name                     = local.session_cookie_name
+  email_worker_environment                = "prod"
+  survey_delivery_v2_enabled              = var.survey_delivery_v2_enabled
+  legacy_start_enabled                    = false
+  email_rate_per_second                   = var.email_rate_per_second
+  email_rate_budget_environment           = "prod"
 
   common_tags           = local.app_common_tags
   config_bucket_tags    = merge(local.app_common_tags, { Name = "${local.app_name_prefix}-config", App = "ona-config" })

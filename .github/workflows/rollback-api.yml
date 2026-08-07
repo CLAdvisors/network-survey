@@ -130,6 +130,7 @@ jobs:
               "rm -rf /tmp/ona-deploy && mkdir -p /tmp/ona-deploy",
               "aws s3 cp s3://\($bucket)/api/\($sha).tar.gz /tmp/ona-deploy/release.tar.gz",
               "tar -xzf /tmp/ona-deploy/release.tar.gz -C /tmp/ona-deploy",
+              "test -f /tmp/ona-deploy/api/lifecycle.js && test -f /tmp/ona-deploy/api/email-worker.js && test -f /tmp/ona-deploy/deploy/ecosystem.config.js && test -f /tmp/ona-deploy/deploy/set-email-claiming.js || { echo Refusing rollback to an invalid or pre-lifecycle artifact >&2; exit 1; }",
               "bash /tmp/ona-deploy/deploy/remote-deploy.sh /tmp/ona-deploy",
               "rm -rf /tmp/ona-deploy"
             ]

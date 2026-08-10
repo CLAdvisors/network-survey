@@ -11,7 +11,7 @@ vi.mock('@mui/x-data-grid', () => ({
     <div>
       {columns.filter((column) => ['invitationSummary', 'providerSummary'].includes(column.field)).map((column) => (
         <section key={column.field} aria-label={column.headerName}>
-          {rows.map((row) => <span key={row.id}>{column.renderCell({ row })}</span>)}
+          {rows.map((row, index) => <span key={row.id}>{column.renderCell({ row, hasFocus: index === 0 })}</span>)}
         </section>
       ))}
     </div>
@@ -28,9 +28,27 @@ test('keeps survey dispatch acceptance separate from provider outcomes', () => {
     },
   }]} selectRow={() => {}} />);
 
-  expect(screen.getByRole('region', { name: 'Invitation dispatch' })).toHaveTextContent('4 accepted / 4');
+  const dispatch = screen.getByRole('region', { name: 'Invitation dispatch' });
+  expect(dispatch).toHaveTextContent('4 / 4 accepted');
+  expect(dispatch).toHaveTextContent('Complete');
+
   const provider = screen.getByRole('region', { name: 'Provider outcomes' });
   expect(provider).toHaveTextContent('2 delivered');
-  expect(provider).toHaveTextContent('1 bounced');
-  expect(provider).toHaveTextContent('2 accepted / unverified');
+  expect(provider).toHaveTextContent('1 issue');
+  expect(provider).not.toHaveTextContent('accepted / unverified');
+  const details = screen.getByLabelText(/0 provider accepted, 2 delivered, 0 delayed, 1 bounced/);
+  expect(details).toBeInTheDocument();
+  expect(details).toHaveAttribute('tabindex', '0');
+});
+
+test('does not promise provider outcomes when no invitations were accepted', () => {
+  render(<SurveyTable rows={[{
+    id: 'survey-failed', name: 'Failed survey', latestLaunch: {
+      targetCount: 2, failedCount: 1, cancelledCount: 1,
+    },
+  }]} selectRow={() => {}} />);
+
+  const provider = screen.getByRole('region', { name: 'Provider outcomes' });
+  expect(provider).toHaveTextContent('No provider activity');
+  expect(provider).not.toHaveTextContent('Awaiting outcomes');
 });

@@ -35,6 +35,19 @@ test('loads and saves the localized invitation subject without changing its body
   expect(await screen.findByText('Invitation email subject saved.')).toBeInTheDocument();
 });
 
+test('disables subject changes when the survey lifecycle is read-only', async () => {
+  api.get.mockResolvedValue({
+    data: { notifications: { English: 'Body' }, notificationSubjects: { English: 'Locked subject' } },
+  });
+
+  render(<InvitationSubjectEditor surveyId="survey-1" readOnly />);
+  const subject = await screen.findByLabelText(/Invitation email subject/);
+  await waitFor(() => expect(subject).toHaveValue('Locked subject'));
+  expect(subject).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  expect(screen.getByText(/Invitation subjects are read-only/)).toBeInTheDocument();
+});
+
 test('preserves an unsaved subject draft across survey switches and allows reverting it', async () => {
   api.get.mockImplementation(async (url) => ({
     data: url.includes('survey-1')

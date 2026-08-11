@@ -5,7 +5,7 @@ import api from '../api/axios';
 
 const DEFAULT_SUBJECT = 'CLA Network Survey';
 
-const InvitationSubjectEditor = ({ surveyId }) => {
+const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
   const [language, setLanguage] = React.useState(LANGUAGES[0]);
   const [subjects, setSubjects] = React.useState({});
   const [subject, setSubject] = React.useState(DEFAULT_SUBJECT);
@@ -21,6 +21,8 @@ const InvitationSubjectEditor = ({ surveyId }) => {
     if (!surveyId) return;
     let active = true;
     setLoading(true);
+    setSaving(false);
+    setNotice(null);
     setSubjects({});
     setLanguage(LANGUAGES[0]);
     setSubject(DEFAULT_SUBJECT);
@@ -42,6 +44,13 @@ const InvitationSubjectEditor = ({ surveyId }) => {
     return () => { active = false; };
   }, [surveyId]);
 
+  React.useEffect(() => {
+    if (readOnly && subject !== originalSubject) {
+      draftsRef.current.delete(surveyId);
+      setSubject(originalSubject);
+    }
+  }, [readOnly, subject, originalSubject, surveyId]);
+
   const handleLanguageChange = (_event, nextLanguage) => {
     if (!nextLanguage) return;
     const nextSubject = subjects[nextLanguage.label] || DEFAULT_SUBJECT;
@@ -51,6 +60,7 @@ const InvitationSubjectEditor = ({ surveyId }) => {
   };
 
   const handleSave = async () => {
+    if (readOnly) return;
     const trimmedSubject = subject.trim();
     if (!trimmedSubject) {
       setNotice({ severity: 'error', message: 'Invitation email subject is required.' });
@@ -71,17 +81,19 @@ const InvitationSubjectEditor = ({ surveyId }) => {
       setOriginalSubject(trimmedSubject);
       setNotice({ severity: 'success', message: 'Invitation email subject saved.' });
     } catch (error) {
+      if (surveyIdRef.current !== targetSurveyId) return;
       setNotice({
         severity: 'error',
-        message: error.response?.data?.message || 'Failed to save invitation email subject.',
+        message: error.response?.data?.message || error.response?.data?.error || 'Failed to save invitation email subject.',
       });
     } finally {
-      setSaving(false);
+      if (surveyIdRef.current === targetSurveyId) setSaving(false);
     }
   };
 
   return (
     <Paper elevation={2} sx={{ p: 3, mb: 2, borderRadius: 2 }}>
+      {readOnly && <Alert severity="info" sx={{ mb: 2 }}>Invitation subjects are read-only after a survey has been launched.</Alert>}
       <Typography variant="h6" color="primary" sx={{ mb: 2, fontWeight: 'bold' }}>
         Invitation Email Subject
       </Typography>
@@ -94,7 +106,7 @@ const InvitationSubjectEditor = ({ surveyId }) => {
           renderInput={params => <TextField {...params} label="Subject language" />}
           sx={{ width: '100%', maxWidth: 300 }}
           disableClearable
-          disabled={loading || saving || subject !== originalSubject}
+          disabled={readOnly || loading || saving || subject !== originalSubject}
         />
         <TextField
           fullWidth
@@ -102,13 +114,14 @@ const InvitationSubjectEditor = ({ surveyId }) => {
           label="Invitation email subject"
           value={subject}
           onChange={event => {
+            if (readOnly) return;
             const nextSubject = event.target.value;
             setSubject(nextSubject);
             draftsRef.current.set(surveyId, { language: language.label, subject: nextSubject });
           }}
           inputProps={{ maxLength: 255 }}
           error={!subject.trim()}
-          disabled={loading || saving}
+          disabled={readOnly || loading || saving}
           helperText={subject !== originalSubject ? 'Save or revert this subject before changing language.' : ' '}
         />
         <Button
@@ -117,7 +130,7 @@ const InvitationSubjectEditor = ({ surveyId }) => {
             draftsRef.current.delete(surveyId);
             setSubject(originalSubject);
           }}
-          disabled={loading || saving || subject === originalSubject}
+          disabled={readOnly || loading || saving || subject === originalSubject}
           sx={{ minWidth: 100, mt: { xs: 0, sm: 1 } }}
         >
           Revert
@@ -125,7 +138,7 @@ const InvitationSubjectEditor = ({ surveyId }) => {
         <Button
           variant="contained"
           onClick={handleSave}
-          disabled={loading || saving || subject === originalSubject}
+          disabled={readOnly || loading || saving || subject === originalSubject}
           sx={{ minWidth: 100, mt: { xs: 0, sm: 1 } }}
         >
           {saving ? 'Saving…' : 'Save'}

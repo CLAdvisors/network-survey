@@ -1,7 +1,7 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import EmailNotificationEditor from './EmailNotificationEditor';
 import api from '../api/axios';
 
@@ -21,6 +21,7 @@ const deferred = () => {
 };
 
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.unstubAllGlobals());
 
 test('saves multiline body as a structured template without overwriting subjects', async () => {
   api.get.mockResolvedValue(response('Original body', { English: 'Keep this subject' }));
@@ -70,6 +71,40 @@ test('shows the CSV import API error and restores editing controls', async () =>
   expect(await screen.findByText('CSV row 3 has an invalid language.')).toBeInTheDocument();
   await waitFor(() => expect(body).toBeEnabled());
   expect(body).toHaveValue('Original');
+});
+
+test('preserves a dirty body draft across survey switches', async () => {
+  api.get.mockImplementation((url) => Promise.resolve(
+    url.endsWith('survey-1') ? response('Body one') : response('Body two')
+  ));
+  const view = render(<EmailNotificationEditor surveyId="survey-1" />);
+  const body = await screen.findByLabelText('Invitation email body');
+  await waitFor(() => expect(body).toHaveValue('Body one'));
+  await userEvent.type(body, ' draft');
+
+  view.rerender(<EmailNotificationEditor surveyId="survey-2" />);
+  await waitFor(() => expect(body).toHaveValue('Body two'));
+  view.rerender(<EmailNotificationEditor surveyId="survey-1" />);
+  await waitFor(() => expect(body).toHaveValue('Body one draft'));
+  expect(screen.getByRole('button', { name: 'Save body' })).toBeEnabled();
+});
+
+test('does not post a CSV whose file read completes after switching surveys', async () => {
+  let reader;
+  vi.stubGlobal('FileReader', class {
+    readAsText() { reader = this; }
+  });
+  api.get.mockResolvedValue(response('Original'));
+  const view = render(<EmailNotificationEditor surveyId="survey-1" />);
+  await waitFor(() => expect(screen.getByLabelText('Invitation email body')).toHaveValue('Original'));
+  await userEvent.upload(
+    view.container.querySelector('input[type="file"]'),
+    new File(['Language,Text\nEnglish,Hello'], 'templates.csv', { type: 'text/csv' })
+  );
+
+  view.rerender(<EmailNotificationEditor surveyId="survey-2" />);
+  await act(async () => reader.onload({ target: { result: 'Language,Text\nEnglish,Hello' } }));
+  expect(api.post).not.toHaveBeenCalled();
 });
 
 test('ignores stale loads and stale saves after switching surveys', async () => {

@@ -33,6 +33,7 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
   const [alert, setAlert] = React.useState({ show: false, type: "info", message: "" });
   const requestVersion = React.useRef(0);
   const surveyIdRef = React.useRef(surveyId);
+  const draftsRef = React.useRef(new Map());
   surveyIdRef.current = surveyId;
 
   const selectTemplate = React.useCallback((language, templates) => {
@@ -61,9 +62,16 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
       .then(({ data }) => {
         if (controller.signal.aborted || version !== requestVersion.current) return;
         const templates = data.notifications || {};
+        const draft = draftsRef.current.get(surveyId);
+        const draftLanguage = LANGUAGES.find(item => item.label === draft?.language);
         const firstConfigured = LANGUAGES.find((item) => Object.prototype.hasOwnProperty.call(templates, item.label));
+        const language = draftLanguage || firstConfigured || LANGUAGES[0];
+        const persistedText = templates[language.label] || "";
         setNotifications(templates);
-        selectTemplate(firstConfigured || LANGUAGES[0], templates);
+        setSelectedLanguage(language);
+        setNotificationText(draft?.text ?? persistedText);
+        setOriginalText(persistedText);
+        setHasChanges(draft !== undefined && draft.text !== persistedText);
       })
       .catch((error) => {
         if (controller.signal.aborted || version !== requestVersion.current) return;
@@ -78,6 +86,7 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
 
   React.useEffect(() => {
     if (readOnly && hasChanges) {
+      draftsRef.current.delete(surveyId);
       setNotificationText(originalText);
       setHasChanges(false);
     }
@@ -101,6 +110,7 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
         templates: [{ language: targetLanguage, text: targetText }],
       });
       if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
+      draftsRef.current.delete(targetSurveyId);
       setNotifications((current) => ({ ...current, [targetLanguage]: targetText }));
       setOriginalText(targetText);
       setHasChanges(false);
@@ -116,13 +126,14 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
   const handleFileUpload = (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file || readOnly) return;
+    if (!file || readOnly || hasChanges) return;
     const version = requestVersion.current;
     const targetSurveyId = surveyId;
     const reader = new FileReader();
     setImporting(true);
     reader.onload = async (loadEvent) => {
       try {
+        if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
         await api.post("/updateEmails", { surveyName: targetSurveyId, csvData: loadEvent.target?.result });
         if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
         const response = await api.get(`/survey-notifications/${targetSurveyId}`);
@@ -180,7 +191,7 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
         <Typography variant="h6" color="primary" sx={{ fontWeight: "bold" }}>Invitation Email Body</Typography>
         <Box sx={{ display: "flex", gap: 2 }}>
           <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleDownloadTemplate} size="small">CSV template</Button>
-          <Button variant="contained" component="label" startIcon={<UploadFileIcon />} size="small" disabled={readOnly || loading || saving || importing}>
+          <Button variant="contained" component="label" startIcon={<UploadFileIcon />} size="small" disabled={readOnly || loading || saving || importing || hasChanges}>
             {importing ? "Importing…" : "Import CSV"}
             <input type="file" hidden accept=".csv,text/csv" onChange={handleFileUpload} />
           </Button>
@@ -201,15 +212,18 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
           fullWidth multiline rows={8} label="Invitation email body" value={notificationText}
           onChange={(event) => {
             if (readOnly) return;
-            setNotificationText(event.target.value);
-            setHasChanges(event.target.value !== originalText);
+            const nextText = event.target.value;
+            setNotificationText(nextText);
+            setHasChanges(nextText !== originalText);
+            if (nextText === originalText) draftsRef.current.delete(surveyId);
+            else draftsRef.current.set(surveyId, { language: selectedLanguage.label, text: nextText });
           }}
           disabled={readOnly || loading || saving || importing}
           placeholder={`Enter notification text for ${selectedLanguage?.label || "the selected language"}...`}
           sx={{ "& .MuiOutlinedInput-root": { backgroundColor: theme.palette.background.default } }}
         />
         <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
-          <Button variant="outlined" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={() => { setNotificationText(originalText); setHasChanges(false); }}>Revert</Button>
+          <Button variant="outlined" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={() => { draftsRef.current.delete(surveyId); setNotificationText(originalText); setHasChanges(false); }}>Revert</Button>
           <Button variant="contained" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={handleSave}>{saving ? "Saving…" : "Save body"}</Button>
         </Box>
       </Box>

@@ -2172,6 +2172,32 @@ function normalizeInvitationLanguage(language) {
   return INVITATION_LANGUAGE_NAMES.get(trimmed.toLowerCase()) || trimmed;
 }
 
+const SUPPORTED_INVITATION_LANGUAGES = new Set(INVITATION_LANGUAGE_NAMES.values());
+
+function normalizeInvitationTemplates(templates) {
+  if (!Array.isArray(templates) || templates.length === 0) {
+    throw new Error('At least one invitation template is required.');
+  }
+  const normalized = templates.map(template => ({
+    ...template,
+    language: normalizeInvitationLanguage(template?.language),
+  }));
+  if (normalized.some(template => (
+    !template || !SUPPORTED_INVITATION_LANGUAGES.has(template.language)
+    || typeof template.text !== 'string'
+    || template.text.length > 2555
+    || (template.subject !== undefined && (
+      typeof template.subject !== 'string' || !template.subject.trim() || template.subject.trim().length > 255
+    ))
+  ))) {
+    throw new Error('Each invitation template requires a supported language and a body of 2555 characters or fewer; any included subject must be non-empty and 255 characters or fewer.');
+  }
+  if (new Set(normalized.map(template => template.language)).size !== normalized.length) {
+    throw new Error('Invitation template languages must be unique.');
+  }
+  return normalized;
+}
+
 function parseInvitationTemplateCsv(csvData) {
   const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: 'greedy', transformHeader: header => header.replace(/^\uFEFF/, '').trim() });
   if (parsed.errors.length > 0) {
@@ -2205,16 +2231,10 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
 
   let emailTemplates;
   try {
-    emailTemplates = Array.isArray(templates) ? templates : parseInvitationTemplateCsv(csvData);
+    const suppliedTemplates = Array.isArray(templates) ? templates : parseInvitationTemplateCsv(csvData);
+    emailTemplates = normalizeInvitationTemplates(suppliedTemplates);
   } catch (error) {
     return res.status(400).json({ message: error.message });
-  }
-  if (emailTemplates.length === 0 || emailTemplates.some(template => (
-    !template || typeof template.language !== 'string' || !template.language.trim()
-    || typeof template.text !== 'string'
-    || (template.subject !== undefined && (typeof template.subject !== 'string' || !template.subject.trim()))
-  ))) {
-    return res.status(400).json({ message: 'Each invitation template requires a language and body; any included subject must be non-empty.' });
   }
 
   try {
@@ -3344,5 +3364,6 @@ module.exports = {
   isTrustedStateChangingOrigin,
   parseInvitationTemplateCsv,
   normalizeInvitationLanguage,
+  normalizeInvitationTemplates,
   insertEmails,
 };

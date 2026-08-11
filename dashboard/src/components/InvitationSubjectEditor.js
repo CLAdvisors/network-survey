@@ -15,6 +15,13 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
   const [notice, setNotice] = React.useState(null);
   const surveyIdRef = React.useRef(surveyId);
   const draftsRef = React.useRef(new Map());
+  const operationVersion = React.useRef(0);
+  const operationIdentity = React.useRef(`${surveyId}:${readOnly}`);
+  const nextOperationIdentity = `${surveyId}:${readOnly}`;
+  if (operationIdentity.current !== nextOperationIdentity) {
+    operationIdentity.current = nextOperationIdentity;
+    operationVersion.current += 1;
+  }
   surveyIdRef.current = surveyId;
 
   React.useEffect(() => {
@@ -68,26 +75,27 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
     }
     const targetSurveyId = surveyId;
     const targetLanguage = language.label;
+    const version = operationVersion.current;
     setSaving(true);
     try {
       await api.put(`/survey-notifications/${targetSurveyId}/subject`, {
         language: targetLanguage,
         subject: trimmedSubject,
       });
-      if (surveyIdRef.current !== targetSurveyId) return;
+      if (surveyIdRef.current !== targetSurveyId || version !== operationVersion.current) return;
       draftsRef.current.delete(targetSurveyId);
       setSubjects(previous => ({ ...previous, [targetLanguage]: trimmedSubject }));
       setSubject(trimmedSubject);
       setOriginalSubject(trimmedSubject);
       setNotice({ severity: 'success', message: 'Invitation email subject saved.' });
     } catch (error) {
-      if (surveyIdRef.current !== targetSurveyId) return;
+      if (surveyIdRef.current !== targetSurveyId || version !== operationVersion.current) return;
       setNotice({
         severity: 'error',
         message: error.response?.data?.message || error.response?.data?.error || 'Failed to save invitation email subject.',
       });
     } finally {
-      if (surveyIdRef.current === targetSurveyId) setSaving(false);
+      if (surveyIdRef.current === targetSurveyId && version === operationVersion.current) setSaving(false);
     }
   };
 

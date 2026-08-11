@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
 import InvitationSubjectEditor from './InvitationSubjectEditor';
@@ -8,6 +8,12 @@ import api from '../api/axios';
 vi.mock('../api/axios', () => ({
   default: { get: vi.fn(), put: vi.fn() },
 }));
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((yes) => { resolve = yes; });
+  return { promise, resolve };
+};
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -46,6 +52,34 @@ test('disables subject changes when the survey lifecycle is read-only', async ()
   expect(subject).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   expect(screen.getByText(/Invitation subjects are read-only/)).toBeInTheDocument();
+});
+
+test('ignores an old subject save after switching away and back to the same survey', async () => {
+  const oldSave = deferred();
+  api.get.mockImplementation(async (url) => ({
+    data: url.includes('survey-1')
+      ? { notifications: { English: 'Body 1' }, notificationSubjects: { English: 'Subject 1' } }
+      : { notifications: { English: 'Body 2' }, notificationSubjects: { English: 'Subject 2' } },
+  }));
+  api.put.mockReturnValue(oldSave.promise);
+
+  const view = render(<InvitationSubjectEditor surveyId="survey-1" />);
+  const subject = await screen.findByLabelText(/Invitation email subject/);
+  await waitFor(() => expect(subject).toHaveValue('Subject 1'));
+  await userEvent.clear(subject);
+  await userEvent.type(subject, 'Old pending save');
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  view.rerender(<InvitationSubjectEditor surveyId="survey-2" />);
+  await waitFor(() => expect(subject).toHaveValue('Subject 2'));
+  view.rerender(<InvitationSubjectEditor surveyId="survey-1" />);
+  await waitFor(() => expect(subject).toHaveValue('Old pending save'));
+  await userEvent.clear(subject);
+  await userEvent.type(subject, 'Newer draft');
+  await act(async () => oldSave.resolve({ data: { message: 'saved' } }));
+
+  expect(subject).toHaveValue('Newer draft');
+  expect(screen.queryByText('Invitation email subject saved.')).not.toBeInTheDocument();
 });
 
 test('preserves an unsaved subject draft across survey switches and allows reverting it', async () => {

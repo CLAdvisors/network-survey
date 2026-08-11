@@ -69,12 +69,46 @@ test('renders provider outcomes separately without changing dispatch arithmetic'
   }] } });
   render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'First', lifecycleStatus: 'active' }} />);
 
-  expect(await screen.findByRole('status')).toHaveTextContent('3 of 3 finished');
+  expect(await screen.findByRole('region', { name: 'Invitation dispatch summary' })).toHaveTextContent('3 of 3 processed');
   const providerSummary = screen.getByRole('region', { name: 'Provider outcome summary' });
   expect(providerSummary).toHaveTextContent('2 delivered');
   expect(providerSummary).toHaveTextContent('1 complained');
-  expect(providerSummary).toHaveTextContent('1 accepted / unverified');
+  expect(providerSummary).toHaveTextContent('1 awaiting update');
   expect(providerSummary).not.toHaveTextContent('3 delivered');
+});
+
+test('shows exact invitation states instead of ambiguous active and issues buckets', async () => {
+  api.get.mockResolvedValue({ data: { launches: [{
+    id: 'launch-demo', status: 'processing', created_at: new Date().toISOString(),
+    target_count: 13, pending_count: 1, retry_wait_count: 1, accepted_count: 8,
+    failed_count: 1, uncertain_count: 1, cancelled_count: 1,
+    provider_outcome_counts: {
+      delivered_count: 2, delayed_count: 1, bounced_count: 1, complained_count: 1,
+      suppressed_count: 1, provider_failed_count: 1, accepted_unverified_count: 1,
+    },
+  }] } });
+  render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'Delivery demo', lifecycleStatus: 'active' }} />);
+
+  const dispatch = await screen.findByRole('region', { name: 'Invitation dispatch summary' });
+  expect(dispatch).toHaveTextContent('8 of 13 accepted');
+  expect(dispatch).toHaveTextContent('1 pending');
+  expect(dispatch).toHaveTextContent('1 retrying');
+  expect(dispatch).toHaveTextContent('1 failed');
+  expect(dispatch).toHaveTextContent('1 uncertain');
+  expect(screen.getByLabelText(/1 uncertain\. The provider may have accepted/)).toHaveAttribute('tabindex', '0');
+  expect(dispatch).toHaveTextContent('1 cancelled');
+  expect(dispatch).not.toHaveTextContent(/active|issues/i);
+
+  const provider = screen.getByRole('region', { name: 'Provider outcome summary' });
+  expect(provider).toHaveTextContent('2 delivered');
+  expect(provider).toHaveTextContent('1 bounced');
+  expect(provider).toHaveTextContent('1 complained');
+  expect(provider).toHaveTextContent('1 suppressed');
+  expect(provider).toHaveTextContent('1 provider failed');
+  expect(provider).toHaveTextContent('1 delayed');
+  expect(provider).toHaveTextContent('1 awaiting update');
+  expect(provider).toHaveTextContent(/Other recorded signals/i);
+  expect(provider).toHaveTextContent(/Awaiting provider update/i);
 });
 
 test('does not render prior survey history while the next survey is loading', async () => {
@@ -83,9 +117,9 @@ test('does not render prior survey history while the next survey is loading', as
     .mockResolvedValueOnce({ data: { launches: [{ id: 'old', status: 'failed', counts: { target: 99, failed: 99 } }] } })
     .mockReturnValueOnce(second.promise);
   const { rerender } = render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'First', lifecycleStatus: 'closed' }} />);
-  expect(await screen.findByText(/99 of 99 finished/)).toBeInTheDocument();
+  expect(await screen.findByText(/99 of 99 processed/)).toBeInTheDocument();
   rerender(<SurveyLifecyclePanel survey={{ id: 'survey-2', name: 'Second', lifecycleStatus: 'active' }} />);
-  expect(screen.queryByText(/99 of 99 finished/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/99 of 99 processed/)).not.toBeInTheDocument();
   await act(async () => {
     second.resolve({ data: { launches: [] } });
     await second.promise;
@@ -127,13 +161,13 @@ test('ignores launch history that resolves after the selected survey changes', a
     second.resolve({ data: { launches: [{ id: 'new', status: 'completed', counts: { target: 2, accepted: 2 } }] } });
     await second.promise;
   });
-  expect(await screen.findByText(/2 of 2 finished/)).toBeInTheDocument();
+  expect(await screen.findByText(/2 of 2 processed/)).toBeInTheDocument();
 
   await act(async () => {
     first.resolve({ data: { launches: [{ id: 'old', status: 'failed', counts: { target: 99, failed: 99 } }] } });
     await first.promise;
   });
-  expect(screen.queryByText(/99 of 99 finished/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/99 of 99 processed/)).not.toBeInTheDocument();
   expect(screen.getByLabelText('Invitation launch history')).toBeInTheDocument();
-  expect(screen.getByRole('status')).toHaveTextContent('2 accepted');
+  expect(screen.getByRole('region', { name: 'Invitation dispatch summary' })).toHaveTextContent('2 accepted');
 });

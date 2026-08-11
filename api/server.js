@@ -1346,8 +1346,8 @@ async function insertEmails(data, survey = null, transactionClient = null) {
       const values = [
         survey?.name || email.surveyName,
         survey?.id || email.surveyId || null,
-        email.language,
-        email.text.replace(/"/g, "").replace(/'/g, ""),
+        normalizeInvitationLanguage(email.language),
+        email.text,
         typeof email.subject === 'string' ? email.subject.trim() : null,
       ];
       await client.query(query, values);
@@ -2160,6 +2160,59 @@ app.post('/api/startSurvey', express.json(), requireAuth, async (req, res) => {
   } catch (error) { sendLifecycleError(res, error); }
 });
 
+const INVITATION_LANGUAGE_NAMES = new Map([
+  ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'],
+  ['it', 'Italian'], ['pt', 'Portuguese'], ['nl', 'Dutch'], ['pl', 'Polish'],
+  ['ru', 'Russian'], ['ja', 'Japanese'], ['zh', 'Chinese'], ['ko', 'Korean'],
+]);
+for (const name of INVITATION_LANGUAGE_NAMES.values()) INVITATION_LANGUAGE_NAMES.set(name.toLowerCase(), name);
+
+function normalizeInvitationLanguage(language) {
+  const trimmed = typeof language === 'string' ? language.trim() : '';
+  return INVITATION_LANGUAGE_NAMES.get(trimmed.toLowerCase()) || trimmed;
+}
+
+const SUPPORTED_INVITATION_LANGUAGES = new Set(INVITATION_LANGUAGE_NAMES.values());
+
+function normalizeInvitationTemplates(templates) {
+  if (!Array.isArray(templates) || templates.length === 0) {
+    throw new Error('At least one invitation template is required.');
+  }
+  const normalized = templates.map(template => ({
+    ...template,
+    language: normalizeInvitationLanguage(template?.language),
+  }));
+  if (normalized.some(template => (
+    !template || !SUPPORTED_INVITATION_LANGUAGES.has(template.language)
+    || typeof template.text !== 'string'
+    || template.text.length > 2555
+    || (template.subject !== undefined && (
+      typeof template.subject !== 'string' || !template.subject.trim() || template.subject.trim().length > 255
+    ))
+  ))) {
+    throw new Error('Each invitation template requires a supported language and a body of 2555 characters or fewer; any included subject must be non-empty and 255 characters or fewer.');
+  }
+  if (new Set(normalized.map(template => template.language)).size !== normalized.length) {
+    throw new Error('Invitation template languages must be unique.');
+  }
+  return normalized;
+}
+
+function parseInvitationTemplateCsv(csvData) {
+  const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: 'greedy', transformHeader: header => header.replace(/^\uFEFF/, '').trim() });
+  if (parsed.errors.length > 0) {
+    const firstError = parsed.errors[0];
+    throw new Error(`Invalid CSV${firstError.row === undefined ? '' : ` on row ${firstError.row + 2}`}: ${firstError.message}`);
+  }
+  return parsed.data.map((row) => {
+    const fields = Object.fromEntries(Object.entries(row).map(([key, value]) => [key.trim().toLowerCase(), value]));
+    return {
+      language: normalizeInvitationLanguage(fields.language ?? fields.language_code ?? ''),
+      text: fields.text ?? fields.notification_text ?? '',
+    };
+  });
+}
+
 app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
   const data  = req.body;
   const surveyName = data.surveyName;
@@ -2176,27 +2229,12 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     return;
   }
 
-  let csvArray = csvData ? csvData.split('\n') : [];
-  if (csvData) csvArray.shift();
-
-  csvArray = csvArray.map((row) => {
-    const columns = row.split(',');
-    // combine all strings after index 0
-    columns[1] = columns.slice(1).join(',');
-    return {
-      surveyName: surveyName,
-      language: columns[0].replace(/(\r\n|\n|\r)/gm, ""),
-      text: columns[1].replace(/(\r\n|\n|\r)/gm, "")
-    }
-  });
-
-  const emailTemplates = Array.isArray(templates) ? templates : csvArray;
-  if (emailTemplates.length === 0 || emailTemplates.some(template => (
-    !template || typeof template.language !== 'string' || !template.language.trim()
-    || typeof template.text !== 'string'
-    || (template.subject !== undefined && (typeof template.subject !== 'string' || !template.subject.trim()))
-  ))) {
-    return res.status(400).json({ message: 'Each invitation template requires a language, subject, and body.' });
+  let emailTemplates;
+  try {
+    const suppliedTemplates = Array.isArray(templates) ? templates : parseInvitationTemplateCsv(csvData);
+    emailTemplates = normalizeInvitationTemplates(suppliedTemplates);
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
   }
 
   try {
@@ -2310,19 +2348,20 @@ app.put('/api/survey-notifications/:surveyId/subject', express.json(), requireAu
       allowedRoles: EDITOR_ROLES,
     });
     if (!survey) return;
-    const updated = await pool.query(
+    const updated = await lifecycle.withEditableSurvey(pool, req.user, survey.id, (client, lockedSurvey) => client.query(
       `UPDATE EMAIL
        SET survey_id = $2, invitation_subject = $4
        WHERE (survey_id = $2 OR (survey_id IS NULL AND survey_name = $1))
          AND lang = $3
        RETURNING lang`,
-      [survey.name, survey.id, language.trim(), subject.trim()]
-    );
+      [lockedSurvey.name, lockedSurvey.id, language.trim(), subject.trim()]
+    ));
     if (updated.rowCount === 0) {
       return res.status(404).json({ message: 'Create the invitation body for this language before setting its subject.' });
     }
     res.json({ message: 'Invitation email subject saved.' });
   } catch (error) {
+    if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
     console.error('Failed to update invitation email subject:', error);
     res.status(500).json({ message: 'Failed to save invitation email subject.' });
   }
@@ -3323,4 +3362,8 @@ module.exports = {
   normalizeQuestionNames,
   formatRespondentChoice,
   isTrustedStateChangingOrigin,
+  parseInvitationTemplateCsv,
+  normalizeInvitationLanguage,
+  normalizeInvitationTemplates,
+  insertEmails,
 };

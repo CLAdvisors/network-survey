@@ -214,12 +214,16 @@ const Dashboard = () => {
 
       {canEditSurvey(selectSurvey) && (
         <CollapsibleSection title="Email Notifications">
-          {selectedIsLifecycleLocked ? (
-            <Alert severity="info" sx={{ mb: 2 }}>Invitation subjects are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>
-          ) : (
-            <InvitationSubjectEditor key={surveyId(selectSurvey)} surveyId={surveyId(selectSurvey)} />
-          )}
-          <EmailNotificationEditor key={surveyId(selectSurvey)} surveyId={surveyId(selectSurvey)} readOnly={selectedIsLifecycleLocked} />
+          <InvitationSubjectEditor
+            key="invitation-subject-editor"
+            surveyId={surveyId(selectSurvey)}
+            readOnly={selectedIsLifecycleLocked}
+          />
+          <EmailNotificationEditor
+            key="invitation-body-editor"
+            surveyId={surveyId(selectSurvey)}
+            readOnly={selectedIsLifecycleLocked}
+          />
         </CollapsibleSection>
       )}
 

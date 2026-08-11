@@ -32,13 +32,13 @@ test('normalizes additive provider counts, timestamps, and old accepted deliveri
     accepted_count: '5',
     provider_outcome_counts: {
       sent_count: '4', delivered_count: '2', delayed_count: 1, bounced_count: '1',
-      complained_count: 1, suppressed_count: 0, provider_failed_count: '1', accepted_unverified_count: '1',
+      complained_count: 1, suppressed_count: 0, provider_failed_count: '1', provider_problem_count: '2', provider_waiting_count: '3', accepted_unverified_count: '1',
     },
   })).toEqual({
     sent: 4, delivered: 2, delayed: 1, bounced: 1, complained: 1,
-    suppressed: 0, providerFailed: 1, acceptedUnverified: 1,
+    suppressed: 0, providerFailed: 1, problems: 2, waiting: 3, acceptedUnverified: 1,
   });
-  expect(providerCounts({ acceptedCount: 3 }).acceptedUnverified).toBe(3);
+  expect(providerCounts({ acceptedCount: 3 })).toMatchObject({ acceptedUnverified: 3, waiting: 3 });
 
   const delivery = {
     dispatch_status: 'accepted',
@@ -73,8 +73,8 @@ test('renders provider outcomes separately without changing dispatch arithmetic'
   expect(screen.getByLabelText('3 submitted for sending')).toBeInTheDocument();
   const deliverySummary = screen.getByRole('region', { name: 'Delivery confirmation summary' });
   expect(within(deliverySummary).getByLabelText('2 delivery confirmations')).toBeInTheDocument();
-  expect(within(deliverySummary).getByLabelText('1 problem report')).toBeInTheDocument();
-  expect(within(deliverySummary).getByLabelText('1 waiting for an update')).toBeInTheDocument();
+  expect(within(deliverySummary).getByLabelText('1 invitation with a delivery problem')).toBeInTheDocument();
+  expect(within(deliverySummary).getByLabelText('1 awaiting a final delivery result')).toBeInTheDocument();
   expect(deliverySummary).not.toHaveTextContent('3 delivery confirmations');
 });
 
@@ -85,7 +85,8 @@ test('uses plain-language aggregates instead of exposing operational keyword lis
     failed_count: 1, uncertain_count: 1, cancelled_count: 1,
     provider_outcome_counts: {
       delivered_count: 2, delayed_count: 1, bounced_count: 1, complained_count: 1,
-      suppressed_count: 1, provider_failed_count: 1, accepted_unverified_count: 1,
+      suppressed_count: 1, provider_failed_count: 1, provider_problem_count: 3,
+      provider_waiting_count: 2, accepted_unverified_count: 1,
     },
   }] } });
   render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'Delivery demo', lifecycleStatus: 'active' }} />);
@@ -99,10 +100,14 @@ test('uses plain-language aggregates instead of exposing operational keyword lis
 
   const delivery = screen.getByRole('region', { name: 'Delivery confirmation summary' });
   expect(within(delivery).getByLabelText('2 delivery confirmations')).toBeInTheDocument();
-  expect(within(delivery).getByLabelText('4 problem reports')).toBeInTheDocument();
-  expect(within(delivery).getByLabelText('1 waiting for an update')).toBeInTheDocument();
+  expect(within(delivery).getByLabelText('3 invitations with delivery problems')).toBeInTheDocument();
+  expect(within(delivery).getByLabelText('2 awaiting a final delivery result')).toBeInTheDocument();
   expect(within(delivery).getByLabelText('1 delay report')).toBeInTheDocument();
   expect(delivery).not.toHaveTextContent(/bounced|complained|suppressed|provider failed/i);
+  expect(screen.getByRole('status')).toHaveTextContent('Delivery update: 2 confirmations, 2 invitations awaiting a final result, 3 invitations with delivery problems, 1 delay report.');
+  expect(screen.getByRole('heading', { level: 2, name: 'Survey lifecycle' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 3, name: 'Invitation sending' })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /^\d+$/ })).not.toBeInTheDocument();
 
   const explanation = screen.getByLabelText('Current launch explanation');
   fireEvent.click(within(explanation).getByText('How are these numbers calculated?'));

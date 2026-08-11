@@ -39,16 +39,16 @@ const SurveyTable = ({
         const latest = row.latestLaunch || row.latest_launch;
         if (!latest) return <Typography variant="body2" color="text.secondary">Not launched</Typography>;
         const counts = launchCounts(latest);
-        const active = counts.pending + counts.leased + counts.retryWait;
-        const issues = counts.failed + counts.uncertain + counts.cancelled;
+        const processing = counts.pending + counts.leased + counts.retryWait;
+        const notConfirmed = counts.failed + counts.uncertain + counts.cancelled;
         const details = `${counts.target} targets: ${counts.pending} pending, ${counts.leased} sending, ${counts.retryWait} retrying, ${counts.accepted} accepted, ${counts.failed} failed, ${counts.uncertain} uncertain, ${counts.cancelled} cancelled.`;
         return <Tooltip title={details} arrow>
           <Stack spacing={0.25} justifyContent="center" aria-label={details} tabIndex={hasFocus ? 0 : -1} sx={{ minWidth: 0 }}>
-            <Typography variant="body2" fontWeight={600} noWrap>{counts.accepted} / {counts.target} accepted</Typography>
+            <Typography variant="body2" fontWeight={600} noWrap>{counts.accepted} / {counts.target} submitted</Typography>
             <Stack direction="row" spacing={0.5}>
-              {active > 0 && <Chip size="small" variant="outlined" color="info" label={`${active} active`} sx={{ height: 20 }} />}
-              {issues > 0 && <Chip size="small" variant="outlined" color="warning" label={`${issues} ${issues === 1 ? 'issue' : 'issues'}`} sx={{ height: 20 }} />}
-              {active === 0 && issues === 0 && <Chip size="small" variant="outlined" color="success" label="Complete" sx={{ height: 20 }} />}
+              {processing > 0 && <Chip size="small" variant="outlined" color="info" label={`${processing} processing`} sx={{ height: 20 }} />}
+              {notConfirmed > 0 && <Chip size="small" variant="outlined" color="warning" label={`${notConfirmed} not confirmed`} sx={{ height: 20 }} />}
+              {processing === 0 && notConfirmed === 0 && <Chip size="small" variant="outlined" color="success" label="Complete" sx={{ height: 20 }} />}
             </Stack>
           </Stack>
         </Tooltip>;
@@ -64,20 +64,16 @@ const SurveyTable = ({
         if (!latest) return <Typography variant="body2" color="text.secondary">No outcomes</Typography>;
         const counts = providerCounts(latest);
         const dispatch = launchCounts(latest);
-        const adverse = counts.bounced + counts.complained + counts.suppressed + counts.providerFailed;
-        const details = `${counts.sent} provider accepted, ${counts.delivered} delivered, ${counts.delayed} delayed, ${counts.bounced} bounced, ${counts.complained} complained, ${counts.suppressed} suppressed, ${counts.providerFailed} provider failed, ${counts.acceptedUnverified} accepted and unverified.`;
+        const adverse = counts.problems;
+        const details = `${counts.delivered} delivery confirmations, ${counts.waiting} awaiting a final result, ${counts.problems} ${counts.problems === 1 ? 'invitation' : 'invitations'} with delivery problems; ${counts.sent} provider accepted, ${counts.delayed} delayed, ${counts.delayed} delayed, ${counts.bounced} bounced, ${counts.complained} complained, ${counts.suppressed} suppressed, ${counts.providerFailed} provider failed, ${counts.acceptedUnverified} accepted and unverified.`;
         return <Tooltip title={details} arrow>
           <Stack spacing={0.25} justifyContent="center" aria-label={details} tabIndex={hasFocus ? 0 : -1} sx={{ minWidth: 0 }}>
-            <Typography variant="body2" fontWeight={600} noWrap>{counts.delivered} delivered</Typography>
+            <Typography variant="body2" fontWeight={600} noWrap>{counts.delivered} confirmed delivered</Typography>
             {adverse > 0
-              ? <Chip size="small" variant="outlined" color="warning" label={`${adverse} ${adverse === 1 ? 'issue' : 'issues'}`} sx={{ height: 20, width: 'fit-content' }} />
-              : counts.delayed > 0
-                ? <Chip size="small" variant="outlined" color="info" label={`${counts.delayed} delayed`} sx={{ height: 20, width: 'fit-content' }} />
-                : counts.acceptedUnverified > 0
-                  ? <Chip size="small" variant="outlined" label={`${counts.acceptedUnverified} unverified`} sx={{ height: 20, width: 'fit-content' }} />
-                  : counts.sent > 0
-                    ? <Chip size="small" variant="outlined" label={`${counts.sent} provider accepted`} sx={{ height: 20, width: 'fit-content' }} />
-                    : <Typography variant="caption" color="text.secondary">{counts.delivered > 0 ? 'No issues reported' : dispatch.accepted > 0 ? 'Awaiting outcomes' : 'No provider activity'}</Typography>}
+              ? <Chip size="small" variant="outlined" color="warning" label={`${adverse} with ${adverse === 1 ? 'a problem' : 'problems'}`} sx={{ height: 20, width: 'fit-content' }} />
+              : counts.waiting > 0
+                ? <Chip size="small" variant="outlined" color="info" label={`${counts.waiting} awaiting final result`} sx={{ height: 20, width: 'fit-content' }} />
+                : <Typography variant="caption" color="text.secondary">{counts.delivered > 0 ? 'No problems reported' : dispatch.accepted > 0 ? 'Awaiting delivery updates' : 'No provider activity'}</Typography>}
           </Stack>
         </Tooltip>;
       },

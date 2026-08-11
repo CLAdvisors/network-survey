@@ -80,12 +80,15 @@ test('readiness validates the entire audience and exact normalized template cove
   assert.equal(manyInvalid.blockers.at(-1).code, 'blockers_truncated');
 });
 
-test('launch fingerprint is canonical and aggregate SQL derives mutually exclusive dispatch states', () => {
+test('launch fingerprint is canonical and aggregate SQL derives dispatch and distinct provider summary counts', () => {
   assert.equal(fingerprint({targets:[1,2]}), fingerprint({targets:[1,2]}));
   assert.notEqual(fingerprint({targets:[1,2]}), fingerprint({targets:[2,1]}));
   const sql = aggregateSelect('WHERE l.survey_id=$1');
   for (const state of ['pending','leased','retry_wait','accepted','failed','uncertain','cancelled']) assert.match(sql, new RegExp(state));
   assert.match(sql, /count\(DISTINCT d\.id\)/);
+  assert.match(sql, /AS provider_problem_count/);
+  assert.match(sql, /AS provider_waiting_count/);
+  assert.match(sql, /d\.status='accepted' AND d\.provider_delivered_at IS NULL/);
   assert.doesNotMatch(sql, /UPDATE survey_launches/);
 });
 

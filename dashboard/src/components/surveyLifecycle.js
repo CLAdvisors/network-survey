@@ -53,23 +53,34 @@ export const providerCounts = (launch) => {
     complained: ['complained', 'complainedCount', 'complained_count', 'providerComplained', 'provider_complained', 'providerComplainedCount', 'provider_complained_count'],
     suppressed: ['suppressed', 'suppressedCount', 'suppressed_count', 'providerSuppressed', 'provider_suppressed', 'providerSuppressedCount', 'provider_suppressed_count'],
     providerFailed: ['providerFailed', 'provider_failed', 'providerFailedCount', 'provider_failed_count', 'failedProvider', 'failed_provider'],
+    problems: ['problems', 'problemCount', 'problem_count', 'providerProblem', 'provider_problem', 'providerProblemCount', 'provider_problem_count'],
+    waiting: ['waiting', 'waitingCount', 'waiting_count', 'providerWaiting', 'provider_waiting', 'providerWaitingCount', 'provider_waiting_count'],
     acceptedUnverified: ['acceptedUnverified', 'accepted_unverified', 'acceptedUnverifiedCount', 'accepted_unverified_count', 'unverifiedAccepted', 'unverified_accepted', 'unverifiedAcceptedCount', 'unverified_accepted_count'],
   };
   const raw = (keys) => sources.map((source) => firstValue(source, keys)).find((value) => value !== undefined && value !== null);
   const hasProviderData = Boolean(nested) || Object.values(aliases).flat().some((key) => sources.some((source) => source?.[key] !== undefined && source?.[key] !== null));
   const acceptedUnverified = raw(aliases.acceptedUnverified);
   const nestedFailed = nested && firstValue(nested, ['failed', 'failedCount', 'failed_count']);
+  const bounced = finiteCount(raw(aliases.bounced));
+  const complained = finiteCount(raw(aliases.complained));
+  const suppressed = finiteCount(raw(aliases.suppressed));
+  const providerFailed = finiteCount(nestedFailed ?? raw(aliases.providerFailed));
+  const acceptedFallback = launchCounts(launch).accepted;
 
   return {
     sent: finiteCount(raw(aliases.sent)),
     delivered: finiteCount(raw(aliases.delivered)),
     delayed: finiteCount(raw(aliases.delayed)),
-    bounced: finiteCount(raw(aliases.bounced)),
-    complained: finiteCount(raw(aliases.complained)),
-    suppressed: finiteCount(raw(aliases.suppressed)),
-    providerFailed: finiteCount(nestedFailed ?? raw(aliases.providerFailed)),
+    bounced,
+    complained,
+    suppressed,
+    providerFailed,
+    problems: raw(aliases.problems) === undefined ? bounced + complained + suppressed + providerFailed : finiteCount(raw(aliases.problems)),
+    waiting: raw(aliases.waiting) === undefined
+      ? (acceptedUnverified === undefined ? (hasProviderData ? 0 : acceptedFallback) : finiteCount(acceptedUnverified))
+      : finiteCount(raw(aliases.waiting)),
     acceptedUnverified: acceptedUnverified === undefined
-      ? (hasProviderData ? 0 : launchCounts(launch).accepted)
+      ? (hasProviderData ? 0 : acceptedFallback)
       : finiteCount(acceptedUnverified),
   };
 };

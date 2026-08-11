@@ -20,7 +20,7 @@ const Metric = ({ value, label, singularLabel, emphasis = false, color = 'text.p
   const displayedLabel = value === 1 && singularLabel ? singularLabel : label;
   return (
     <Box aria-label={`${value} ${displayedLabel}`} sx={{ minWidth: 0 }}>
-      <Typography variant={emphasis ? 'h4' : 'h5'} color={color} sx={{ fontWeight: 700, lineHeight: 1.1 }}>{value}</Typography>
+      <Typography component="p" variant={emphasis ? 'h4' : 'h5'} color={color} sx={{ fontWeight: 700, lineHeight: 1.1 }}>{value}</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{displayedLabel}</Typography>
     </Box>
   );
@@ -28,7 +28,7 @@ const Metric = ({ value, label, singularLabel, emphasis = false, color = 'text.p
 
 const SummaryCard = ({ title, supporting, children, ariaLabel }) => (
   <Paper component="section" aria-label={ariaLabel} variant="outlined" sx={{ p: 2, minWidth: 0 }}>
-    <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700, lineHeight: 1.5 }}>{title}</Typography>
+    <Typography component="h3" variant="overline" color="text.secondary" sx={{ display: 'block', fontWeight: 700, lineHeight: 1.5 }}>{title}</Typography>
     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{supporting}</Typography>
     {children}
   </Paper>
@@ -60,7 +60,8 @@ const PlainLanguageBreakdown = ({ counts, outcomes }) => {
       <Typography variant="body2"><strong>Submitted for sending</strong> means the email service received the invitation request. It does not confirm delivery.</Typography>
       <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Still processing:</strong> {processing.length ? joinDescriptions(processing) : 'none'}.</Typography>
       <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Not confirmed sent:</strong> {notConfirmed.length ? joinDescriptions(notConfirmed) : 'none'}.</Typography>
-      <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Problem reports:</strong> {problems.length ? joinDescriptions(problems) : 'none'}.</Typography>
+      <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Delivery problem details:</strong> {problems.length ? joinDescriptions(problems) : 'none'}. One invitation can have more than one problem report.</Typography>
+      <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Awaiting a final delivery result</strong> means no delivery confirmation or delivery problem has been reported yet; a delay may already have been reported.</Typography>
       <Typography variant="body2" sx={{ mt: 0.75 }}>A <strong>delivery confirmation</strong> comes from a recipient's mail server. Delay and problem reports are retained and can overlap with later updates.</Typography>
     </Box>
   );
@@ -132,7 +133,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
   const latest = visibleLaunches[0] || survey.latestLaunch || survey.latest_launch;
   const counts = launchCounts(latest);
   const outcomes = providerCounts(latest);
-  const adverse = outcomes.bounced + outcomes.complained + outcomes.suppressed + outcomes.providerFailed;
+  const adverse = outcomes.problems;
   const inProgress = counts.pending + counts.leased + counts.retryWait;
   const manualRefresh = () => setManualRefreshToken((value) => value + 1);
 
@@ -141,7 +142,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2}>
         <Box>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography variant="h6">Survey lifecycle</Typography>
+            <Typography component="h2" variant="h6">Survey lifecycle</Typography>
             <LifecycleChip status={lifecycleStatus(survey)} />
           </Stack>
           <Typography variant="body2" color="text.secondary">
@@ -162,7 +163,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
             supporting={`${counts.target} invitations in this launch`}
             ariaLabel="Invitation sending summary"
           >
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 2, mt: 2 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 2, mt: 2 }}>
               <Metric value={counts.accepted} label="submitted for sending" emphasis />
               <Metric value={inProgress} label="still processing" color={inProgress > 0 ? 'info.dark' : 'text.primary'} />
               <Metric value={counts.failed + counts.uncertain + counts.cancelled} label="not confirmed sent" color={counts.failed + counts.uncertain + counts.cancelled > 0 ? 'warning.dark' : 'text.primary'} />
@@ -174,14 +175,14 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
             supporting="Updates reported by the email service and recipients' mail servers"
             ariaLabel="Delivery confirmation summary"
           >
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 3, mt: 2 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 3, mt: 2 }}>
               <Metric value={outcomes.delivered} label="delivery confirmations" singularLabel="delivery confirmation" emphasis color={outcomes.delivered > 0 ? 'success.dark' : 'text.primary'} />
-              <Metric value={outcomes.acceptedUnverified} label="waiting for an update" color={outcomes.acceptedUnverified > 0 ? 'warning.dark' : 'text.primary'} />
+              <Metric value={outcomes.waiting} label="awaiting a final delivery result" color={outcomes.waiting > 0 ? 'warning.dark' : 'text.primary'} />
             </Box>
             <Box sx={{ mt: 2, p: 1.5, borderRadius: 1, bgcolor: 'action.hover' }}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontWeight: 700 }}>ADDITIONAL REPORTS — MAY OVERLAP WITH CONFIRMATIONS</Typography>
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 3, mt: 1.25 }}>
-                <Metric value={adverse} label="problem reports" singularLabel="problem report" color={adverse > 0 ? 'error.dark' : 'text.primary'} />
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontWeight: 700 }}>ADDITIONAL DELIVERY SIGNALS — MAY OVERLAP COUNTS ABOVE</Typography>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 3, mt: 1.25 }}>
+                <Metric value={adverse} label="invitations with delivery problems" singularLabel="invitation with a delivery problem" color={adverse > 0 ? 'error.dark' : 'text.primary'} />
                 <Metric value={outcomes.delayed} label="delay reports" singularLabel="delay report" color={outcomes.delayed > 0 ? 'warning.dark' : 'text.primary'} />
               </Box>
             </Box>
@@ -190,6 +191,9 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
         <Box component="details" aria-label="Current launch explanation" sx={{ mt: 1.5, color: 'text.secondary', '& summary': { cursor: 'pointer', width: 'fit-content' } }}>
           <Typography component="summary" variant="body2">How are these numbers calculated?</Typography>
           <PlainLanguageBreakdown counts={counts} outcomes={outcomes} />
+        </Box>
+        <Box role="status" aria-live="polite" aria-atomic="true" sx={{ position: 'absolute', width: '1px', height: '1px', p: 0, m: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
+          Invitation update: {counts.accepted} submitted for sending, {inProgress} still processing, {counts.failed + counts.uncertain + counts.cancelled} not confirmed sent. Delivery update: {countLabel(outcomes.delivered, 'confirmation')}, {countLabel(outcomes.waiting, 'invitation awaiting a final result', 'invitations awaiting a final result')}, {countLabel(adverse, 'invitation with a delivery problem', 'invitations with delivery problems')}, {countLabel(outcomes.delayed, 'delay report')}.
         </Box>
       </Box>}
 
@@ -206,7 +210,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
           {visibleLaunches.map((launch, index) => {
             const rowCounts = launchCounts(launch);
             const rowOutcomes = providerCounts(launch);
-            const rowAdverse = rowOutcomes.bounced + rowOutcomes.complained + rowOutcomes.suppressed + rowOutcomes.providerFailed;
+            const rowAdverse = rowOutcomes.problems;
             return (
               <Paper component="details" variant="outlined" key={launch.id || launch.launchId || index} sx={{ p: 1.5, '& summary': { cursor: 'pointer' } }}>
                 <Typography component="summary" variant="body2" fontWeight={600}>
@@ -214,13 +218,13 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
                 </Typography>
                 <Box sx={{ mt: 1.5, p: 1.5, borderRadius: 1, bgcolor: 'action.hover' }}>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>DELIVERY UPDATES</Typography>
-                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' }, gap: 2, mt: 1 }}>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' }, gap: 2, mt: 1 }}>
                     <Metric value={rowOutcomes.delivered} label="delivery confirmations" singularLabel="delivery confirmation" />
-                    <Metric value={rowOutcomes.acceptedUnverified} label="waiting for an update" />
-                    <Metric value={rowAdverse} label="problem reports" singularLabel="problem report" />
+                    <Metric value={rowOutcomes.waiting} label="awaiting a final delivery result" />
+                    <Metric value={rowAdverse} label="invitations with delivery problems" singularLabel="invitation with a delivery problem" />
                     <Metric value={rowOutcomes.delayed} label="delay reports" singularLabel="delay report" />
                   </Box>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>Problem and delay reports can overlap with confirmations.</Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>One invitation can have multiple problem or delay reports, and those reports can overlap other delivery update counts.</Typography>
                 </Box>
                 <PlainLanguageBreakdown counts={rowCounts} outcomes={rowOutcomes} />
               </Paper>

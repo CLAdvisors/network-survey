@@ -180,6 +180,8 @@ function aggregateSelect(whereSql) {
     count(DISTINCT d.id) FILTER(WHERE d.provider_complained_at IS NOT NULL)::int AS provider_complained_count,
     count(DISTINCT d.id) FILTER(WHERE d.provider_suppressed_at IS NOT NULL)::int AS provider_suppressed_count,
     count(DISTINCT d.id) FILTER(WHERE d.provider_failed_at IS NOT NULL)::int AS provider_failed_count,
+    count(DISTINCT d.id) FILTER(WHERE d.provider_bounced_at IS NOT NULL OR d.provider_complained_at IS NOT NULL OR d.provider_suppressed_at IS NOT NULL OR d.provider_failed_at IS NOT NULL)::int AS provider_problem_count,
+    count(DISTINCT d.id) FILTER(WHERE d.status='accepted' AND d.provider_delivered_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)::int AS provider_waiting_count,
     count(DISTINCT d.id) FILTER(WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)::int AS accepted_unverified_count,
     min(a.started_at) AS started_at,max(a.finished_at) FILTER(WHERE d.status IN ('accepted','failed','uncertain','cancelled')) AS finished_at,
     CASE
@@ -249,7 +251,7 @@ async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotenc
     await strictAudit(client,{organizationId:survey.organization_id,actorUserId:user.id,surveyId:survey.id,eventType:'survey.launch_requested',metadata:{launchId:launch.id,targetCount:data.recipients.length}});
     await strictAudit(client,{organizationId:survey.organization_id,actorUserId:user.id,surveyId:survey.id,eventType:'survey.lifecycle_changed',metadata:{from:'draft',to:'active',launchId:launch.id}});
     await client.query('COMMIT');
-    return { id:launch.id,survey_id:survey.id,kind,status:'queued',target_count:data.recipients.length,pending_count:data.recipients.length,leased_count:0,retry_wait_count:0,accepted_count:0,failed_count:0,uncertain_count:0,cancelled_count:0,provider_sent_count:0,provider_delivered_count:0,provider_delayed_count:0,provider_bounced_count:0,provider_complained_count:0,provider_suppressed_count:0,provider_failed_count:0,accepted_unverified_count:0,created_at:launch.created_at,lifecycleStatus:'active',replayed:false };
+    return { id:launch.id,survey_id:survey.id,kind,status:'queued',target_count:data.recipients.length,pending_count:data.recipients.length,leased_count:0,retry_wait_count:0,accepted_count:0,failed_count:0,uncertain_count:0,cancelled_count:0,provider_sent_count:0,provider_delivered_count:0,provider_delayed_count:0,provider_bounced_count:0,provider_complained_count:0,provider_suppressed_count:0,provider_failed_count:0,provider_problem_count:0,provider_waiting_count:0,accepted_unverified_count:0,created_at:launch.created_at,lifecycleStatus:'active',replayed:false };
   } catch (error) { await client.query('ROLLBACK').catch(()=>{}); if (error.code === '23505') throw new LifecycleError(409,'launch_conflict','An initial launch already exists.'); throw error; }
   finally { client.release(); }
 }

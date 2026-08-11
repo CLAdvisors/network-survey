@@ -3037,6 +3037,8 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
            'providerComplainedCount', count(*) FILTER (WHERE d.provider_complained_at IS NOT NULL),
            'providerSuppressedCount', count(*) FILTER (WHERE d.provider_suppressed_at IS NOT NULL),
            'providerFailedCount', count(*) FILTER (WHERE d.provider_failed_at IS NOT NULL),
+           'providerProblemCount', count(*) FILTER (WHERE d.provider_bounced_at IS NOT NULL OR d.provider_complained_at IS NOT NULL OR d.provider_suppressed_at IS NOT NULL OR d.provider_failed_at IS NOT NULL),
+           'providerWaitingCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_delivered_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL),
            'acceptedUnverifiedCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)
          ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,
@@ -3069,6 +3071,8 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
            'providerComplainedCount', count(*) FILTER (WHERE d.provider_complained_at IS NOT NULL),
            'providerSuppressedCount', count(*) FILTER (WHERE d.provider_suppressed_at IS NOT NULL),
            'providerFailedCount', count(*) FILTER (WHERE d.provider_failed_at IS NOT NULL),
+           'providerProblemCount', count(*) FILTER (WHERE d.provider_bounced_at IS NOT NULL OR d.provider_complained_at IS NOT NULL OR d.provider_suppressed_at IS NOT NULL OR d.provider_failed_at IS NOT NULL),
+           'providerWaitingCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_delivered_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL),
            'acceptedUnverifiedCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)
          ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,

@@ -24,19 +24,19 @@ test('keeps survey dispatch acceptance separate from provider outcomes', () => {
   render(<SurveyTable rows={[{
     id: 'survey-1', name: 'Survey', latestLaunch: {
       targetCount: 4, acceptedCount: 4,
-      providerOutcomeCounts: { deliveredCount: 2, bouncedCount: 1, acceptedUnverifiedCount: 2 },
+      providerOutcomeCounts: { deliveredCount: 2, bouncedCount: 1, providerProblemCount: 1, providerWaitingCount: 3, acceptedUnverifiedCount: 2 },
     },
   }]} selectRow={() => {}} />);
 
   const dispatch = screen.getByRole('region', { name: 'Invitation dispatch' });
-  expect(dispatch).toHaveTextContent('4 / 4 accepted');
+  expect(dispatch).toHaveTextContent('4 / 4 submitted');
   expect(dispatch).toHaveTextContent('Complete');
 
   const provider = screen.getByRole('region', { name: 'Provider outcomes' });
-  expect(provider).toHaveTextContent('2 delivered');
-  expect(provider).toHaveTextContent('1 issue');
+  expect(provider).toHaveTextContent('2 confirmed delivered');
+  expect(provider).toHaveTextContent('1 with a problem');
   expect(provider).not.toHaveTextContent('accepted / unverified');
-  const details = screen.getByLabelText(/0 provider accepted, 2 delivered, 0 delayed, 1 bounced/);
+  const details = screen.getByLabelText(/2 delivery confirmations, 3 awaiting a final result, 1 invitation with delivery problems/);
   expect(details).toBeInTheDocument();
   expect(details).toHaveAttribute('tabindex', '0');
 });

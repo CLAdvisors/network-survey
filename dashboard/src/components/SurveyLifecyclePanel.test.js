@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import api from '../api/axios';
 import SurveyLifecyclePanel from './SurveyLifecyclePanel';
@@ -32,13 +32,13 @@ test('normalizes additive provider counts, timestamps, and old accepted deliveri
     accepted_count: '5',
     provider_outcome_counts: {
       sent_count: '4', delivered_count: '2', delayed_count: 1, bounced_count: '1',
-      complained_count: 1, suppressed_count: 0, provider_failed_count: '1', accepted_unverified_count: '1',
+      complained_count: 1, suppressed_count: 0, provider_failed_count: '1', provider_problem_count: '2', provider_waiting_count: '3', accepted_unverified_count: '1',
     },
   })).toEqual({
     sent: 4, delivered: 2, delayed: 1, bounced: 1, complained: 1,
-    suppressed: 0, providerFailed: 1, acceptedUnverified: 1,
+    suppressed: 0, providerFailed: 1, problems: 2, waiting: 3, acceptedUnverified: 1,
   });
-  expect(providerCounts({ acceptedCount: 3 }).acceptedUnverified).toBe(3);
+  expect(providerCounts({ acceptedCount: 3 })).toMatchObject({ acceptedUnverified: 3, waiting: 3 });
 
   const delivery = {
     dispatch_status: 'accepted',
@@ -69,12 +69,50 @@ test('renders provider outcomes separately without changing dispatch arithmetic'
   }] } });
   render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'First', lifecycleStatus: 'active' }} />);
 
-  expect(await screen.findByRole('status')).toHaveTextContent('3 of 3 finished');
-  const providerSummary = screen.getByRole('region', { name: 'Provider outcome summary' });
-  expect(providerSummary).toHaveTextContent('2 delivered');
-  expect(providerSummary).toHaveTextContent('1 complained');
-  expect(providerSummary).toHaveTextContent('1 accepted / unverified');
-  expect(providerSummary).not.toHaveTextContent('3 delivered');
+  const sendingSummary = await screen.findByRole('region', { name: 'Invitation sending summary' });
+  expect(screen.getByLabelText('3 submitted for sending')).toBeInTheDocument();
+  const deliverySummary = screen.getByRole('region', { name: 'Delivery confirmation summary' });
+  expect(within(deliverySummary).getByLabelText('2 delivery confirmations')).toBeInTheDocument();
+  expect(within(deliverySummary).getByLabelText('1 invitation with a delivery problem')).toBeInTheDocument();
+  expect(within(deliverySummary).getByLabelText('1 awaiting a final delivery result')).toBeInTheDocument();
+  expect(deliverySummary).not.toHaveTextContent('3 delivery confirmations');
+});
+
+test('uses plain-language aggregates instead of exposing operational keyword lists', async () => {
+  api.get.mockResolvedValue({ data: { launches: [{
+    id: 'launch-demo', status: 'processing', created_at: new Date().toISOString(),
+    target_count: 13, pending_count: 1, retry_wait_count: 1, accepted_count: 8,
+    failed_count: 1, uncertain_count: 1, cancelled_count: 1,
+    provider_outcome_counts: {
+      delivered_count: 2, delayed_count: 1, bounced_count: 1, complained_count: 1,
+      suppressed_count: 1, provider_failed_count: 1, provider_problem_count: 3,
+      provider_waiting_count: 2, accepted_unverified_count: 1,
+    },
+  }] } });
+  render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'Delivery demo', lifecycleStatus: 'active' }} />);
+
+  const sending = await screen.findByRole('region', { name: 'Invitation sending summary' });
+  expect(sending).toHaveTextContent('13 invitations in this launch');
+  expect(screen.getByLabelText('8 submitted for sending')).toBeInTheDocument();
+  expect(screen.getByLabelText('2 still processing')).toBeInTheDocument();
+  expect(screen.getByLabelText('3 not confirmed sent')).toBeInTheDocument();
+  expect(sending).not.toHaveTextContent(/pending|retrying|uncertain|cancelled|issues/i);
+
+  const delivery = screen.getByRole('region', { name: 'Delivery confirmation summary' });
+  expect(within(delivery).getByLabelText('2 delivery confirmations')).toBeInTheDocument();
+  expect(within(delivery).getByLabelText('3 invitations with delivery problems')).toBeInTheDocument();
+  expect(within(delivery).getByLabelText('2 awaiting a final delivery result')).toBeInTheDocument();
+  expect(within(delivery).getByLabelText('1 delay report')).toBeInTheDocument();
+  expect(delivery).not.toHaveTextContent(/bounced|complained|suppressed|provider failed/i);
+  expect(screen.getByRole('status')).toHaveTextContent('Delivery update: 2 confirmations, 2 invitations awaiting a final result, 3 invitations with delivery problems, 1 delay report.');
+  expect(screen.getByRole('heading', { level: 2, name: 'Survey lifecycle' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 3, name: 'Invitation sending' })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: /^\d+$/ })).not.toBeInTheDocument();
+
+  const explanation = screen.getByLabelText('Current launch explanation');
+  fireEvent.click(within(explanation).getByText('How are these numbers calculated?'));
+  expect(within(explanation).getByText(/1 permanent failure, 1 result that could not be safely confirmed, and 1 intentionally stopped invitation/)).toBeVisible();
+  expect(within(explanation).getByText(/1 mail-server rejection, 1 spam complaint, 1 blocked address, and 1 provider delivery failure/)).toBeVisible();
 });
 
 test('does not render prior survey history while the next survey is loading', async () => {
@@ -83,9 +121,9 @@ test('does not render prior survey history while the next survey is loading', as
     .mockResolvedValueOnce({ data: { launches: [{ id: 'old', status: 'failed', counts: { target: 99, failed: 99 } }] } })
     .mockReturnValueOnce(second.promise);
   const { rerender } = render(<SurveyLifecyclePanel survey={{ id: 'survey-1', name: 'First', lifecycleStatus: 'closed' }} />);
-  expect(await screen.findByText(/99 of 99 finished/)).toBeInTheDocument();
+  expect(await screen.findByLabelText('99 not confirmed sent')).toBeInTheDocument();
   rerender(<SurveyLifecyclePanel survey={{ id: 'survey-2', name: 'Second', lifecycleStatus: 'active' }} />);
-  expect(screen.queryByText(/99 of 99 finished/)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('99 not confirmed sent')).not.toBeInTheDocument();
   await act(async () => {
     second.resolve({ data: { launches: [] } });
     await second.promise;
@@ -127,13 +165,13 @@ test('ignores launch history that resolves after the selected survey changes', a
     second.resolve({ data: { launches: [{ id: 'new', status: 'completed', counts: { target: 2, accepted: 2 } }] } });
     await second.promise;
   });
-  expect(await screen.findByText(/2 of 2 finished/)).toBeInTheDocument();
+  expect(await screen.findByLabelText('2 submitted for sending')).toBeInTheDocument();
 
   await act(async () => {
     first.resolve({ data: { launches: [{ id: 'old', status: 'failed', counts: { target: 99, failed: 99 } }] } });
     await first.promise;
   });
-  expect(screen.queryByText(/99 of 99 finished/)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('99 not confirmed sent')).not.toBeInTheDocument();
   expect(screen.getByLabelText('Invitation launch history')).toBeInTheDocument();
-  expect(screen.getByRole('status')).toHaveTextContent('2 accepted');
+  expect(screen.getByLabelText('2 submitted for sending')).toBeInTheDocument();
 });

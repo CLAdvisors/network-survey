@@ -1,13 +1,12 @@
 import React from 'react';
 import {
-  Alert, Box, Button, Chip, CircularProgress, LinearProgress, Paper, Stack,
-  Table, TableBody, TableCell, TableHead, TableRow, Typography,
+  Alert, Box, Button, Chip, CircularProgress, Paper, Stack, Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import LockIcon from '@mui/icons-material/Lock';
 import api from '../api/axios';
 import {
-  formatDateTime, isLaunchRunning, launchCounts, launchStatus, providerCounts,
+  formatDateTime, isLaunchRunning, launchCounts, providerCounts,
   lifecycleLabel, lifecycleStatus, shouldPollLaunch, surveyId,
 } from './surveyLifecycle';
 
@@ -17,7 +16,56 @@ export const LifecycleChip = ({ status, size = 'small' }) => {
   return <Chip size={size} color={color} variant={normalized === 'closed' ? 'outlined' : 'filled'} label={lifecycleLabel(normalized)} />;
 };
 
-const statusText = (status) => String(status || 'queued').replaceAll('_', ' ').replace(/^./, (letter) => letter.toUpperCase());
+const Metric = ({ value, label, singularLabel, emphasis = false, color = 'text.primary' }) => {
+  const displayedLabel = value === 1 && singularLabel ? singularLabel : label;
+  return (
+    <Box aria-label={`${value} ${displayedLabel}`} sx={{ minWidth: 0 }}>
+      <Typography component="p" variant={emphasis ? 'h4' : 'h5'} color={color} sx={{ fontWeight: 700, lineHeight: 1.1 }}>{value}</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{displayedLabel}</Typography>
+    </Box>
+  );
+};
+
+const SummaryCard = ({ title, supporting, children, ariaLabel }) => (
+  <Paper component="section" aria-label={ariaLabel} variant="outlined" sx={{ p: 2, minWidth: 0 }}>
+    <Typography component="h3" variant="overline" color="text.secondary" sx={{ display: 'block', fontWeight: 700, lineHeight: 1.5 }}>{title}</Typography>
+    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{supporting}</Typography>
+    {children}
+  </Paper>
+);
+
+const countLabel = (count, singular, plural = `${singular}s`) => `${count} ${count === 1 ? singular : plural}`;
+const joinDescriptions = (parts) => parts.length < 2 ? parts[0] || '' : `${parts.slice(0, -1).join(', ')}, and ${parts.at(-1)}`;
+
+const PlainLanguageBreakdown = ({ counts, outcomes }) => {
+  const processing = [
+    counts.pending && countLabel(counts.pending, 'invitation waiting to start', 'invitations waiting to start'),
+    counts.leased && countLabel(counts.leased, 'invitation being sent now', 'invitations being sent now'),
+    counts.retryWait && countLabel(counts.retryWait, 'invitation scheduled for another attempt', 'invitations scheduled for another attempt'),
+  ].filter(Boolean);
+  const notConfirmed = [
+    counts.failed && countLabel(counts.failed, 'permanent failure'),
+    counts.uncertain && countLabel(counts.uncertain, 'result that could not be safely confirmed', 'results that could not be safely confirmed'),
+    counts.cancelled && countLabel(counts.cancelled, 'intentionally stopped invitation'),
+  ].filter(Boolean);
+  const problems = [
+    outcomes.bounced && countLabel(outcomes.bounced, 'mail-server rejection'),
+    outcomes.complained && countLabel(outcomes.complained, 'spam complaint'),
+    outcomes.suppressed && countLabel(outcomes.suppressed, 'blocked address'),
+    outcomes.providerFailed && countLabel(outcomes.providerFailed, 'provider delivery failure'),
+  ].filter(Boolean);
+
+  return (
+    <Box sx={{ mt: 1, pl: 2, maxWidth: 950 }}>
+      <Typography variant="body2"><strong>Submitted for sending</strong> means the email service received the invitation request. It does not confirm delivery.</Typography>
+      <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Still processing:</strong> {processing.length ? joinDescriptions(processing) : 'none'}.</Typography>
+      <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Not confirmed sent:</strong> {notConfirmed.length ? joinDescriptions(notConfirmed) : 'none'}.</Typography>
+      <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Delivery problem details:</strong> {problems.length ? joinDescriptions(problems) : 'none'}. One invitation can have more than one problem report.</Typography>
+      <Typography variant="body2" sx={{ mt: 0.75 }}><strong>Awaiting a final delivery result</strong> means no delivery confirmation or delivery problem has been reported yet; a delay may already have been reported.</Typography>
+      <Typography variant="body2" sx={{ mt: 0.75 }}>A <strong>delivery confirmation</strong> comes from a recipient's mail server. Delay and problem reports are retained and can overlap with later updates.</Typography>
+    </Box>
+  );
+};
 
 const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => {
   const [launches, setLaunches] = React.useState([]);
@@ -85,23 +133,16 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
   const latest = visibleLaunches[0] || survey.latestLaunch || survey.latest_launch;
   const counts = launchCounts(latest);
   const outcomes = providerCounts(latest);
-  const terminal = counts.accepted + counts.failed + counts.uncertain + counts.cancelled;
-  const progress = counts.target ? Math.min(100, (terminal / counts.target) * 100) : 0;
-  const hasIssue = counts.failed + counts.uncertain + counts.cancelled > 0;
-  const hasProviderIssue = outcomes.bounced + outcomes.complained + outcomes.suppressed + outcomes.providerFailed > 0;
-  const summary = latest
-    ? `${statusText(launchStatus(latest))}: ${terminal} of ${counts.target} finished; ${counts.pending} pending, ${counts.leased} sending, ${counts.retryWait} waiting to retry, ${counts.accepted} accepted, ${counts.failed} failed, ${counts.uncertain} uncertain, ${counts.cancelled} cancelled.`
-    : 'No invitation launch history.';
-  const providerSummary = `${outcomes.delivered} delivered, ${outcomes.delayed} delayed, ${outcomes.bounced} bounced, ${outcomes.complained} complained, ${outcomes.suppressed} suppressed, ${outcomes.providerFailed} provider failed, ${outcomes.acceptedUnverified} accepted / unverified.`;
-
+  const adverse = outcomes.problems;
+  const inProgress = counts.pending + counts.leased + counts.retryWait;
   const manualRefresh = () => setManualRefreshToken((value) => value + 1);
 
   return (
-    <Paper elevation={2} sx={{ p: 3, mb: 3 }} aria-label={`Lifecycle for ${survey.name}`}>
+    <Paper elevation={2} sx={{ p: { xs: 2, md: 3 }, mb: 3 }} aria-label={`Lifecycle for ${survey.name}`}>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2}>
         <Box>
           <Stack direction="row" alignItems="center" spacing={1}>
-            <Typography variant="h6">Survey lifecycle</Typography>
+            <Typography component="h2" variant="h6">Survey lifecycle</Typography>
             <LifecycleChip status={lifecycleStatus(survey)} />
           </Stack>
           <Typography variant="body2" color="text.secondary">
@@ -114,34 +155,82 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
       </Stack>
 
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-      {latest && <Box sx={{ mt: 2 }}>
-        <Typography variant="subtitle2">Latest invitation dispatch</Typography>
-        <LinearProgress variant="determinate" value={progress} sx={{ my: 1 }} aria-label="Invitation dispatch progress" />
-        <Typography aria-live="polite" role="status" variant="body2">{summary}</Typography>
-        <Box component="section" aria-label="Provider outcome summary" sx={{ mt: 1 }}>
-          <Typography variant="subtitle2">Provider outcomes</Typography>
-          <Typography aria-live="polite" variant="body2">{providerSummary}</Typography>
-        </Box>
-        <Typography variant="caption" color="text.secondary">Dispatch acceptance is separate from mailbox delivery. Accepted / unverified means no mailbox outcome has been recorded yet. Terminal launches refresh automatically for seven days; older history uses manual refresh.</Typography>
-      </Box>}
-      {hasIssue && <Alert severity={counts.uncertain ? 'warning' : 'error'} sx={{ mt: 2 }}>
-        Some invitations were not accepted. Failed, uncertain, and cancelled messages remain visible in history.
-      </Alert>}
-      {hasProviderIssue && <Alert severity="warning" sx={{ mt: 2 }}>
-        Some accepted invitations have an adverse provider outcome. Provider outcomes do not change dispatch progress.
-      </Alert>}
-      {lifecycleStatus(survey) !== 'draft' && <Alert severity="info" icon={<LockIcon />} sx={{ mt: 2 }}>
-        Questions, respondents, notification templates, and survey design are read-only while this survey is {lifecycleStatus(survey)}.
-      </Alert>}
 
-      {visibleLaunches.length > 0 && <Box sx={{ mt: 2, overflowX: 'auto' }}>
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>Launch history</Typography>
-        <Table size="small" aria-label="Invitation launch history">
-          <TableHead><TableRow><TableCell>Created</TableCell><TableCell>Dispatch status</TableCell><TableCell>In progress</TableCell><TableCell align="right">Accepted / target</TableCell><TableCell align="right">Failed</TableCell><TableCell align="right">Uncertain</TableCell><TableCell align="right">Cancelled</TableCell><TableCell>Provider outcomes</TableCell></TableRow></TableHead>
-          <TableBody>{visibleLaunches.map((launch, index) => { const rowCounts = launchCounts(launch); const rowOutcomes = providerCounts(launch); return (
-            <TableRow key={launch.id || launch.launchId || index}><TableCell>{formatDateTime(launch.createdAt || launch.created_at)}</TableCell><TableCell>{statusText(launchStatus(launch))}</TableCell><TableCell>{rowCounts.pending} pending · {rowCounts.leased} sending · {rowCounts.retryWait} retrying</TableCell><TableCell align="right">{rowCounts.accepted} / {rowCounts.target}</TableCell><TableCell align="right">{rowCounts.failed}</TableCell><TableCell align="right">{rowCounts.uncertain}</TableCell><TableCell align="right">{rowCounts.cancelled}</TableCell><TableCell>{rowOutcomes.delivered} delivered · {rowOutcomes.delayed} delayed · {rowOutcomes.bounced} bounced · {rowOutcomes.complained} complained · {rowOutcomes.suppressed} suppressed · {rowOutcomes.providerFailed} provider failed · {rowOutcomes.acceptedUnverified} accepted / unverified</TableCell></TableRow>
-          ); })}</TableBody>
-        </Table>
+      {latest && <Box sx={{ mt: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>
+          <SummaryCard
+            title="Invitation sending"
+            supporting={`${counts.target} invitations in this launch`}
+            ariaLabel="Invitation sending summary"
+          >
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 2, mt: 2 }}>
+              <Metric value={counts.accepted} label="submitted for sending" emphasis />
+              <Metric value={inProgress} label="still processing" color={inProgress > 0 ? 'info.dark' : 'text.primary'} />
+              <Metric value={counts.failed + counts.uncertain + counts.cancelled} label="not confirmed sent" color={counts.failed + counts.uncertain + counts.cancelled > 0 ? 'warning.dark' : 'text.primary'} />
+            </Box>
+          </SummaryCard>
+
+          <SummaryCard
+            title="Delivery confirmation"
+            supporting="Updates reported by the email service and recipients' mail servers"
+            ariaLabel="Delivery confirmation summary"
+          >
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 3, mt: 2 }}>
+              <Metric value={outcomes.delivered} label="delivery confirmations" singularLabel="delivery confirmation" emphasis color={outcomes.delivered > 0 ? 'success.dark' : 'text.primary'} />
+              <Metric value={outcomes.waiting} label="awaiting a final delivery result" color={outcomes.waiting > 0 ? 'warning.dark' : 'text.primary'} />
+            </Box>
+            <Box sx={{ mt: 2, p: 1.5, borderRadius: 1, bgcolor: 'action.hover' }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontWeight: 700 }}>ADDITIONAL DELIVERY SIGNALS — MAY OVERLAP COUNTS ABOVE</Typography>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 3, mt: 1.25 }}>
+                <Metric value={adverse} label="invitations with delivery problems" singularLabel="invitation with a delivery problem" color={adverse > 0 ? 'error.dark' : 'text.primary'} />
+                <Metric value={outcomes.delayed} label="delay reports" singularLabel="delay report" color={outcomes.delayed > 0 ? 'warning.dark' : 'text.primary'} />
+              </Box>
+            </Box>
+          </SummaryCard>
+        </Box>
+        <Box component="details" aria-label="Current launch explanation" sx={{ mt: 1.5, color: 'text.secondary', '& summary': { cursor: 'pointer', width: 'fit-content' } }}>
+          <Typography component="summary" variant="body2">How are these numbers calculated?</Typography>
+          <PlainLanguageBreakdown counts={counts} outcomes={outcomes} />
+        </Box>
+        <Box role="status" aria-live="polite" aria-atomic="true" sx={{ position: 'absolute', width: '1px', height: '1px', p: 0, m: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
+          Invitation update: {counts.accepted} submitted for sending, {inProgress} still processing, {counts.failed + counts.uncertain + counts.cancelled} not confirmed sent. Delivery update: {countLabel(outcomes.delivered, 'confirmation')}, {countLabel(outcomes.waiting, 'invitation awaiting a final result', 'invitations awaiting a final result')}, {countLabel(adverse, 'invitation with a delivery problem', 'invitations with delivery problems')}, {countLabel(outcomes.delayed, 'delay report')}.
+        </Box>
+      </Box>}
+
+      {lifecycleStatus(survey) !== 'draft' && <Box sx={{ mt: 2, p: 1.25, borderRadius: 1, bgcolor: 'action.hover', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <LockIcon color="action" fontSize="small" />
+        <Typography variant="body2" color="text.secondary">
+          Questions, respondents, notification templates, and survey design are read-only while this survey is {lifecycleStatus(survey)}.
+        </Typography>
+      </Box>}
+
+      {visibleLaunches.length > 0 && <Box component="details" sx={{ mt: 3, '& summary': { cursor: 'pointer', width: 'fit-content' } }}>
+        <Typography component="summary" variant="subtitle2">View launch history</Typography>
+        <Stack spacing={1} sx={{ mt: 1 }} aria-label="Invitation launch history">
+          {visibleLaunches.map((launch, index) => {
+            const rowCounts = launchCounts(launch);
+            const rowOutcomes = providerCounts(launch);
+            const rowAdverse = rowOutcomes.problems;
+            return (
+              <Paper component="details" variant="outlined" key={launch.id || launch.launchId || index} sx={{ p: 1.5, '& summary': { cursor: 'pointer' } }}>
+                <Typography component="summary" variant="body2" fontWeight={600}>
+                  {formatDateTime(launch.createdAt || launch.created_at)} — {rowCounts.accepted} of {rowCounts.target} submitted for sending
+                </Typography>
+                <Box sx={{ mt: 1.5, p: 1.5, borderRadius: 1, bgcolor: 'action.hover' }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>DELIVERY UPDATES</Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' }, gap: 2, mt: 1 }}>
+                    <Metric value={rowOutcomes.delivered} label="delivery confirmations" singularLabel="delivery confirmation" />
+                    <Metric value={rowOutcomes.waiting} label="awaiting a final delivery result" />
+                    <Metric value={rowAdverse} label="invitations with delivery problems" singularLabel="invitation with a delivery problem" />
+                    <Metric value={rowOutcomes.delayed} label="delay reports" singularLabel="delay report" />
+                  </Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>One invitation can have multiple problem or delay reports, and those reports can overlap other delivery update counts.</Typography>
+                </Box>
+                <PlainLanguageBreakdown counts={rowCounts} outcomes={rowOutcomes} />
+              </Paper>
+            );
+          })}
+        </Stack>
       </Box>}
     </Paper>
   );

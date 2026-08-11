@@ -1959,6 +1959,13 @@ test('member management, invite, reset, and audit routes are present with requir
   assert.match(lifecycleSource, /'survey\.archived'/);
 });
 
+test('survey list compact aggregates include distinct provider summary counts for both role paths', () => {
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.equal((serverSource.match(/'providerProblemCount'/g) || []).length, 2);
+  assert.equal((serverSource.match(/'providerWaitingCount'/g) || []).length, 2);
+  assert.equal((serverSource.match(/d\.status='accepted' AND d\.provider_delivered_at IS NULL/g) || []).length, 2);
+});
+
 test('/api/testEmail disables the legacy untracked respondent reminder path', async (t) => {
   const originalQuery = pool.query;
   const originalConnect = pool.connect;

@@ -42,7 +42,70 @@ const {
   validateRequiredAnswers,
   normalizeQuestionNames,
   formatRespondentChoice,
+  buildPrivacyPolicyUrl,
+  buildSurveyEmailHtml,
+  buildSurveyEmailText,
 } = require('../server');
+
+test('survey emails include the approved privacy notice and stable policy link', () => {
+  const policyUrl = buildPrivacyPolicyUrl('https://demo.ona.survey.bennetts.work/');
+  assert.equal(policyUrl, 'https://demo.ona.survey.bennetts.work/privacy-policy.html');
+
+  const html = buildSurveyEmailHtml(
+    'Please complete this survey.',
+    'https://demo.ona.survey.bennetts.work/?surveyName=Example&userId=token',
+    policyUrl
+  );
+
+  assert.match(html, /<h1[^>]*>Your Privacy<\/h1>/);
+  assert.match(html, /This survey is confidential, but not anonymous\./);
+  assert.match(html, /generally reported in groups of at least five respondents/);
+  assert.match(html, /Identifiable survey data is generally retained for up to three years/);
+  assert.match(html, new RegExp(`href="${policyUrl}"`));
+  assert.match(html, />Employee Survey Platform Privacy Policy<\/a>/);
+  assert.doesNotMatch(html, /stripe\.com|Lorem ipsum/i);
+});
+
+test('survey email links reject malformed policy origins and escape attributes', () => {
+  assert.throws(() => buildPrivacyPolicyUrl('not a URL'), /valid HTTP\(S\) URL/);
+  assert.throws(() => buildPrivacyPolicyUrl('javascript:alert(1)'), /HTTP\(S\) URL without/);
+  assert.throws(() => buildPrivacyPolicyUrl('https://example.com/?redirect=other'), /query parameters/);
+  assert.throws(() => buildPrivacyPolicyUrl('https://user:secret@example.com'), /without credentials/);
+
+  const html = buildSurveyEmailHtml(
+    'Please complete this survey.',
+    'https://example.com/?surveyName=A&userId=" onmouseover="alert(1)',
+    'https://example.com/privacy-policy.html?x=" onmouseover="alert(1)'
+  );
+  assert.match(html, /surveyName=A&amp;userId=&quot; onmouseover=&quot;alert\(1\)/);
+  assert.match(html, /privacy-policy\.html\?x=&quot; onmouseover=&quot;alert\(1\)/);
+  assert.doesNotMatch(html, /href="[^"]*" onmouseover=/);
+});
+
+test('survey emails provide the privacy notice and links to text-only clients', () => {
+  const text = buildSurveyEmailText(
+    '<p>Please complete this survey.</p>',
+    'https://example.com/?surveyName=Example&userId=token',
+    'https://example.com/privacy-policy.html'
+  );
+  assert.match(text, /^Please complete this survey\./);
+  assert.match(text, /Start your survey: https:\/\/example\.com\/\?surveyName=Example&userId=token/);
+  assert.match(text, /Your Privacy\n\nThis survey is confidential, but not anonymous\./);
+  assert.match(text, /Employee Survey Platform Privacy Policy: https:\/\/example\.com\/privacy-policy\.html/);
+  assert.doesNotMatch(text, /<p>|<a\b/i);
+});
+
+test('published privacy policy matches the approved title and effective date', () => {
+  const policy = fs.readFileSync(
+    path.join(__dirname, '../../network-survey/public/privacy-policy.html'),
+    'utf8'
+  );
+  assert.match(policy, /<h1>Employee Survey Platform Privacy Policy<\/h1>/);
+  assert.match(policy, /Effective Date: August 1, 2026/);
+  assert.match(policy, /<h2>15\. Contact Us<\/h2>/);
+  assert.match(policy, /mailto:info@contemporaryleadership\.com/);
+  assert.doesNotMatch(policy, /\[August 1, 2026\]|Lorem ipsum/i);
+});
 
 test('question schema requiredness is explicit, typed, and validates submitted answers', () => {
   assert.equal(parseRequiredCsvValue(undefined), true, 'an absent Required column remains legacy-required');

@@ -65,8 +65,12 @@ const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//
                     <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />`, 
                     `<a href="`, `" data-id="react-email-button" target="_blank" style="background-color:#42B4AF;border-radius:5px;color:#fff;font-size:16px;font-weight:bold;text-decoration:none;text-align:center;display:inline-block;width:100%;line-height:100%;max-width:100%;padding:10px 10px"><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%;mso-text-raise:15" hidden>&nbsp;</i><![endif]--></span><span style="max-width:100%;display:inline-block;line-height:120%;mso-padding-alt:0px;mso-text-raise:7.5px">Start your survey</span><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%" hidden>&nbsp;</i><![endif]--></span></a>
                     <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
-                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">View our <a href="https://stripe.com/docs" data-id="react-email-link" target="_blank" style="color:#556cd6;text-decoration:none">privacy policy</a> .</p>
-                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque vel rhoncus lacus. Nulla facilisi. Donec turpis sem, dictum a sollicitudin a, faucibus ac sem. Morbi sed erat non ex mollis pulvinar ut eu nisi.</p>
+                    <h1 style="font-size:20px;line-height:28px;margin:24px 0 12px;color:#333333;text-align:left">Your Privacy</h1>
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.</p>
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">Survey results are generally reported in groups of at least five respondents. Certain analyses, particularly Organizational Network Analysis (ONA), may identify individuals when doing so is an intended part of the analysis—for example, identifying key organizational connectors—but CLA will not disclose how an identifiable individual responded or who nominated them.</p>
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">Open-ended comments are not attributed to individual respondents. However, what you write may sometimes reveal your identity, so please avoid including your name or unnecessary identifying information if you wish to protect your confidentiality.</p>
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">CLA may use de-identified survey data for research, benchmarking, and to improve our assessments and methodologies. Identifiable survey data is generally retained for up to three years, and you may request deletion of your personal information, subject to applicable legal and other permitted exceptions.</p>
+                    <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">For more information about how CLA collects, uses, protects, and retains your information, please review our <a href="`, `" data-id="react-email-link" target="_blank" rel="noreferrer" style="color:#287f7b;text-decoration:underline">Employee Survey Platform Privacy Policy</a>.</p>
                     <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">— The CLA team</p>
                     <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
                     <p data-id="react-email-text" style="font-size:12px;line-height:16px;margin:16px 0;color:#8898aa">Contemporary Leadership Advisors, 299 Park Ave, New York, NY 10171</p>
@@ -105,10 +109,51 @@ async function sendAccountEmail({ to, subject, html, text }) {
   }
 }
 
-function buildSurveyEmailHtml(text, link) {
+function buildPrivacyPolicyUrl(surveyBaseUrl = process.env.SURVEY_URL) {
+  if (!surveyBaseUrl) {
+    throw new Error('Missing SURVEY_URL environment variable');
+  }
+
+  let url;
+  try {
+    url = new URL(surveyBaseUrl);
+  } catch {
+    throw new Error('SURVEY_URL must be a valid HTTP(S) URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('SURVEY_URL must be an HTTP(S) URL without credentials, query parameters, or fragments');
+  }
+
+  return new URL('/privacy-policy.html', url).toString();
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildSurveyEmailHtml(text, link, privacyPolicyUrl = buildPrivacyPolicyUrl()) {
   const formattedText = (`<p>${text.replace(/"/g, '')}</p>`)
     .replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
-  return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + link + EMAIL_HTML[2];
+  return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + escapeHtmlAttribute(link) + EMAIL_HTML[2]
+    + escapeHtmlAttribute(privacyPolicyUrl) + EMAIL_HTML[3];
+}
+
+function buildSurveyEmailText(text, link, privacyPolicyUrl = buildPrivacyPolicyUrl()) {
+  const invitationText = String(text)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p\s*>/gi, '\n\n')
+    .replace(/<[^>]*>/g, '')
+    .trim();
+  return `${invitationText}\n\nStart your survey: ${link}\n\nYour Privacy\n\n`
+    + 'This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.\n\n'
+    + 'Survey results are generally reported in groups of at least five respondents. Certain analyses, particularly Organizational Network Analysis (ONA), may identify individuals when doing so is an intended part of the analysis—for example, identifying key organizational connectors—but CLA will not disclose how an identifiable individual responded or who nominated them.\n\n'
+    + 'Open-ended comments are not attributed to individual respondents. However, what you write may sometimes reveal your identity, so please avoid including your name or unnecessary identifying information if you wish to protect your confidentiality.\n\n'
+    + 'CLA may use de-identified survey data for research, benchmarking, and to improve our assessments and methodologies. Identifiable survey data is generally retained for up to three years, and you may request deletion of your personal information, subject to applicable legal and other permitted exceptions.\n\n'
+    + `Employee Survey Platform Privacy Policy: ${privacyPolicyUrl}\n`;
 }
 
 async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {
@@ -123,6 +168,7 @@ async function sendMail(email, id, surveyName, text, subject = 'CLA Network Surv
       to: email,
       subject,
       html: buildSurveyEmailHtml(text, customLink),
+      text: buildSurveyEmailText(text, customLink),
       surveyName
     };
 
@@ -149,6 +195,7 @@ async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Netwo
     to: email,
     subject: `[Demo] ${subject}`,
     html: buildSurveyEmailHtml(text, link),
+    text: buildSurveyEmailText(text, link),
   });
   if (result?.error) throw new Error(result.error.message || 'Email delivery failed');
 }
@@ -3450,4 +3497,7 @@ module.exports = {
   validateRequiredAnswers,
   normalizeQuestionNames,
   formatRespondentChoice,
+  buildPrivacyPolicyUrl,
+  buildSurveyEmailHtml,
+  buildSurveyEmailText,
 };

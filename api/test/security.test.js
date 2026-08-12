@@ -44,6 +44,7 @@ const {
   formatRespondentChoice,
   buildPrivacyPolicyUrl,
   buildSurveyEmailHtml,
+  buildSurveyEmailText,
 } = require('../server');
 
 test('survey emails include the approved privacy notice and stable policy link', () => {
@@ -56,7 +57,7 @@ test('survey emails include the approved privacy notice and stable policy link',
     policyUrl
   );
 
-  assert.match(html, /<h2[^>]*>Your Privacy<\/h2>/);
+  assert.match(html, /<h1[^>]*>Your Privacy<\/h1>/);
   assert.match(html, /This survey is confidential, but not anonymous\./);
   assert.match(html, /generally reported in groups of at least five respondents/);
   assert.match(html, /Identifiable survey data is generally retained for up to three years/);
@@ -79,6 +80,19 @@ test('survey email links reject malformed policy origins and escape attributes',
   assert.match(html, /surveyName=A&amp;userId=&quot; onmouseover=&quot;alert\(1\)/);
   assert.match(html, /privacy-policy\.html\?x=&quot; onmouseover=&quot;alert\(1\)/);
   assert.doesNotMatch(html, /href="[^"]*" onmouseover=/);
+});
+
+test('survey emails provide the privacy notice and links to text-only clients', () => {
+  const text = buildSurveyEmailText(
+    '<p>Please complete this survey.</p>',
+    'https://example.com/?surveyName=Example&userId=token',
+    'https://example.com/privacy-policy.html'
+  );
+  assert.match(text, /^Please complete this survey\./);
+  assert.match(text, /Start your survey: https:\/\/example\.com\/\?surveyName=Example&userId=token/);
+  assert.match(text, /Your Privacy\n\nThis survey is confidential, but not anonymous\./);
+  assert.match(text, /Employee Survey Platform Privacy Policy: https:\/\/example\.com\/privacy-policy\.html/);
+  assert.doesNotMatch(text, /<p>|<a\b/i);
 });
 
 test('published privacy policy matches the approved title and effective date', () => {

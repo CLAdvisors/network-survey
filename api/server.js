@@ -65,7 +65,7 @@ const EMAIL_HTML = [`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//
                     <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />`, 
                     `<a href="`, `" data-id="react-email-button" target="_blank" style="background-color:#42B4AF;border-radius:5px;color:#fff;font-size:16px;font-weight:bold;text-decoration:none;text-align:center;display:inline-block;width:100%;line-height:100%;max-width:100%;padding:10px 10px"><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%;mso-text-raise:15" hidden>&nbsp;</i><![endif]--></span><span style="max-width:100%;display:inline-block;line-height:120%;mso-padding-alt:0px;mso-text-raise:7.5px">Start your survey</span><span><!--[if mso]><i style="letter-spacing: 10px;mso-font-width:-100%" hidden>&nbsp;</i><![endif]--></span></a>
                     <hr data-id="react-email-hr" style="width:100%;border:none;border-top:1px solid #eaeaea;border-color:#e6ebf1;margin:20px 0" />
-                    <h2 style="font-size:20px;line-height:28px;margin:24px 0 12px;color:#333333;text-align:left">Your Privacy</h2>
+                    <h1 style="font-size:20px;line-height:28px;margin:24px 0 12px;color:#333333;text-align:left">Your Privacy</h1>
                     <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.</p>
                     <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">Survey results are generally reported in groups of at least five respondents. Certain analyses, particularly Organizational Network Analysis (ONA), may identify individuals when doing so is an intended part of the analysis—for example, identifying key organizational connectors—but CLA will not disclose how an identifiable individual responded or who nominated them.</p>
                     <p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">Open-ended comments are not attributed to individual respondents. However, what you write may sometimes reveal your identity, so please avoid including your name or unnecessary identifying information if you wish to protect your confidentiality.</p>
@@ -142,6 +142,20 @@ function buildSurveyEmailHtml(text, link, privacyPolicyUrl = buildPrivacyPolicyU
     + escapeHtmlAttribute(privacyPolicyUrl) + EMAIL_HTML[3];
 }
 
+function buildSurveyEmailText(text, link, privacyPolicyUrl = buildPrivacyPolicyUrl()) {
+  const invitationText = String(text)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p\s*>/gi, '\n\n')
+    .replace(/<[^>]*>/g, '')
+    .trim();
+  return `${invitationText}\n\nStart your survey: ${link}\n\nYour Privacy\n\n`
+    + 'This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.\n\n'
+    + 'Survey results are generally reported in groups of at least five respondents. Certain analyses, particularly Organizational Network Analysis (ONA), may identify individuals when doing so is an intended part of the analysis—for example, identifying key organizational connectors—but CLA will not disclose how an identifiable individual responded or who nominated them.\n\n'
+    + 'Open-ended comments are not attributed to individual respondents. However, what you write may sometimes reveal your identity, so please avoid including your name or unnecessary identifying information if you wish to protect your confidentiality.\n\n'
+    + 'CLA may use de-identified survey data for research, benchmarking, and to improve our assessments and methodologies. Identifiable survey data is generally retained for up to three years, and you may request deletion of your personal information, subject to applicable legal and other permitted exceptions.\n\n'
+    + `Employee Survey Platform Privacy Policy: ${privacyPolicyUrl}\n`;
+}
+
 async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {
   try {
     if (!resend) {
@@ -154,6 +168,7 @@ async function sendMail(email, id, surveyName, text, subject = 'CLA Network Surv
       to: email,
       subject,
       html: buildSurveyEmailHtml(text, customLink),
+      text: buildSurveyEmailText(text, customLink),
       surveyName
     };
 
@@ -180,6 +195,7 @@ async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Netwo
     to: email,
     subject: `[Demo] ${subject}`,
     html: buildSurveyEmailHtml(text, link),
+    text: buildSurveyEmailText(text, link),
   });
   if (result?.error) throw new Error(result.error.message || 'Email delivery failed');
 }
@@ -3483,4 +3499,5 @@ module.exports = {
   formatRespondentChoice,
   buildPrivacyPolicyUrl,
   buildSurveyEmailHtml,
+  buildSurveyEmailText,
 };

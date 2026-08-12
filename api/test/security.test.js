@@ -65,6 +65,22 @@ test('survey emails include the approved privacy notice and stable policy link',
   assert.doesNotMatch(html, /stripe\.com|Lorem ipsum/i);
 });
 
+test('survey email links reject malformed policy origins and escape attributes', () => {
+  assert.throws(() => buildPrivacyPolicyUrl('not a URL'), /valid HTTP\(S\) URL/);
+  assert.throws(() => buildPrivacyPolicyUrl('javascript:alert(1)'), /HTTP\(S\) URL without/);
+  assert.throws(() => buildPrivacyPolicyUrl('https://example.com/?redirect=other'), /query parameters/);
+  assert.throws(() => buildPrivacyPolicyUrl('https://user:secret@example.com'), /without credentials/);
+
+  const html = buildSurveyEmailHtml(
+    'Please complete this survey.',
+    'https://example.com/?surveyName=A&userId=" onmouseover="alert(1)',
+    'https://example.com/privacy-policy.html?x=" onmouseover="alert(1)'
+  );
+  assert.match(html, /surveyName=A&amp;userId=&quot; onmouseover=&quot;alert\(1\)/);
+  assert.match(html, /privacy-policy\.html\?x=&quot; onmouseover=&quot;alert\(1\)/);
+  assert.doesNotMatch(html, /href="[^"]*" onmouseover=/);
+});
+
 test('published privacy policy matches the approved title and effective date', () => {
   const policy = fs.readFileSync(
     path.join(__dirname, '../../network-survey/public/privacy-policy.html'),

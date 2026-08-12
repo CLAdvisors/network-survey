@@ -113,13 +113,33 @@ function buildPrivacyPolicyUrl(surveyBaseUrl = process.env.SURVEY_URL) {
   if (!surveyBaseUrl) {
     throw new Error('Missing SURVEY_URL environment variable');
   }
-  return `${surveyBaseUrl.replace(/\/+$/, '')}/privacy-policy.html`;
+
+  let url;
+  try {
+    url = new URL(surveyBaseUrl);
+  } catch {
+    throw new Error('SURVEY_URL must be a valid HTTP(S) URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('SURVEY_URL must be an HTTP(S) URL without credentials, query parameters, or fragments');
+  }
+
+  return new URL('/privacy-policy.html', url).toString();
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function buildSurveyEmailHtml(text, link, privacyPolicyUrl = buildPrivacyPolicyUrl()) {
   const formattedText = (`<p>${text.replace(/"/g, '')}</p>`)
     .replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
-  return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + link + EMAIL_HTML[2] + privacyPolicyUrl + EMAIL_HTML[3];
+  return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + escapeHtmlAttribute(link) + EMAIL_HTML[2]
+    + escapeHtmlAttribute(privacyPolicyUrl) + EMAIL_HTML[3];
 }
 
 async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {

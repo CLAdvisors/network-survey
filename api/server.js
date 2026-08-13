@@ -135,9 +135,17 @@ function escapeHtmlAttribute(value) {
     .replace(/>/g, '&gt;');
 }
 
+function escapeHtmlText(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function buildSurveyEmailHtml(text, link, privacyPolicyUrl = buildPrivacyPolicyUrl()) {
-  const formattedText = (`<p>${text.replace(/"/g, '')}</p>`)
-    .replace(/<p>/g, '<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">');
+  const formattedText = `<p data-id="react-email-text" style="font-size:16px;line-height:24px;margin:16px 0;color:#525f7f;text-align:left">${escapeHtmlText(text).replace(/\r\n?|\n/g, '<br>')}</p>`;
   return EMAIL_HTML[0] + formattedText + EMAIL_HTML[1] + escapeHtmlAttribute(link) + EMAIL_HTML[2]
     + escapeHtmlAttribute(privacyPolicyUrl) + EMAIL_HTML[3];
 }
@@ -336,7 +344,7 @@ async function startSurvey(survey){
     // Create a map from language to email text
     const emailMap = emails.reduce((map, email) => {
       map[email.language.replace(/"/g, "").replace(/'/g, "")] = {
-        text: '<p>' + email.text + '</p>',
+        text: email.text,
         subject: email.subject,
       };
       return map;
@@ -358,7 +366,7 @@ async function startSurvey(survey){
         respondent.email,
         respondent.userId,
         survey.name,
-        invitation.text.replace(/"/g, "").replace(/'/g, ""),
+        invitation.text,
         invitation.subject
       );
     });
@@ -1540,6 +1548,10 @@ async function insertUsers(users, deleteRow = null, survey = null) {
     client.release();
   }
 }
+function normalizeEmailTemplateText(text) {
+  return String(text).replace(/\r\n?/g, '\n');
+}
+
 async function insertEmails(data, survey = null) {
   // Start a PostgreSQL client from the pool
   const client = await pool.connect();
@@ -1565,7 +1577,7 @@ async function insertEmails(data, survey = null) {
         survey?.name || email.surveyName,
         survey?.id || email.surveyId || null,
         email.language,
-        email.text.replace(/"/g, "").replace(/'/g, ""),
+        normalizeEmailTemplateText(email.text),
         typeof email.subject === 'string' ? email.subject.trim() : null,
       ];
       await client.query(query, values);
@@ -2372,19 +2384,18 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     return;
   }
 
-  let csvArray = csvData ? csvData.split('\n') : [];
-  if (csvData) csvArray.shift();
-
-  csvArray = csvArray.map((row) => {
-    const columns = row.split(',');
-    // combine all strings after index 0
-    columns[1] = columns.slice(1).join(',');
-    return {
-      surveyName: surveyName,
-      language: columns[0].replace(/(\r\n|\n|\r)/gm, ""),
-      text: columns[1].replace(/(\r\n|\n|\r)/gm, "")
+  let csvArray = [];
+  if (csvData) {
+    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+    if (parsed.errors.length > 0) {
+      return res.status(400).json({ message: `Invalid CSV: ${parsed.errors[0].message}` });
     }
-  });
+    csvArray = parsed.data.map((row) => ({
+      surveyName,
+      language: String(row.Language ?? row.language ?? row.language_code ?? '').trim(),
+      text: String(row.Text ?? row.text ?? row.notification_text ?? ''),
+    }));
+  }
 
   const emailTemplates = Array.isArray(templates) ? templates : csvArray;
   if (emailTemplates.length === 0 || emailTemplates.some(template => (
@@ -3500,4 +3511,6 @@ module.exports = {
   buildPrivacyPolicyUrl,
   buildSurveyEmailHtml,
   buildSurveyEmailText,
+  normalizeEmailTemplateText,
+  escapeHtmlText,
 };

@@ -45,6 +45,8 @@ const {
   buildPrivacyPolicyUrl,
   buildSurveyEmailHtml,
   buildSurveyEmailText,
+  normalizeEmailTemplateText,
+  escapeHtmlText,
 } = require('../server');
 
 test('survey emails include the approved privacy notice and stable policy link', () => {
@@ -93,6 +95,30 @@ test('survey emails provide the privacy notice and links to text-only clients', 
   assert.match(text, /Your Privacy\n\nThis survey is confidential, but not anonymous\./);
   assert.match(text, /Employee Survey Platform Privacy Policy: https:\/\/example\.com\/privacy-policy\.html/);
   assert.doesNotMatch(text, /<p>|<a\b/i);
+});
+
+test('notification text preserves paragraphs, quotes, and apostrophes through persistence and email rendering', () => {
+  const text = `He said, "don't forget <this> & that."\r\n\r\nSecond paragraph.`;
+  assert.equal(
+    normalizeEmailTemplateText(text),
+    `He said, "don't forget <this> & that."\n\nSecond paragraph.`
+  );
+
+  const html = buildSurveyEmailHtml(
+    text,
+    'https://example.com/survey',
+    'https://example.com/privacy-policy.html'
+  );
+  assert.match(html, /He said, &quot;don&#39;t forget &lt;this&gt; &amp; that\.&quot;<br><br>Second paragraph\./);
+  assert.equal(escapeHtmlText('<script>"x" & \'y\'</script>'), '&lt;script&gt;&quot;x&quot; &amp; &#39;y&#39;&lt;/script&gt;');
+});
+
+test('/api/updateEmails parses quoted multiline CSV templates with Papa Parse', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(source, /Papa\.parse\(csvData, \{ header: true, skipEmptyLines: true \}\)/);
+  assert.doesNotMatch(source, /csvData \? csvData\.split\('\\n'\)/);
+  assert.doesNotMatch(source, /invitation\.text\.replace\(\/"\/g/);
+  assert.doesNotMatch(source, /text: '<p>' \+ email\.text \+ '<\/p>'/);
 });
 
 test('published privacy policy matches the approved title and effective date', () => {

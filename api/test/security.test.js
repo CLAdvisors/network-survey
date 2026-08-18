@@ -42,7 +42,40 @@ const {
   validateRequiredAnswers,
   normalizeQuestionNames,
   formatRespondentChoice,
+  configuredCorsOrigins,
+  buildSurveyUrl,
 } = require('../server');
+
+test('new respondent and demo links use the canonical HTTPS survey domain', () => {
+  assert.equal(
+    buildSurveyUrl('https://survey.cladvisorsurveys.com', { surveyName: 'Leadership & Team', userId: 'secret/token' }, 'prod'),
+    'https://survey.cladvisorsurveys.com/?surveyName=Leadership+%26+Team&userId=secret%2Ftoken'
+  );
+  assert.equal(
+    buildSurveyUrl('https://survey.cladvisorsurveys.com/', { surveyName: 'Survey A', demoToken: 'signed-token' }, 'prod'),
+    'https://survey.cladvisorsurveys.com/?surveyName=Survey+A&demoToken=signed-token'
+  );
+  assert.throws(
+    () => buildSurveyUrl('http://survey.cladvisorsurveys.com', { surveyName: 'Survey A', userId: 'token' }, 'prod'),
+    /HTTPS/
+  );
+  assert.throws(
+    () => buildSurveyUrl('https://user:password@survey.cladvisorsurveys.com', { surveyName: 'Survey A', userId: 'token' }, 'prod'),
+    /without credentials/
+  );
+});
+
+test('CORS allows the canonical and legacy production survey origins', () => {
+  assert.deepEqual(configuredCorsOrigins({
+    FRONTEND_URL: 'https://demo.ona.dashboard.bennetts.work/',
+    SURVEY_URL: 'https://survey.cladvisorsurveys.com/',
+    SURVEY_ALLOWED_ORIGINS: ' https://demo.ona.survey.bennetts.work/,https://survey.cladvisorsurveys.com ',
+  }), [
+    'https://demo.ona.dashboard.bennetts.work',
+    'https://survey.cladvisorsurveys.com',
+    'https://demo.ona.survey.bennetts.work',
+  ]);
+});
 
 test('question schema requiredness is explicit, typed, and validates submitted answers', () => {
   assert.equal(parseRequiredCsvValue(undefined), true, 'an absent Required column remains legacy-required');

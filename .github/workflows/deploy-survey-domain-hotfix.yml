@@ -1,0 +1,205 @@
+name: Deploy Survey Domain Hotfix
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production_hotfix:
+        description: Confirm production-only API hotfix deployment
+        required: true
+        type: choice
+        options: [cancel, deploy]
+        default: cancel
+      approved_sha:
+        description: Exact reviewed hotfix commit SHA to deploy
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: api-release-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-production-hotfix:
+    if: ${{ inputs.confirm_production_hotfix == 'deploy' }}
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Enforce production compatibility boundary
+        env:
+          PRODUCTION_BASE: c1f9fa271915823a8ae32916ab899105ab1364c2
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = "refs/heads/hotfix/survey-frontend-domain" ] || {
+            echo "Refusing deployment from unexpected ref: $GITHUB_REF" >&2
+            exit 1
+          }
+          [ "$APPROVED_SHA" = "$GITHUB_SHA" ] || {
+            echo "approved_sha must exactly match the checked-out immutable revision" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$PRODUCTION_BASE" "$GITHUB_SHA"
+
+          # The deployment intentionally reuses the production database schema,
+          # package graph, and installer inputs. Any change here requires a
+          # normal migration/deployment review and is out of scope for this hotfix.
+          git diff --exit-code "$PRODUCTION_BASE...$GITHUB_SHA" -- \
+            db api/package.json api/package-lock.json \
+            scripts/deploy/remote-deploy.sh \
+            scripts/deploy/bootstrap-admin.js \
+            scripts/deploy/finalize-legacy-accounts.js
+
+          unexpected_api_changes=$(git diff --name-only "$PRODUCTION_BASE...$GITHUB_SHA" -- api \
+            | grep -Ev '^(api/server\.js|api/test/security\.test\.js|api/\.env\.local\.example)$' || true)
+          if [ -n "$unexpected_api_changes" ]; then
+            echo "Refusing deployment with API changes outside the reviewed hotfix allowlist:" >&2
+            printf '%s\n' "$unexpected_api_changes" >&2
+            exit 1
+          fi
+
+      - name: Test production-compatible API
+        run: |
+          npm ci --workspace api
+          npm test --workspace api
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Resolve production API resources
+        id: env
+        run: |
+          set -euo pipefail
+
+          by_tag_exact() {
+            local app="$1"
+            local resource_type="$2"
+            local arns
+            arns=$(aws resourcegroupstaggingapi get-resources \
+              --region us-east-1 \
+              --resource-type-filters "$resource_type" \
+              --tag-filters "Key=Environment,Values=prod" "Key=App,Values=$app" \
+              --query 'ResourceTagMappingList[].ResourceARN' --output text \
+              | tr '\t' '\n' | sed '/^$/d')
+            local count
+            count=$(printf '%s\n' "$arns" | sed '/^$/d' | wc -l | tr -d ' ')
+            if [ "$count" != "1" ]; then
+              echo "Expected exactly one $resource_type with Environment=prod App=$app, found $count" >&2
+              printf '%s\n' "$arns" >&2
+              exit 1
+            fi
+            printf '%s\n' "$arns"
+          }
+
+          instance_ids=$(aws ec2 describe-instances \
+            --filters "Name=tag:Environment,Values=prod" "Name=tag:App,Values=ona-api" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output text \
+            | tr '\t' '\n' | sed '/^$/d')
+          instance_count=$(printf '%s\n' "$instance_ids" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$instance_count" != "1" ]; then
+            echo "Expected exactly one running production API instance, found $instance_count" >&2
+            printf '%s\n' "$instance_ids" >&2
+            exit 1
+          fi
+
+          artifacts_bucket=$(by_tag_exact ona-artifacts s3:bucket | sed 's|.*:::||')
+          echo "ARTIFACTS_BUCKET=$artifacts_bucket" >> "$GITHUB_OUTPUT"
+          echo "INSTANCE_ID=$instance_ids" >> "$GITHUB_OUTPUT"
+
+      - name: Verify edge prerequisites
+        run: |
+          set -euo pipefail
+          curl -fsS "https://demo.ona.api.bennetts.work/health" | grep -q '"database":"ok"'
+          curl -fsS -o /dev/null "https://survey.cladvisorsurveys.com/"
+          curl -fsS -o /dev/null "https://demo.ona.survey.bennetts.work/"
+
+      - name: Package API-only hotfix artifact
+        run: |
+          set -euo pipefail
+          stage_dir=$(mktemp -d)
+          mkdir -p "$stage_dir/deploy" "$stage_dir/db"
+          rsync -a --exclude node_modules api "$stage_dir/"
+          cp -a db/changelogs "$stage_dir/db/"
+          cp scripts/deploy/remote-deploy.sh \
+             scripts/deploy/bootstrap-admin.js \
+             scripts/deploy/finalize-legacy-accounts.js \
+             scripts/deploy/remote-deploy-survey-domain-hotfix.sh \
+             "$stage_dir/deploy/"
+          echo "$GITHUB_SHA" > "$stage_dir/REVISION"
+          tar -czf api-release.tar.gz -C "$stage_dir" .
+
+      - name: Upload immutable hotfix artifact
+        run: |
+          aws s3 cp api-release.tar.gz \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/$GITHUB_SHA.tar.gz"
+
+      - name: Deploy API-only hotfix via SSM
+        run: |
+          set -euo pipefail
+          bucket="${{ steps.env.outputs.ARTIFACTS_BUCKET }}"
+          instance="${{ steps.env.outputs.INSTANCE_ID }}"
+
+          jq -n --arg bucket "$bucket" --arg sha "$GITHUB_SHA" --arg region "$AWS_REGION" '{
+            commands: [
+              "set -eu",
+              "export AWS_DEFAULT_REGION=\($region)",
+              "rm -rf /tmp/ona-domain-hotfix && mkdir -p /tmp/ona-domain-hotfix",
+              "aws s3 cp s3://\($bucket)/api/\($sha).tar.gz /tmp/ona-domain-hotfix/release.tar.gz",
+              "tar -xzf /tmp/ona-domain-hotfix/release.tar.gz -C /tmp/ona-domain-hotfix",
+              "bash /tmp/ona-domain-hotfix/deploy/remote-deploy-survey-domain-hotfix.sh /tmp/ona-domain-hotfix",
+              "rm -rf /tmp/ona-domain-hotfix"
+            ]
+          }' > /tmp/ssm-params.json
+
+          command_id=$(aws ssm send-command \
+            --instance-ids "$instance" \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy survey-domain API hotfix $GITHUB_SHA" \
+            --parameters file:///tmp/ssm-params.json \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command: $command_id"
+
+          while true; do
+            status=$(aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in
+              Success|Failed|Cancelled|TimedOut) break ;;
+              *) sleep 5 ;;
+            esac
+          done
+
+          aws ssm get-command-invocation \
+            --command-id "$command_id" --instance-id "$instance" \
+            --query StandardOutputContent --output text
+          if [ "$status" != "Success" ]; then
+            echo "Hotfix deployment failed with status $status; stderr:" >&2
+            aws ssm get-command-invocation \
+              --command-id "$command_id" --instance-id "$instance" \
+              --query StandardErrorContent --output text >&2
+            exit 1
+          fi
+
+      # The on-instance hotfix installer keeps automatic rollback armed until
+      # local health and external API/edge/CORS checks all pass.
+      - name: Mark externally verified artifact as latest
+        run: |
+          aws s3 cp \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/$GITHUB_SHA.tar.gz" \
+            "s3://${{ steps.env.outputs.ARTIFACTS_BUCKET }}/api/latest.tar.gz"

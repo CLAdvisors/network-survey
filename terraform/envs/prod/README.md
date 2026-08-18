@@ -15,6 +15,45 @@ External DNS remains manual. Keep the ACM validation CNAMEs and app CNAMEs in
 the external DNS provider unless a future change explicitly moves DNS into
 Terraform.
 
+## Customer survey domain hotfix
+
+New production invitations use `https://survey.cladvisorsurveys.com`. Existing links
+continue to use `https://demo.ona.survey.bennetts.work`; both names are aliases
+of the same survey CloudFront distribution. API and dashboard hostnames remain
+unchanged.
+
+CloudFront can attach only one viewer certificate, so
+`aws_acm_certificate.prod_survey_customer` covers both survey names. The
+historical imported `aws_acm_certificate.prod_survey` remains protected and is
+not replaced or destroyed.
+
+External DNS setup is deliberately two-phase:
+
+1. After a reviewed no-destroy plan, create only the additive certificate:
+
+   ```sh
+   terraform -chdir=terraform/envs/prod apply \
+     -target=aws_acm_certificate.prod_survey_customer
+   terraform -chdir=terraform/envs/prod output prod_certificate_validation_records
+   ```
+
+2. Add every `survey_customer` validation CNAME at the external DNS provider.
+   Keep all historical validation and application records unchanged.
+3. Wait for the new ACM certificate to report `ISSUED`.
+4. Run and review a full production plan. It must retain the old CloudFront
+   alias, add `survey.cladvisorsurveys.com`, attach the new dual-name certificate,
+   and render `SURVEY_URL=https://survey.cladvisorsurveys.com` plus the legacy
+   CORS origin.
+5. Apply the reviewed plan, then create a conventional CNAME record for
+   `survey.cladvisorsurveys.com` pointing to `survey_cloudfront_domain`.
+6. Deploy only the production-compatible hotfix artifact based on
+   `c1f9fa271915823a8ae32916ab899105ab1364c2` to load the rendered API config.
+   Do not run a current-main production deployment.
+
+Do not remove either survey alias or DNS record after new-domain links have
+been issued. The complete review, deployment, validation, and rollback process
+is in [`../../../docs/runbooks/survey-domain-hotfix.md`](../../../docs/runbooks/survey-domain-hotfix.md).
+
 ## Current ownership
 
 Tracked here:
@@ -67,6 +106,9 @@ ACM validation CNAMEs that must remain in external DNS:
 | `demo.ona.survey.bennetts.work` | `_e8e6b911771e7b3fb20f2072efd586ea.demo.ona.survey.bennetts.work.` | `_5c80e6e378a0646a091614452d6b7a6b.zfyfvmchrl.acm-validations.aws.` |
 
 ## Plan/apply
+
+The customer-domain certificate bootstrap above is the only reviewed use of a
+targeted apply. All subsequent plans/applies must be full-root operations.
 
 Local commands:
 

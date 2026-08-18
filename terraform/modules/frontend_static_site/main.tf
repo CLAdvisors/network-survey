@@ -4,6 +4,7 @@ locals {
   origin_id         = var.origin_id == null ? "S3-${var.site_name}" : var.origin_id
   oac_name          = var.oac_name == null ? "${var.site_name}-oac" : var.oac_name
   oac_description   = var.oac_description == null ? "OAC for ${var.site_name} S3 bucket" : var.oac_description
+  domain_names      = var.domain_names == null ? [var.domain_name] : var.domain_names
 }
 
 resource "aws_s3_bucket" "this" {
@@ -70,7 +71,7 @@ resource "aws_cloudfront_distribution" "this" {
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
-  aliases             = var.enable_custom_domain ? [var.domain_name] : []
+  aliases             = var.enable_custom_domain ? local.domain_names : []
 
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]

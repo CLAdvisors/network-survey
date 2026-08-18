@@ -262,6 +262,7 @@ resource "aws_s3_object" "api_config" {
     db_password_parameter_name    = local.db_password_parameter_name
     frontend_url                  = local.frontend_url
     survey_url                    = local.survey_url
+    survey_allowed_origins        = ""
     session_secret_parameter_name = local.session_secret_parameter_name
     session_cookie_name           = local.session_cookie_name
     resend_api_key_parameter_name = local.resend_api_key_parameter_name

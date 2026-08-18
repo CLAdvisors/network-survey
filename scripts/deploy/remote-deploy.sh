@@ -132,11 +132,10 @@ ln -sfn "$RELEASE_DIR" "$SERVICE_DIR/current"
 # Drop the legacy cloud-init-era process name if it is still around
 run_pm2 delete my-service >/dev/null 2>&1 || true
 
-if run_pm2 describe "$PM2_APP" >/dev/null 2>&1; then
-  run_pm2 restart "$PM2_APP" --update-env
-else
-  run_pm2 start "$SERVICE_DIR/current/api/server.js" --name "$PM2_APP" --cwd "$SERVICE_DIR/current/api"
-fi
+# PM2 retains the absolute script path from the first release. Restarting by
+# name after moving the current symlink would therefore restart stale code.
+run_pm2 delete "$PM2_APP" >/dev/null 2>&1 || true
+run_pm2 start "$RELEASE_DIR/api/server.js" --name "$PM2_APP" --cwd "$RELEASE_DIR/api"
 run_pm2 save
 
 echo "==> Waiting for health check"

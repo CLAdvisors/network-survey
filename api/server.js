@@ -164,13 +164,26 @@ function buildSurveyEmailText(text, link, privacyPolicyUrl = buildPrivacyPolicyU
     + `Employee Survey Platform Privacy Policy: ${privacyPolicyUrl}\n`;
 }
 
+function buildSurveyUrl(baseUrl, query, nodeEnv = process.env.NODE_ENV) {
+  if (!baseUrl) throw new Error('Missing SURVEY_URL environment variable');
+  const url = new URL(baseUrl);
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('SURVEY_URL must be a base URL without credentials, query parameters, or a fragment');
+  }
+  if (['prod', 'production'].includes(String(nodeEnv).toLowerCase()) && url.protocol !== 'https:') {
+    throw new Error('SURVEY_URL must use HTTPS in production');
+  }
+  for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
+  return url.toString();
+}
+
 async function sendMail(email, id, surveyName, text, subject = 'CLA Network Survey') {
   try {
     if (!resend) {
       throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
     }
 
-    const customLink = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(surveyName)}&userId=${encodeURIComponent(id)}`;
+    const customLink = buildSurveyUrl(process.env.SURVEY_URL, { surveyName, userId: id });
     const emailData = {
       from: 'CLA Survey <survey@cladvisors.com>',
       to: email,
@@ -193,11 +206,7 @@ async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Netwo
   if (!resend) {
     throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
   }
-  if (!process.env.SURVEY_URL) {
-    throw new Error('Missing SURVEY_URL environment variable');
-  }
-
-  const link = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(survey.name)}&demoToken=${encodeURIComponent(demoToken)}`;
+  const link = buildSurveyUrl(process.env.SURVEY_URL, { surveyName: survey.name, demoToken });
   const result = await resend.emails.send({
     from: 'CLA Survey <survey@cladvisors.com>',
     to: email,
@@ -522,16 +531,26 @@ function sanitizeSurveyForDemo(value) {
 
 app.use(express.json());
 
+function configuredCorsOrigins(env = process.env) {
+  const additionalSurveyOrigins = String(env.SURVEY_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return [...new Set([
+    env.FRONTEND_URL,
+    env.SURVEY_URL,
+    ...additionalSurveyOrigins,
+  ].filter(Boolean).map((origin) => origin.replace(/\/$/, '')))];
+}
+
 app.use(cors({
   origin: function(origin, callback) {
-    const allowedOrigins = [
-      process.env.FRONTEND_URL?.replace(/\/$/, ''),
-      process.env.SURVEY_URL?.replace(/\/$/, '')
-    ].filter(Boolean); // Remote undefined values if any
-    
+    const allowedOrigins = configuredCorsOrigins();
+
     // Normalize origin by removing trailing slash if present
     const normalizedOrigin = origin ? origin.replace(/\/$/, '') : origin;
-    
+
     if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
@@ -3513,4 +3532,6 @@ module.exports = {
   buildSurveyEmailText,
   normalizeEmailTemplateText,
   escapeHtmlText,
+  configuredCorsOrigins,
+  buildSurveyUrl,
 };

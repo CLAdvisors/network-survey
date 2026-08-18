@@ -99,8 +99,20 @@ variable "dashboard_domain" {
 }
 
 variable "survey_domain" {
-  description = "Domain name for the production survey app"
-  default     = "demo.ona.survey.bennetts.work"
+  description = "Canonical domain name used for newly generated production survey links"
+  default     = "survey.cladvisorsurveys.com"
+}
+
+variable "legacy_survey_domains" {
+  description = "Existing production survey domains retained for issued-link compatibility"
+  type        = list(string)
+  default     = ["demo.ona.survey.bennetts.work"]
+}
+
+variable "survey_link_domain" {
+  description = "Survey domain used for newly generated links; may be rolled back independently while all CloudFront aliases remain"
+  type        = string
+  default     = "survey.cladvisorsurveys.com"
 }
 
 variable "replacement_resource_environment" {

@@ -165,8 +165,14 @@ variable "frontend_url" {
 }
 
 variable "survey_url" {
-  description = "Survey URL written to API runtime config."
+  description = "Canonical survey URL written to API runtime config and used for newly generated links."
   type        = string
+}
+
+variable "survey_allowed_origins" {
+  description = "Comma-separated additional survey origins allowed by API CORS for legacy links."
+  type        = string
+  default     = ""
 }
 
 variable "session_cookie_name" {

@@ -47,6 +47,8 @@ const {
   buildSurveyEmailText,
   normalizeEmailTemplateText,
   escapeHtmlText,
+  configuredCorsOrigins,
+  buildSurveyUrl,
 } = require('../server');
 
 test('survey emails include the approved privacy notice and stable policy link', () => {
@@ -131,6 +133,47 @@ test('published privacy policy matches the approved title and effective date', (
   assert.match(policy, /<h2>15\. Contact Us<\/h2>/);
   assert.match(policy, /mailto:info@contemporaryleadership\.com/);
   assert.doesNotMatch(policy, /\[August 1, 2026\]|Lorem ipsum/i);
+});
+
+test('new respondent and demo links use the canonical HTTPS survey domain', () => {
+  assert.equal(
+    buildSurveyUrl('https://survey.cladvisorsurveys.com', { surveyName: 'Leadership & Team', userId: 'secret/token' }, 'prod'),
+    'https://survey.cladvisorsurveys.com/?surveyName=Leadership+%26+Team&userId=secret%2Ftoken'
+  );
+  assert.equal(
+    buildSurveyUrl('https://survey.cladvisorsurveys.com/', { surveyName: 'Survey A', demoToken: 'signed-token' }, 'prod'),
+    'https://survey.cladvisorsurveys.com/?surveyName=Survey+A&demoToken=signed-token'
+  );
+  assert.throws(
+    () => buildSurveyUrl('http://survey.cladvisorsurveys.com', { surveyName: 'Survey A', userId: 'token' }, 'prod'),
+    /HTTPS/
+  );
+  assert.throws(
+    () => buildSurveyUrl('https://user:password@survey.cladvisorsurveys.com', { surveyName: 'Survey A', userId: 'token' }, 'prod'),
+    /without credentials/
+  );
+});
+
+test('CORS allows the canonical and legacy production survey origins', () => {
+  assert.deepEqual(configuredCorsOrigins({
+    FRONTEND_URL: 'https://demo.ona.dashboard.bennetts.work/',
+    SURVEY_URL: 'https://survey.cladvisorsurveys.com/',
+    SURVEY_ALLOWED_ORIGINS: ' https://demo.ona.survey.bennetts.work/,https://survey.cladvisorsurveys.com ',
+  }), [
+    'https://demo.ona.dashboard.bennetts.work',
+    'https://survey.cladvisorsurveys.com',
+    'https://demo.ona.survey.bennetts.work',
+  ]);
+});
+
+test('standard API deployment starts the exact newly installed release', () => {
+  const deployScript = fs.readFileSync(
+    path.join(__dirname, '../../scripts/deploy/remote-deploy.sh'),
+    'utf8'
+  );
+  assert.match(deployScript, /run_pm2 delete "\$PM2_APP"/);
+  assert.match(deployScript, /run_pm2 start "\$RELEASE_DIR\/api\/server\.js"/);
+  assert.doesNotMatch(deployScript, /run_pm2 restart "\$PM2_APP"/);
 });
 
 test('question schema requiredness is explicit, typed, and validates submitted answers', () => {

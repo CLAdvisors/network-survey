@@ -20,11 +20,13 @@ output "db_security_group_id" {
 
 output "prod_certificate_arns" {
   value = {
-    api       = aws_acm_certificate.prod_api.arn
-    dashboard = aws_acm_certificate.prod_dashboard.arn
-    survey    = aws_acm_certificate.prod_survey.arn
+    api             = aws_acm_certificate.prod_api.arn
+    dashboard       = aws_acm_certificate.prod_dashboard.arn
+    survey          = aws_acm_certificate.prod_survey.arn
+    survey_legacy   = aws_acm_certificate.prod_survey.arn
+    survey_customer = aws_acm_certificate.prod_survey_customer.arn
   }
-  description = "Imported ACM certificates for demo.ona.* domains. These are preserved because DNS validation lives outside AWS."
+  description = "Preserved imported certificates plus the additive customer survey certificate; DNS validation remains external."
 }
 
 output "prod_certificate_validation_records" {
@@ -48,6 +50,21 @@ output "prod_certificate_validation_records" {
         name  = dvo.resource_record_name
         type  = dvo.resource_record_type
         value = dvo.resource_record_value
+      }
+    ]
+    survey_legacy = [
+      for dvo in aws_acm_certificate.prod_survey.domain_validation_options : {
+        name  = dvo.resource_record_name
+        type  = dvo.resource_record_type
+        value = dvo.resource_record_value
+      }
+    ]
+    survey_customer = [
+      for dvo in aws_acm_certificate.prod_survey_customer.domain_validation_options : {
+        domain = dvo.domain_name
+        name   = dvo.resource_record_name
+        type   = dvo.resource_record_type
+        value  = dvo.resource_record_value
       }
     ]
   }
@@ -117,5 +134,14 @@ output "dashboard_cloudfront_domain" {
 
 output "survey_cloudfront_domain" {
   value       = module.survey_frontend.cloudfront_domain_name
-  description = "External DNS target: point demo.ona.survey.bennetts.work CNAME here after frontend aliases are attached."
+  description = "External DNS CNAME target for survey.cladvisorsurveys.com. Keep the existing legacy CNAME unchanged."
+}
+
+output "survey_domains" {
+  value = {
+    primary_alias   = var.survey_domain
+    generated_links = var.survey_link_domain
+    legacy_aliases  = var.legacy_survey_domains
+  }
+  description = "Survey CloudFront aliases and independently configurable domain used for newly generated links."
 }

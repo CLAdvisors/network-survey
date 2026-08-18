@@ -85,10 +85,6 @@ resource "aws_route_table_association" "prod_app_public" {
 module "api_backend" {
   source = "../../modules/api_backend"
 
-  # Do not publish the new canonical URL until external DNS has validated the
-  # replacement survey certificate.
-  depends_on = [aws_acm_certificate_validation.prod_survey_customer]
-
   aws_region               = var.aws_region
   environment              = var.environment
   name_prefix              = local.app_name_prefix

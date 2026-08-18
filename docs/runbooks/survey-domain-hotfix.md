@@ -14,9 +14,17 @@ smoke-test URLs.
 
 ## Release artifacts
 
-The manual `Deploy Survey Domain Hotfix` workflow packages only the API at this
-production-compatible revision and uses
-`scripts/deploy/remote-deploy-survey-domain-hotfix.sh`. The installer:
+This hotfix branch is a standalone production release branch. **Do not merge it
+into `main`**, which is the staging/current-development line, and do not use the
+normal `Deploy` workflow.
+
+From the exact reviewed commit,
+`scripts/deploy/package-survey-domain-hotfix.sh <approved-sha>` creates a local,
+checksummed artifact without contacting AWS. It refuses a dirty worktree, the
+wrong branch/SHA, database/package changes, or API changes outside the reviewed
+allowlist. The artifact includes the normal bootstrap-compatible layout but the
+approved production procedure invokes only
+`scripts/deploy/remote-deploy-survey-domain-hotfix.sh`. That installer:
 
 - fetches the reviewed runtime configuration and secrets through the existing
   production paths;
@@ -24,12 +32,12 @@ production-compatible revision and uses
   runbook;
 - does not invoke Liquibase or bootstrap an account;
 - does not publish either frontend;
-- restores the previous on-instance release if local API activation fails.
+- restores the previous on-instance release unless local and external API,
+  edge, TLS, and CORS checks all pass.
 
-The workflow is manual, uses the protected `production` GitHub environment, is
-serialized with other production API releases, and requires the explicit
-`deploy` confirmation input. Do not use the normal `Deploy` workflow for this
-hotfix.
+Artifact upload, SSM execution, and `latest.tar.gz` promotion are separate
+production mutations and require explicit review and approval. They are not
+performed merely by pushing or reviewing this branch.
 
 ## Phase 1: additive certificate bootstrap
 
@@ -94,18 +102,36 @@ curl -fsS -o /dev/null https://demo.ona.survey.bennetts.work/
 
 ## Phase 4: API-only deployment
 
-From the reviewed hotfix revision, manually run `Deploy Survey Domain Hotfix`
-against the protected production environment, select `deploy`, and enter the
-exact reviewed 40-character commit as `approved_sha`. The workflow refuses any
-other branch or revision.
+1. Check out the exact reviewed commit on `hotfix/survey-frontend-domain` and run:
 
-The workflow must pass all of these before it marks the artifact latest:
+   ```sh
+   scripts/deploy/package-survey-domain-hotfix.sh <approved-40-character-sha>
+   ```
 
-- production compatibility and unchanged schema/package guards;
+2. Review the artifact contents and recorded SHA-256 checksum.
+3. Under the existing production release lock and protected AWS operator role,
+   resolve exactly one `Environment=prod,App=ona-artifacts` bucket and one
+   running `Environment=prod,App=ona-api` instance.
+4. Upload the immutable artifact as `api/<approved-sha>.tar.gz`.
+5. Use SSM `AWS-RunShellScript` to download/extract that exact object and invoke:
+
+   ```sh
+   bash deploy/remote-deploy-survey-domain-hotfix.sh <extracted-artifact-dir>
+   ```
+
+6. Treat a nonzero SSM result as a failed deployment; inspect diagnostics only
+   on-instance. The installer restores the prior release unless all local and
+   external checks pass.
+7. Only after success, copy the immutable object to `api/latest.tar.gz` so a
+   replacement instance receives the externally verified hotfix.
+
+The guarded packaging and installer cover:
+
+- production compatibility and unchanged schema/package inputs;
 - API test suite;
-- pre-deploy API health and both survey origins;
+- pre-activation canonical/legacy runtime configuration;
 - on-instance local API health;
-- external API health;
+- external API health and both survey origins;
 - exact CORS headers for both survey origins.
 
 ## Phase 5: controlled acceptance

@@ -407,6 +407,20 @@ function legacySurveyPredicate(alias = '') {
   return `(${prefix}survey_id = $1 OR (${prefix}survey_id IS NULL AND ${prefix}survey_name = $2))`;
 }
 
+function displayedRespondentCountExpression(alias = 'r') {
+  return `COUNT(${alias}.respondent_id) FILTER (WHERE ${alias}.name IS DISTINCT FROM 'None' OR ${alias}.contact_info IS DISTINCT FROM 'N/A' OR ${alias}.can_respond IS DISTINCT FROM FALSE)`;
+}
+
+function isLegacyPlaceholderRespondent(row = {}) {
+  const contactInfo = row.contact_info ?? row.email;
+  const canRespond = row.can_respond ?? row.canRespond;
+  return row.name === 'None' && contactInfo === 'N/A' && canRespond === false;
+}
+
+function surveySummaryRespondentCount(value) {
+  return String(Number(value || 0));
+}
+
 async function columnExists(tableName, columnName) {
   const cacheKey = `column:${tableName}.${columnName}`;
   if (schemaCapabilityCache.has(cacheKey)) {
@@ -3040,7 +3054,7 @@ app.get('/api/targets', requireAuth, async(req, res) => {
                WHERE ${legacySurveyPredicate('r')}`;
   client.query(query, [survey.id, survey.name])
     .then(response => {
-        const respondents = response.rows.map((row, index) => ({
+        const respondents = response.rows.filter((row) => !isLegacyPlaceholderRespondent(row)).map((row) => ({
             id: row.respondent_id,
             name: row.name,
             email: row.contact_info,
@@ -3073,7 +3087,7 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
     return res.status(500).json({ message: 'Failed to retrieve surveys.' });
   }
 
-  const query = isPlatformAdmin(req.user) ? `
+  const query = (isPlatformAdmin(req.user) ? `
   SELECT s.id, s.name, s.organization_id, o.name AS organization_name,
          'owner'::text AS role,
          s.creation_date, s.lifecycle_status, s.started_at, s.closed_at,
@@ -3142,7 +3156,7 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
   WHERE s.archived_at IS NULL
   GROUP BY s.id, s.name, s.organization_id, o.name, om.role, starter.display_name, starter.username, s.creation_date, s.questions, s.lifecycle_status, s.started_at, s.closed_at
   ORDER BY s.creation_date DESC NULLS LAST
-  `;
+  `).replace('COUNT(r.respondent_id) AS number_of_respondents', `${displayedRespondentCountExpression('r')} AS number_of_respondents`);
 
   client.query(query, isPlatformAdmin(req.user) ? [] : [req.user.id])
     .then(result => {
@@ -3152,7 +3166,7 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
         organizationId: row.organization_id,
         organizationName: row.organization_name,
         role: row.role,
-        respondents: Math.max(0, Number(row.number_of_respondents || 0) - 1) + "",
+        respondents: surveySummaryRespondentCount(row.number_of_respondents),
         questions: row.number_of_questions + "",
         date: row.creation_date,
         lifecycleStatus: row.lifecycle_status,
@@ -3386,4 +3400,7 @@ module.exports = {
   insertEmails,
   configuredCorsOrigins,
   buildSurveyUrl,
+  displayedRespondentCountExpression,
+  isLegacyPlaceholderRespondent,
+  surveySummaryRespondentCount,
 };

@@ -45,7 +45,34 @@ const {
   isTrustedStateChangingOrigin,
   configuredCorsOrigins,
   buildSurveyUrl,
+  displayedRespondentCountExpression,
+  isLegacyPlaceholderRespondent,
+  surveySummaryRespondentCount,
 } = require('../server');
+
+test('survey respondent summaries count displayed roster rows and only exclude the exact legacy placeholder', () => {
+  const displayedRows = (rows) => rows.filter((row) => !isLegacyPlaceholderRespondent(row));
+  assert.equal(surveySummaryRespondentCount(displayedRows([]).length), '0', 'zero respondents');
+  assert.equal(displayedRows([{ name:'None',contact_info:'N/A',can_respond:false }]).length, 0, 'exact placeholder');
+  assert.equal(displayedRows([
+    { name:'Imported Person',contact_info:'person@example.test',can_respond:true },
+    { name:'Imported Observer',contact_info:'observer@example.test',can_respond:false },
+  ]).length, 2, 'imported survey without a placeholder');
+  assert.equal(displayedRows([
+    { name:'None',contact_info:'real@example.test',can_respond:false },
+    { name:'Genuine Person',contact_info:'genuine@example.test',can_respond:true },
+  ]).length, 2, 'genuine rows, including a person named None');
+
+  const expression = displayedRespondentCountExpression('r');
+  assert.match(expression, /COUNT\(r\.respondent_id\) FILTER/);
+  assert.match(expression, /name IS DISTINCT FROM 'None'/);
+  assert.match(expression, /contact_info IS DISTINCT FROM 'N\/A'/);
+  assert.match(expression, /can_respond IS DISTINCT FROM FALSE/);
+  assert.equal(surveySummaryRespondentCount(2), '2');
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /const query = \(isPlatformAdmin\(req\.user\) \? `[\s\S]+` : `[\s\S]+`\)\.replace\('COUNT\(r\.respondent_id\) AS number_of_respondents', `\$\{displayedRespondentCountExpression\('r'\)\}/);
+  assert.doesNotMatch(serverSource, /number_of_respondents \|\| 0\) - 1/);
+});
 
 test('new survey links use the canonical HTTPS origin while CORS retains legacy origins', () => {
   assert.equal(

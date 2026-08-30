@@ -9,8 +9,14 @@ variable "bucket_name" {
 }
 
 variable "domain_name" {
-  description = "Custom domain name for the CloudFront distribution."
+  description = "Primary custom domain name for the CloudFront distribution."
   type        = string
+}
+
+variable "domain_names" {
+  description = "Optional complete list of custom domain aliases. Defaults to domain_name."
+  type        = list(string)
+  default     = null
 }
 
 variable "acm_certificate_arn" {

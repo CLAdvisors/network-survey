@@ -128,5 +128,21 @@ output "dashboard_cloudfront_domain" {
 
 output "survey_cloudfront_domain" {
   value       = module.survey_frontend.cloudfront_domain_name
-  description = "External DNS target: point demo.ona.survey.bennetts.work CNAME here after frontend aliases are attached."
+  description = "External DNS target shared by the canonical and retained legacy survey aliases."
+}
+
+output "survey_aliases" {
+  value       = local.survey_domains
+  description = "Complete canonical and legacy alias set retained on the survey CloudFront distribution."
+}
+
+output "survey_certificate_validation_records" {
+  value = {
+    for option in aws_acm_certificate.prod_survey_canonical.domain_validation_options : option.domain_name => {
+      name  = option.resource_record_name
+      type  = option.resource_record_type
+      value = option.resource_record_value
+    }
+  }
+  description = "External DNS records required to validate the additive canonical survey certificate."
 }

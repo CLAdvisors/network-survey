@@ -117,6 +117,7 @@ resource "aws_s3_object" "api_config" {
     db_password_parameter_name                    = var.db_password_parameter_name
     frontend_url                                  = var.frontend_url
     survey_url                                    = var.survey_url
+    survey_allowed_origins                        = var.survey_allowed_origins
     session_secret_parameter_name                 = var.session_secret_parameter_name
     session_cookie_name                           = var.session_cookie_name
     email_worker_environment                      = var.email_worker_environment

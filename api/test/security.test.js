@@ -43,7 +43,27 @@ const {
   normalizeQuestionNames,
   formatRespondentChoice,
   isTrustedStateChangingOrigin,
+  configuredCorsOrigins,
+  buildSurveyUrl,
 } = require('../server');
+
+test('new survey links use the canonical HTTPS origin while CORS retains legacy origins', () => {
+  assert.equal(
+    buildSurveyUrl('https://survey.cladvisorsurveys.com', { surveyName: 'Leadership & Team', userId: 'secret/token' }, 'prod'),
+    'https://survey.cladvisorsurveys.com/?surveyName=Leadership+%26+Team&userId=secret%2Ftoken'
+  );
+  assert.throws(() => buildSurveyUrl('http://survey.cladvisorsurveys.com', { userId: 'token' }, 'prod'), /HTTPS/);
+  assert.throws(() => buildSurveyUrl('https://user:password@survey.example.test', { userId: 'token' }), /without credentials/);
+  assert.deepEqual(configuredCorsOrigins({
+    FRONTEND_URL: 'https://dashboard.example.test/',
+    SURVEY_URL: 'https://survey.cladvisorsurveys.com/',
+    SURVEY_ALLOWED_ORIGINS: ' https://demo.ona.survey.bennetts.work/, https://survey.cladvisorsurveys.com ',
+  }), [
+    'https://dashboard.example.test',
+    'https://survey.cladvisorsurveys.com',
+    'https://demo.ona.survey.bennetts.work',
+  ]);
+});
 
 test('question schema requiredness is explicit, typed, and validates submitted answers', () => {
   assert.equal(parseRequiredCsvValue(undefined), true, 'an absent Required column remains legacy-required');

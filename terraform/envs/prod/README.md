@@ -26,7 +26,10 @@ Tracked here:
 - Replacement production RDS: `network-survey-prod-postgres-v2`, with Terraform
   `prevent_destroy` and AWS deletion protection enabled.
 - Imported `demo.ona.*` ACM certificates. They rely on manual external DNS
-  validation records.
+  validation records and remain protected in state.
+- An additive survey certificate for the canonical survey hostname plus every
+  retained legacy alias. Its validation and application CNAMEs remain externally
+  managed.
 
 Retired legacy prod app resources are no longer tracked in this root.
 
@@ -65,6 +68,32 @@ ACM validation CNAMEs that must remain in external DNS:
 | `demo.ona.api.bennetts.work` | `_11e3f568b17ede36909ed6044eea7ea7.demo.ona.api.bennetts.work.` | `_802d02771e55f77ecd7eee320378cc28.zfyfvmchrl.acm-validations.aws.` |
 | `demo.ona.dashboard.bennetts.work` | `_066e2be3dc4df9deefa1d51b7103c5b0.demo.ona.dashboard.bennetts.work.` | `_7227ea2510f9e80ad666d941dbc206dc.zfyfvmchrl.acm-validations.aws.` |
 | `demo.ona.survey.bennetts.work` | `_e8e6b911771e7b3fb20f2072efd586ea.demo.ona.survey.bennetts.work.` | `_5c80e6e378a0646a091614452d6b7a6b.zfyfvmchrl.acm-validations.aws.` |
+
+## Canonical survey domain rollout
+
+New respondent and demo links use `survey_link_domain`. The existing
+`survey_domain` and any `additional_survey_domains` remain aliases on the same
+CloudFront distribution and allowed API origins, so previously issued tokenized
+links continue to work.
+
+Roll this out without replacing the distribution or historical certificate:
+
+1. Create only `aws_acm_certificate.prod_survey_canonical` and publish the
+   `survey_certificate_validation_records` output through the approved external
+   DNS process.
+2. Wait for ACM to report `ISSUED`.
+3. Review a saved full plan. It must retain the existing survey distribution,
+   bucket, OAC, legacy alias, and `aws_acm_certificate.prod_survey`; it must not
+   replace or destroy API, dashboard, worker, database, network, or certificate
+   resources.
+4. Apply the reviewed in-place alias/certificate/runtime-config update.
+5. Verify both canonical and legacy URLs serve the same frontend and that API
+   CORS accepts both origins. Keep every legacy alias and validation CNAME until
+   an explicit issued-link retirement is approved.
+
+Do not use the historical emergency hotfix packaging or remote-deploy scripts;
+current deployment tooling must continue to release and fence the API, delivery
+worker, and webhook worker together.
 
 ## Plan/apply
 

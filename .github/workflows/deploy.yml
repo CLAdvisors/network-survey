@@ -55,7 +55,7 @@ jobs:
               DEFAULT_TF_ENV=prod
               DEFAULT_API_HOST=demo.ona.api.bennetts.work
               DEFAULT_DASHBOARD_HOST=demo.ona.dashboard.bennetts.work
-              DEFAULT_SURVEY_HOST=demo.ona.survey.bennetts.work
+              DEFAULT_SURVEY_HOST=survey.cladvisorsurveys.com
               ;;
             staging)
               DEFAULT_TF_ENV=staging

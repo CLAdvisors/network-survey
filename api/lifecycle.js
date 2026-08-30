@@ -100,9 +100,10 @@ function evaluateReadiness(survey, data, config = process.env) {
     templateCounts.set(language, (templateCounts.get(language) || 0) + 1);
     if (templateCounts.get(language) > 1) blockers.push({ code: 'template_duplicate', language, message: `More than one ${language} template is configured.` });
     const text = normalizeTemplateText(template.text);
-    const subject = String(template.invitation_subject || '').trim();
+    const subject = typeof template.invitation_subject === 'string' ? template.invitation_subject.trim() : '';
     if (text) templateMap.set(language, text);
-    if (subject) templateSubjectMap.set(language, subject);
+    if (subject.length > 255) blockers.push({ code: 'template_subject_invalid', language, message: `The ${language} invitation subject must contain 255 characters or fewer.` });
+    else if (subject) templateSubjectMap.set(language, subject);
   }
   for (const language of languages) {
     if (!templateMap.has(language)) blockers.push({ code: 'template_missing', language, message: `A nonempty ${language} template is required.` });

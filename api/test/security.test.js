@@ -2151,7 +2151,7 @@ test('role policy matrix matches org-scoped authorization decisions', () => {
   assert.equal(hasAnyRole('owner', ADMIN_ROLES), true);
 });
 
-test('survey copy transaction preserves configuration and roster while resetting respondent state', async (t) => {
+test('survey copy preserves questions and email templates without copying participants or linked state', async (t) => {
   const originalConnect = pool.connect;
   t.after(() => { pool.connect = originalConnect; });
 
@@ -2185,6 +2185,7 @@ test('survey copy transaction preserves configuration and roster while resetting
   assert.equal(copied.name, 'CopiedSurvey');
   assert.equal(copied.title, 'Configured title');
   assert.equal(copied.organizationId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(copied.respondentsCopied, false);
   assert.equal(copied.respondentStateReset, true);
   assert.equal(calls[0].sql, 'BEGIN ISOLATION LEVEL REPEATABLE READ');
   assert.match(calls[1].sql, /JOIN organization_memberships/);
@@ -2202,11 +2203,14 @@ test('survey copy transaction preserves configuration and roster while resetting
   const emailCopy = calls.find(({ sql }) => /INSERT INTO EMAIL/.test(sql));
   assert.match(emailCopy.sql, /lang, text, invitation_subject/);
   assert.match(emailCopy.sql, /SELECT \$1, \$2, lang, text, invitation_subject/);
-  const rosterCopy = calls.find(({ sql }) => /INSERT INTO Respondent/.test(sql));
-  assert.match(rosterCopy.sql, /gen_random_uuid\(\)::text/);
-  assert.match(rosterCopy.sql, /lang, NULL, FALSE/);
-  assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*\bresponse\b[\s\S]*FROM Respondent/);
-  assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*r?\.uuid[\s\S]*FROM Respondent/);
+  const placeholderInsert = calls.find(({ sql }) => /INSERT INTO Respondent/.test(sql));
+  assert.match(placeholderInsert.sql, /VALUES \('None', 'N\/A', \$1, \$2, FALSE, gen_random_uuid\(\)::text, 'English', NULL, FALSE\)/);
+  assert.deepEqual(placeholderInsert.values, ['CopiedSurvey', '22222222-2222-4222-8222-222222222222']);
+  assert.equal(calls.some(({ sql }) => /SELECT[\s\S]+FROM Respondent/i.test(sql)), false);
+  assert.equal(calls.some(({ sql }) => /survey_email_deliveries|survey_email_attempts|survey_launches/i.test(sql)), false);
+  assert.doesNotMatch(JSON.stringify(calls), /participant@example\.test|source-participant-token|Private Participant/);
+  assert.equal(calls.some(({ sql }) => /\b(?:UPDATE|DELETE)\b[\s\S]+(?:Survey|EMAIL|Respondent)/i.test(sql)), false, 'source rows remain unchanged');
+  assert.equal([{ name:'None',email:'N/A',canRespond:false }].filter((row) => !isLegacyPlaceholderRespondent(row)).length, 0, 'copied roster displays zero participants');
   assert.ok(calls.some(({ sql, values }) => /survey\.copied/.test(sql) && values[0] === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'));
 });
 
@@ -2267,7 +2271,7 @@ test('survey copy rejects collisions and cross-org/non-editor access without wri
   assert.equal(calls.some(sql => /INSERT INTO/.test(sql)), false);
 });
 
-test('survey copy rolls back every write when roster copying fails', async (t) => {
+test('survey copy rolls back survey and template writes when placeholder creation fails', async (t) => {
   const originalConnect = pool.connect;
   t.after(() => { pool.connect = originalConnect; });
 
@@ -2282,7 +2286,7 @@ test('survey copy rolls back every write when roster copying fails', async (t) =
       if (/INSERT INTO Survey/.test(sql)) {
         return { rows: [{ id: 'copy-id', name: 'Copy', title: null, organization_id: 'org-a' }] };
       }
-      if (/INSERT INTO Respondent/.test(sql)) throw new Error('roster copy failed');
+      if (/INSERT INTO Respondent/.test(sql)) throw new Error('placeholder creation failed');
       return { rows: [] };
     },
     release() {},
@@ -2290,7 +2294,7 @@ test('survey copy rolls back every write when roster copying fails', async (t) =
 
   await assert.rejects(
     copySurveyForUser({ actor: { id: 9 }, sourceSurveyId: 'source-id', name: 'Copy' }),
-    /roster copy failed/
+    /placeholder creation failed/
   );
   assert.ok(calls.some(sql => /INSERT INTO Survey/.test(sql)));
   assert.equal(calls.includes('COMMIT'), false);

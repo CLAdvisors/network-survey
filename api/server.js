@@ -1212,13 +1212,13 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
        WHERE survey_id = $3 OR (survey_id IS NULL AND survey_name = $4)`,
       [copied.name, copied.id, source.id, source.name]
     );
+    // Keep the exact internal placeholder expected by legacy status flows, but
+    // never copy source roster rows or participant-linked state into the new survey.
     await client.query(
       `INSERT INTO Respondent
          (name, contact_info, survey_name, survey_id, can_respond, uuid, lang, response, email_sent)
-       SELECT name, contact_info, $1, $2, can_respond, gen_random_uuid()::text, lang, NULL, FALSE
-       FROM Respondent
-       WHERE survey_id = $3 OR (survey_id IS NULL AND survey_name = $4)`,
-      [copied.name, copied.id, source.id, source.name]
+       VALUES ('None', 'N/A', $1, $2, FALSE, gen_random_uuid()::text, 'English', NULL, FALSE)`,
+      [copied.name, copied.id]
     );
     await client.query(
       `INSERT INTO audit_events
@@ -1233,6 +1233,7 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
       title: copied.title,
       organizationId: copied.organization_id,
       sourceSurveyId: source.id,
+      respondentsCopied: false,
       respondentStateReset: true,
     };
   } catch (error) {

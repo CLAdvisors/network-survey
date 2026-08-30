@@ -61,7 +61,9 @@ test('an editor copies a survey with a clear destination name and sees success',
 
   await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
   await userEvent.click(await screen.findByText('Copy Survey'));
-  expect(screen.getByText(/complete configuration and respondent roster from “Leadership Survey”/)).toBeInTheDocument();
+  expect(screen.getByText(/Copy the survey title, question schema, and invitation email subject\/body templates from “Leadership Survey”/)).toBeInTheDocument();
+  expect(screen.getByText(/No participants, contact details, response state, invitation links, or delivery history will be copied/)).toBeInTheDocument();
+  expect(screen.getByText(/empty participant roster/i)).toBeInTheDocument();
 
   const nameInput = screen.getByLabelText(/Copied survey name/);
   expect(nameInput).toHaveValue('LeadershipSurveyCopy');

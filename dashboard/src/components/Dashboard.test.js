@@ -22,6 +22,7 @@ vi.mock('./SurveyTable', () => ({
       <button onClick={() => selectRow(survey)}>Select {survey.name}</button>
       <button onClick={() => onSurveyCopied?.({ id: 'survey-copy', name: 'AlphaCopy' })}>Copy {survey.name}</button>
       <span data-testid={`dirty-${survey.id}`}>{Object.keys(dirtyBySurvey?.[survey.id] || {}).sort().join(',')}</span>
+      <span data-testid={`respondent-count-${survey.id}`}>{survey.respondents}</span>
     </React.Fragment>
   ))}</div>,
 }));
@@ -97,7 +98,7 @@ test('keeps owning editor instances and scoped drafts while visiting a survey wi
 });
 
 test('selects a successful copy by returned stable ID and loads its related data', async () => {
-  const copied = { id: 'survey-copy', name: 'AlphaCopy', role: 'editor', lifecycleStatus: 'draft' };
+  const copied = { id: 'survey-copy', name: 'AlphaCopy', role: 'editor', lifecycleStatus: 'draft', respondents: '0' };
   api.get.mockImplementation((url) => {
     if (url === '/surveys') return Promise.resolve({ data: { surveys: [...surveys, copied] } });
     if (url.startsWith('/listQuestions')) return Promise.resolve({ data: { questions: [] } });
@@ -110,6 +111,7 @@ test('selects a successful copy by returned stable ID and loads its related data
   await waitFor(() => expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-survey', 'survey-copy'));
   expect(api.get).toHaveBeenCalledWith('/listQuestions?surveyName=survey-copy', expect.any(Object));
   expect(api.get).toHaveBeenCalledWith('/targets?surveyName=survey-copy', expect.any(Object));
+  expect(screen.getByTestId('respondent-count-survey-copy')).toHaveTextContent('0');
 });
 
 test('repeated survey and lifecycle switches never accumulate or alias email editors', async () => {

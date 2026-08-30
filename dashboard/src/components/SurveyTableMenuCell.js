@@ -189,7 +189,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         <Box component="form" noValidate onSubmit={(event) => { event.preventDefault(); handleCopyConfirm(); }}>
           <DialogContent>
             <DialogContentText sx={{ mb: 2 }}>
-              Copy the complete configuration and respondent roster from “{row.name}”. Responses, invitation delivery history, completion state, and access links will be reset.
+              Copy the survey title, question schema, and invitation email subject/body templates from “{row.name}”. No participants, contact details, response state, invitation links, or delivery history will be copied.
             </DialogContentText>
             <TextField
               autoFocus
@@ -203,7 +203,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
                 setCopyError(nextName && !/^[A-Za-z0-9]*$/.test(nextName) ? 'Only letters and numbers are allowed.' : '');
               }}
               error={Boolean(copyError)}
-              helperText={copyError || 'The survey title and invitation templates will be preserved.'}
+              helperText={copyError || 'The copied survey will start with an empty participant roster.'}
               inputProps={{ maxLength: 255, pattern: '[A-Za-z0-9]*' }}
             />
           </DialogContent>

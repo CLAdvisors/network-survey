@@ -35,7 +35,7 @@ const buildDefaultCopiedName = (name) => {
   return candidate === sourceName ? `${sourceName.slice(0, 250)}Copy2` : candidate;
 };
 
-const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onViewLifecycle }) => {
+const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onViewLifecycle, unsavedChanges = {} }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [startOpen, setStartOpen] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
@@ -175,7 +175,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         {canArchiveSurvey(row) && <MenuItem onClick={openAction(setDeleteConfirmOpen)} sx={{ color: 'error.main' }}><DeleteIcon fontSize="small" sx={{ mr: 1 }} />Archive Survey</MenuItem>}
       </Menu>
 
-      <StartSurveyDialog open={startOpen} survey={row} onClose={() => setStartOpen(false)} onAccepted={handleLaunchAccepted} />
+      <StartSurveyDialog open={startOpen} survey={row} onClose={() => setStartOpen(false)} onAccepted={handleLaunchAccepted} unsavedChanges={unsavedChanges} />
 
       <Dialog open={copyDialogOpen} onClose={handleCopyClose} onClick={stop} fullWidth maxWidth="sm">
         <DialogTitle>Copy survey</DialogTitle>

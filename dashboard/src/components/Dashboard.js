@@ -22,7 +22,9 @@ const Dashboard = () => {
   const [respondentData, setRespondentData] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
+  const [dirtyBySurvey, setDirtyBySurvey] = React.useState({});
   const surveyRequest = React.useRef(0);
+  const pendingSelectionId = React.useRef(null);
   const relatedRequest = React.useRef(0);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
 
@@ -34,6 +36,14 @@ const Dashboard = () => {
       const surveys = response.data.surveys || [];
       setSurveyData(surveys);
       setSelectSurvey((current) => {
+        const preferredId = pendingSelectionId.current;
+        if (preferredId) {
+          const preferred = surveys.find((survey) => surveyId(survey) === preferredId);
+          if (preferred) {
+            pendingSelectionId.current = null;
+            return preferred;
+          }
+        }
         if (!current) return null;
         return surveys.find((survey) => surveyId(survey) === surveyId(current)) || null;
       });
@@ -75,8 +85,7 @@ const Dashboard = () => {
       }
       try {
         const respondentResponse = await api.get(`/targets?surveyName=${selectedId}`, { signal: controller.signal });
-        const filteredRespondents = respondentResponse.data.filter((respondent) => respondent.name !== "None");
-        if (request === relatedRequest.current) setRespondentData(filteredRespondents);
+        if (request === relatedRequest.current) setRespondentData(respondentResponse.data);
       } catch (err) {
         if (!controller.signal.aborted && request === relatedRequest.current) setRespondentData(null);
       }
@@ -110,8 +119,20 @@ const Dashboard = () => {
     }
   };
 
-  const handleSurveyCopied = async () => {
-    await fetchSurveyData();
+  const handleSurveyCopied = async (copiedSurvey) => {
+    const copiedId = surveyId(copiedSurvey);
+    if (!copiedId) {
+      setSnackbar({ severity: 'error', message: 'The copied survey was created, but its stable ID was not returned.' });
+      return;
+    }
+    pendingSelectionId.current = copiedId;
+    relatedRequest.current += 1;
+    setQuestionData(null);
+    setRespondentData(null);
+    const surveys = await fetchSurveyData();
+    if (!surveys.some((survey) => surveyId(survey) === copiedId)) {
+      setSnackbar({ severity: 'info', message: 'The copied survey was created and will be selected when refresh completes.' });
+    }
   };
 
   const handleSurveyDeleted = async (deletedSurveyName) => {
@@ -132,6 +153,22 @@ const Dashboard = () => {
     const surveys = await fetchSurveyData();
     return surveys.find((survey) => surveyId(survey) === selectedId);
   }, [fetchSurveyData]);
+
+  const handleDirtyChange = React.useCallback((owningSurveyId, section, dirty) => {
+    if (!owningSurveyId || !section) return;
+    setDirtyBySurvey((current) => {
+      const surveyDirty = { ...(current[owningSurveyId] || {}) };
+      if (dirty) surveyDirty[section] = true;
+      else delete surveyDirty[section];
+      if (Object.keys(surveyDirty).length === 0) {
+        if (!current[owningSurveyId]) return current;
+        const next = { ...current };
+        delete next[owningSurveyId];
+        return next;
+      }
+      return { ...current, [owningSurveyId]: surveyDirty };
+    });
+  }, []);
 
   const selectedIsLifecycleLocked = Boolean(selectSurvey) && lifecycleStatus(selectSurvey) !== 'draft';
   const selectedReadOnly = !canEditSurvey(selectSurvey) || selectedIsLifecycleLocked;
@@ -189,6 +226,7 @@ const Dashboard = () => {
           onSurveyCopied={handleSurveyCopied}
           selectedSurvey={selectSurvey}
           onLifecycleChange={fetchSurveyData}
+          dirtyBySurvey={dirtyBySurvey}
         />
       </CollapsibleSection>
 
@@ -204,11 +242,11 @@ const Dashboard = () => {
       <CollapsibleSection title="Survey Questions">
         {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
         <QuestionTable
-          key={surveyId(selectSurvey) || 'no-survey'}
           rows={questionData} 
           surveyName={surveyId(selectSurvey)}
           onQuestionsUpdate={replaceSurveys}
           readOnly={selectedReadOnly}
+          onDirtyChange={handleDirtyChange}
         />
       </CollapsibleSection>
 
@@ -218,11 +256,13 @@ const Dashboard = () => {
             key="invitation-subject-editor"
             surveyId={surveyId(selectSurvey)}
             readOnly={selectedIsLifecycleLocked}
+            onDirtyChange={handleDirtyChange}
           />
           <EmailNotificationEditor
             key="invitation-body-editor"
             surveyId={surveyId(selectSurvey)}
             readOnly={selectedIsLifecycleLocked}
+            onDirtyChange={handleDirtyChange}
           />
         </CollapsibleSection>
       )}
@@ -231,11 +271,11 @@ const Dashboard = () => {
         <CollapsibleSection title="Survey Respondents">
           {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
           <RespondentTable
-            key={surveyId(selectSurvey)}
             rows={respondentData}
             surveyName={surveyId(selectSurvey)}
             onRespondentsUpdate={replaceSurveys}
             readOnly={selectedReadOnly}
+            onDirtyChange={handleDirtyChange}
           />
         </CollapsibleSection>
       )}

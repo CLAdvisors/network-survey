@@ -130,7 +130,7 @@ test('ignores stale loads and stale saves after switching surveys', async () => 
   expect(screen.queryByText('Notification text saved successfully.')).not.toBeInTheDocument();
 });
 
-test('reverts dirty content and disables editing when lifecycle becomes read-only', async () => {
+test('preserves dirty content while disabling editing when lifecycle becomes read-only', async () => {
   api.get.mockResolvedValue(response('Locked body'));
   const view = render(<EmailNotificationEditor surveyId="survey-1" />);
   const body = await screen.findByLabelText('Invitation email body');
@@ -138,7 +138,7 @@ test('reverts dirty content and disables editing when lifecycle becomes read-onl
   await userEvent.type(body, ' draft');
 
   view.rerender(<EmailNotificationEditor surveyId="survey-1" readOnly />);
-  await waitFor(() => expect(body).toHaveValue('Locked body'));
+  await waitFor(() => expect(body).toHaveValue('Locked body draft'));
   expect(body).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Save body' })).toBeDisabled();
   expect(screen.getByText(/read-only after a survey has been launched/i)).toBeInTheDocument();

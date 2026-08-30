@@ -5,7 +5,7 @@ import api from '../api/axios';
 
 const DEFAULT_SUBJECT = 'CLA Network Survey';
 
-const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
+const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) => {
   const [language, setLanguage] = React.useState(LANGUAGES[0]);
   const [subjects, setSubjects] = React.useState({});
   const [subject, setSubject] = React.useState(DEFAULT_SUBJECT);
@@ -51,13 +51,6 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
     return () => { active = false; };
   }, [surveyId]);
 
-  React.useEffect(() => {
-    if (readOnly && subject !== originalSubject) {
-      draftsRef.current.delete(surveyId);
-      setSubject(originalSubject);
-    }
-  }, [readOnly, subject, originalSubject, surveyId]);
-
   const handleLanguageChange = (_event, nextLanguage) => {
     if (!nextLanguage) return;
     const nextSubject = subjects[nextLanguage.label] || DEFAULT_SUBJECT;
@@ -84,6 +77,7 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
       });
       if (surveyIdRef.current !== targetSurveyId || version !== operationVersion.current) return;
       draftsRef.current.delete(targetSurveyId);
+      onDirtyChange?.(targetSurveyId, 'invitationSubject', false);
       setSubjects(previous => ({ ...previous, [targetLanguage]: trimmedSubject }));
       setSubject(trimmedSubject);
       setOriginalSubject(trimmedSubject);
@@ -125,7 +119,10 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
             if (readOnly) return;
             const nextSubject = event.target.value;
             setSubject(nextSubject);
-            draftsRef.current.set(surveyId, { language: language.label, subject: nextSubject });
+            const dirty = nextSubject !== originalSubject;
+            if (dirty) draftsRef.current.set(surveyId, { language: language.label, subject: nextSubject });
+            else draftsRef.current.delete(surveyId);
+            onDirtyChange?.(surveyId, 'invitationSubject', dirty);
           }}
           inputProps={{ maxLength: 255 }}
           error={!subject.trim()}
@@ -136,6 +133,7 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false }) => {
           variant="outlined"
           onClick={() => {
             draftsRef.current.delete(surveyId);
+            onDirtyChange?.(surveyId, 'invitationSubject', false);
             setSubject(originalSubject);
           }}
           disabled={readOnly || loading || saving || subject === originalSubject}

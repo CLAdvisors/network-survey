@@ -8,7 +8,7 @@ import api from '../api/axios';
 let canEdit = true;
 
 vi.mock('../api/axios', () => ({
-  default: { post: vi.fn(), delete: vi.fn() },
+  default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
 
 vi.mock('../context/AuthContext', () => ({
@@ -118,6 +118,22 @@ test('users without edit access do not see copy or email demo actions', async ()
   await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
   expect(screen.queryByText('Copy Survey')).not.toBeInTheDocument();
   expect(screen.queryByText('Send Email Demo')).not.toBeInTheDocument();
+});
+
+test('passes only this row’s unsaved sections into the launch blocker', async () => {
+  api.get.mockResolvedValue({ data: {
+    lifecycleStatus: 'draft', eligibleCount: 1, excludedCount: 0,
+    canLaunch: true, blockers: [], warnings: [], templateCoverage: [],
+  } });
+  render(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey', lifecycleStatus: 'draft' }}
+    unsavedChanges={{ questions: true, respondents: true }}
+  />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Launch Survey'));
+  expect(await screen.findByText(/“Leadership Survey” has unsaved changes in survey questions, survey respondents/i)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
 });
 
 test('an active survey offers status and close, but no launch or reminder bypass', async () => {

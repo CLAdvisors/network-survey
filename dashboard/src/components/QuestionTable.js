@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
@@ -11,11 +11,18 @@ import TableMenuCell from './TableMenuCell';
 import { parseQuestionsCsv } from '../utils/questionsCsv';
 import { buildQuestionTableSchema } from '../utils/questionTableSchema';
 
-const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }) => {
+const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, onDirtyChange }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
+  const draftsRef = useRef(new Map());
+  const operationVersion = useRef(0);
+  const surveyIdentity = useRef(surveyName);
+  if (surveyIdentity.current !== surveyName) {
+    surveyIdentity.current = surveyName;
+    operationVersion.current += 1;
+  }
   const [sortModel, setSortModel] = useState([
     {
       field: 'id',
@@ -36,23 +43,30 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         id: index + 1,
         questions: row.questions === "null" ? "0" : row.questions
       }));
-      setTableRows(updatedRows);
-      setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
+      const original = JSON.parse(JSON.stringify(updatedRows));
+      const draft = draftsRef.current.get(surveyName);
+      setTableRows(draft?.rows || updatedRows);
+      setOriginalRows(original);
+      setHasChanges(Boolean(draft));
     } else {
       setTableRows([]);
       setOriginalRows([]);
+      setHasChanges(false);
     }
-  }, [rows]);
+  }, [rows, surveyName]);
 
   const handleDeleteQuestion = async (row) => {
+    const targetSurveyId = surveyName;
+    const version = operationVersion.current;
     try {
       const response = await api.delete('/question', {
         data: {
           questionName: row.name, // use canonical stable name
-          surveyName: surveyName
+          surveyName: targetSurveyId
         }
       });
 
+      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
       if (response.status === 200) {
         // Remove the question from the local state
         const updatedRows = tableRows
@@ -65,10 +79,13 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         setTableRows(updatedRows);
         setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
         setHasChanges(false);
+        draftsRef.current.delete(surveyName);
+        onDirtyChange?.(surveyName, 'questions', false);
 
         // Update survey counts if callback provided
         if (onQuestionsUpdate) {
           const surveysResponse = await api.get('/surveys');
+          if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
           onQuestionsUpdate(surveysResponse.data.surveys);
         }
 
@@ -135,24 +152,31 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
     });
     
     setHasChanges(hasUnsavedChanges);
+    if (hasUnsavedChanges) draftsRef.current.set(surveyName, { rows: updatedRows });
+    else draftsRef.current.delete(surveyName);
+    onDirtyChange?.(surveyName, 'questions', hasUnsavedChanges);
     return newRow;
   };
 
-  const saveRows = async (rowsToSave) => {
+  const saveRows = async (rowsToSave, targetSurveyId = surveyName) => {
     // The table is a projection of the SurveyJS schema. Patch the full schema instead
     // of serializing CSV, which would discard type-specific fields and expressions.
-    const response = await api.get('/admin/questions', { params: { surveyName } });
+    const response = await api.get('/admin/questions', { params: { surveyName: targetSurveyId } });
     const questions = buildQuestionTableSchema(response.data?.questions, rowsToSave);
-    return api.post('/updateQuestions', { questions, surveyName });
+    return api.post('/updateQuestions', { questions, surveyName: targetSurveyId });
   };
 
   const handleSave = async () => {
+    const targetSurveyId = surveyName;
+    const version = operationVersion.current;
     try {
-      const response = await saveRows(tableRows);
+      const response = await saveRows(tableRows, targetSurveyId);
+      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
 
       if (response.status === 200) {
         // Refresh questions data
-        const questionResponse = await api.get(`/listQuestions?surveyName=${surveyName}`);
+        const questionResponse = await api.get(`/listQuestions?surveyName=${targetSurveyId}`);
+        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
         const refreshedRows = questionResponse.data.questions;
         const updatedRows = refreshedRows.map((row, index) => ({
           ...row,
@@ -161,9 +185,12 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
         setTableRows(updatedRows);
         setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
         setHasChanges(false);
+        draftsRef.current.delete(surveyName);
+        onDirtyChange?.(surveyName, 'questions', false);
         
         // Update survey counts
         const surveysResponse = await api.get('/surveys');
+        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
         if (onQuestionsUpdate) {
           onQuestionsUpdate(surveysResponse.data.surveys);
         }
@@ -185,6 +212,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
   };
 
   const handleUpload = async (csvContent) => {
+    const targetSurveyId = surveyName;
+    const version = operationVersion.current;
     try {
       // Parse the new CSV content
       const newQuestions = parseQuestionsCsv(csvContent);
@@ -200,10 +229,12 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
       
       // Persist a patched SurveyJS schema. Imported duplicate names receive fresh
       // identities, while the API remains responsible for final positional names.
-      const response = await saveRows(combinedQuestions);
+      const response = await saveRows(combinedQuestions, targetSurveyId);
+      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
 
       if (response.status === 200) {
-        const questionResponse = await api.get(`/listQuestions?surveyName=${surveyName}`);
+        const questionResponse = await api.get(`/listQuestions?surveyName=${targetSurveyId}`);
+        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
         const refreshedRows = questionResponse.data.questions.map((row, index) => ({
           ...row,
           id: index + 1
@@ -212,8 +243,12 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
 
         setTableRows(refreshedRows);
         setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+        setHasChanges(false);
+        draftsRef.current.delete(surveyName);
+        onDirtyChange?.(surveyName, 'questions', false);
         
         const surveysResponse = await api.get('/surveys');
+        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
         if (onQuestionsUpdate) {
           onQuestionsUpdate(surveysResponse.data.surveys);
         }
@@ -251,6 +286,8 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false }
     
     setTableRows(updatedRows);
     setHasChanges(true);
+    draftsRef.current.set(surveyName, { rows: updatedRows });
+    onDirtyChange?.(surveyName, 'questions', true);
   };
 
   const handleCloseSnackbar = (event, reason) => {

@@ -20,7 +20,7 @@ import { LANGUAGES } from "@network-survey/frontend-shared";
 const apiErrorMessage = (error, fallback) =>
   error.response?.data?.message || error.response?.data?.error || fallback;
 
-const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
+const EmailNotificationEditor = ({ surveyId, readOnly = false, onDirtyChange }) => {
   const theme = useTheme();
   const [selectedLanguage, setSelectedLanguage] = React.useState(LANGUAGES[0]);
   const [notificationText, setNotificationText] = React.useState("");
@@ -84,14 +84,6 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
     return () => controller.abort();
   }, [surveyId, selectTemplate]);
 
-  React.useEffect(() => {
-    if (readOnly && hasChanges) {
-      draftsRef.current.delete(surveyId);
-      setNotificationText(originalText);
-      setHasChanges(false);
-    }
-  }, [readOnly, hasChanges, originalText]);
-
   const handleLanguageChange = (_event, language) => {
     if (!language || hasChanges) return;
     selectTemplate(language, notifications);
@@ -111,6 +103,7 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
       });
       if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
       draftsRef.current.delete(targetSurveyId);
+      onDirtyChange?.(targetSurveyId, 'invitationBody', false);
       setNotifications((current) => ({ ...current, [targetLanguage]: targetText }));
       setOriginalText(targetText);
       setHasChanges(false);
@@ -217,13 +210,14 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
             setHasChanges(nextText !== originalText);
             if (nextText === originalText) draftsRef.current.delete(surveyId);
             else draftsRef.current.set(surveyId, { language: selectedLanguage.label, text: nextText });
+            onDirtyChange?.(surveyId, 'invitationBody', nextText !== originalText);
           }}
           disabled={readOnly || loading || saving || importing}
           placeholder={`Enter notification text for ${selectedLanguage?.label || "the selected language"}...`}
           sx={{ "& .MuiOutlinedInput-root": { backgroundColor: theme.palette.background.default } }}
         />
         <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
-          <Button variant="outlined" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={() => { draftsRef.current.delete(surveyId); setNotificationText(originalText); setHasChanges(false); }}>Revert</Button>
+          <Button variant="outlined" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={() => { draftsRef.current.delete(surveyId); onDirtyChange?.(surveyId, 'invitationBody', false); setNotificationText(originalText); setHasChanges(false); }}>Revert</Button>
           <Button variant="contained" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={handleSave}>{saving ? "Saving…" : "Save body"}</Button>
         </Box>
       </Box>

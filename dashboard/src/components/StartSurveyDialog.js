@@ -19,30 +19,47 @@ const newIntentKey = () => {
 };
 
 const items = (value) => Array.isArray(value) ? value : [];
+const DIRTY_LABELS = {
+  invitationSubject: 'invitation subject',
+  invitationBody: 'invitation body',
+  questions: 'survey questions',
+  respondents: 'survey respondents',
+};
 
-const StartSurveyDialog = ({ open, survey, onClose, onAccepted }) => {
+const StartSurveyDialog = ({ open, survey, onClose, onAccepted, unsavedChanges = {} }) => {
   const [readiness, setReadiness] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState('');
   const [intentKey, setIntentKey] = React.useState(null);
+  const [attemptSurveyId, setAttemptSurveyId] = React.useState(null);
   const requestInFlight = React.useRef(false);
+  const operationVersion = React.useRef(0);
   const id = surveyId(survey);
 
   React.useEffect(() => {
-    if (!open || !id) return undefined;
+    const version = ++operationVersion.current;
+    requestInFlight.current = false;
+    setSubmitting(false);
+    if (!open || !id) {
+      setAttemptSurveyId(null);
+      return undefined;
+    }
     const controller = new AbortController();
+    setAttemptSurveyId(id);
     setIntentKey(newIntentKey());
     setReadiness(null);
     setError('');
     setLoading(true);
     api.get(`/surveys/${id}/launch-readiness`, { signal: controller.signal })
-      .then((response) => setReadiness(response.data))
+      .then((response) => {
+        if (!controller.signal.aborted && version === operationVersion.current) setReadiness(response.data);
+      })
       .catch((err) => {
-        if (!controller.signal.aborted) setError(errorMessage(err, 'Unable to check launch readiness.'));
+        if (!controller.signal.aborted && version === operationVersion.current) setError(errorMessage(err, 'Unable to check launch readiness.'));
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted && version === operationVersion.current) setLoading(false);
       });
     return () => controller.abort();
   }, [open, id]);
@@ -51,10 +68,16 @@ const StartSurveyDialog = ({ open, survey, onClose, onAccepted }) => {
   const warnings = items(readiness?.warnings);
   const rawCoverage = readiness?.templateCoverage || readiness?.template_coverage || readiness?.templates || [];
   const coverage = Array.isArray(rawCoverage) ? rawCoverage : Object.entries(rawCoverage).map(([language, value]) => ({ language, ...(typeof value === 'object' ? value : { covered: Boolean(value) }) }));
-  const canLaunch = Boolean(readiness?.canLaunch) && blockers.length === 0;
+  const dirtySections = Object.entries(unsavedChanges)
+    .filter(([, dirty]) => Boolean(dirty))
+    .map(([section]) => DIRTY_LABELS[section] || section);
+  const hasUnsavedChanges = dirtySections.length > 0;
+  const canLaunch = attemptSurveyId === id && Boolean(readiness?.canLaunch) && blockers.length === 0 && !hasUnsavedChanges;
 
   const submit = async () => {
     if (!canLaunch || submitting || requestInFlight.current || !intentKey) return;
+    const version = operationVersion.current;
+    const targetId = id;
     requestInFlight.current = true;
     setSubmitting(true);
     setError('');
@@ -64,19 +87,23 @@ const StartSurveyDialog = ({ open, survey, onClose, onAccepted }) => {
         { kind: 'initial' },
         { headers: { 'Idempotency-Key': intentKey } },
       );
+      if (version !== operationVersion.current || targetId !== id) return;
       if (response.status === 202 || response.data?.launchId || response.data?.id || response.data?.launch?.id) {
         onAccepted?.(response.data);
       } else {
         setError('The server did not confirm that the invitation launch was queued.');
       }
     } catch (err) {
+      if (version !== operationVersion.current || targetId !== id) return;
       if (err.response?.status === 422 && err.response?.data?.details) {
         setReadiness(err.response.data.details);
       }
       setError(errorMessage(err, 'Unable to queue the invitation launch. The same launch key will be reused.'));
     } finally {
-      requestInFlight.current = false;
-      setSubmitting(false);
+      if (version === operationVersion.current && targetId === id) {
+        requestInFlight.current = false;
+        setSubmitting(false);
+      }
     }
   };
 
@@ -90,6 +117,11 @@ const StartSurveyDialog = ({ open, survey, onClose, onAccepted }) => {
         <DialogContentText id="launch-dialog-description" sx={{ mb: 2 }}>
           This queues real invitation emails containing respondent links. Queued or accepted email is not proof of delivery.
         </DialogContentText>
+        {hasUnsavedChanges && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            “{survey?.name || 'This survey'}” has unsaved changes in {dirtySections.join(', ')}. Save or undo those changes before launching so invitations use the persisted survey.
+          </Alert>
+        )}
         {loading && <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={20} /> Checking readiness…</Box>}
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         {readiness && (

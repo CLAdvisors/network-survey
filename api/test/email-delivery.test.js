@@ -183,7 +183,8 @@ test('transactional launch locks control then survey, snapshots all work, activa
   const orgId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const launchId='22222222-2222-4222-8222-222222222222';
   const calls=[];
-  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+  let releaseCount=0;
+  const client={release(){releaseCount+=1;},async query(sql,values=[]){calls.push({sql,values});
     if (/SELECT \* FROM email_worker_control/.test(sql)) return {rows:[{claiming_enabled:true,minimum_release:''}]};
     if (/SELECT \* FROM email_sending_control/.test(sql)) return {rows:[{sending_enabled:true,minimum_release:'release-pinned-by-sending'}]};
     if (/SELECT s\.\*, om\.role/.test(sql)) return {rows:[{id:surveyId,name:'Survey A',organization_id:orgId,role:'editor',lifecycle_status:'draft',archived_at:null,questions:{elements:[{name:'q1',type:'text'}]}}]};
@@ -207,6 +208,7 @@ test('transactional launch locks control then survey, snapshots all work, activa
   assert.equal(deliveryCall.values[12],RENDERER_VERSION);
   const launchedPayload=buildInvitationPayload({to:'person@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',bodyText:'Please participate',surveyBaseUrl:'https://survey.test',surveyName:'Survey A',token:'secret-token',language:'english',deliveryId:deliveryCall.values[0],environment:'test',rendererVersion:RENDERER_VERSION});
   assert.equal(deliveryCall.values[14],payloadHash(launchedPayload));
+  assert.equal(releaseCount,1,'launchSurvey releases its checked-out connection exactly once');
 });
 
 test('close atomically cancels queued work, fences leased work, and writes strict audit', async()=>{

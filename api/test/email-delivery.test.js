@@ -125,22 +125,25 @@ test('retained provider-boundary clients reserve rate capacity without reconnect
 
 test('readiness validates the entire audience and exact normalized template coverage', () => {
   const survey = { lifecycle_status:'draft', archived_at:null, questions:{elements:[{name:'q1',type:'text'}]} };
-  const good = evaluateReadiness(survey, { recipients:[{respondent_id:1,contact_info:'A@example.com',uuid:'token',lang:'English'}], templates:[{lang:' english ',text:'Welcome'}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  const good = evaluateReadiness(survey, { recipients:[{respondent_id:1,contact_info:'A@example.com',uuid:'token',lang:'English'}], templates:[{lang:' english ',text:'Welcome',invitation_subject:' Team invitation '}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.equal(good.canLaunch,true);
   assert.deepEqual(good.languages,['english']);
   assert.deepEqual(good.templateCoverage,[{language:'english',covered:true}]);
   const bad = evaluateReadiness(survey, { recipients:[
     {respondent_id:1,contact_info:'same@example.com',uuid:'token',lang:'French'},
     {respondent_id:2,contact_info:'SAME@example.com',uuid:null,lang:'French'},
-  ], templates:[{lang:'English',text:'Welcome'}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  ], templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.equal(bad.canLaunch,false);
   assert.ok(bad.blockers.some(({code})=>code==='recipient_email_duplicate'));
   assert.ok(bad.blockers.some(({code})=>code==='recipient_token_missing'));
   assert.ok(bad.blockers.some(({code})=>code==='template_missing'));
-  const unsupported = evaluateReadiness(survey, { recipients:[{respondent_id:3,contact_info:'x@example.com',uuid:'token',lang:'Klingon'}], templates:[{lang:'Klingon',text:'Qapla'}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  const unsupported = evaluateReadiness(survey, { recipients:[{respondent_id:3,contact_info:'x@example.com',uuid:'token',lang:'Klingon'}], templates:[{lang:'Klingon',text:'Qapla',invitation_subject:'Invitation'}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.ok(unsupported.blockers.some(({code})=>code==='recipient_language_unsupported'));
-  const duplicate = evaluateReadiness(survey, { recipients:[{respondent_id:4,contact_info:'x@example.com',uuid:'token',lang:'English'}], templates:[{lang:'English',text:'Welcome'},{lang:' english ',text:'  '}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  const duplicate = evaluateReadiness(survey, { recipients:[{respondent_id:4,contact_info:'x@example.com',uuid:'token',lang:'English'}], templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'},{lang:' english ',text:'  ',invitation_subject:'Other'}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.ok(duplicate.blockers.some(({code})=>code==='template_duplicate'));
+  const missingSubject = evaluateReadiness(survey, { recipients:[{respondent_id:5,contact_info:'x@example.com',uuid:'token',lang:'English'}], templates:[{lang:'English',text:'Welcome',invitation_subject:'  '}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  assert.ok(missingSubject.blockers.some(({code})=>code==='template_subject_missing'));
+  assert.equal(good.templateSubjectMap.get('english'),'Team invitation');
   const manyInvalid = evaluateReadiness(survey, { recipients:Array.from({length:150},(_,index)=>({respondent_id:index,contact_info:'invalid',uuid:null,lang:''})), templates:[] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.ok(manyInvalid.blockerCount > 100);
   assert.equal(manyInvalid.blockers.length, 101);
@@ -189,7 +192,7 @@ test('transactional launch locks control then survey, snapshots all work, activa
     if (/SELECT \* FROM email_sending_control/.test(sql)) return {rows:[{sending_enabled:true,minimum_release:'release-pinned-by-sending'}]};
     if (/SELECT s\.\*, om\.role/.test(sql)) return {rows:[{id:surveyId,name:'Survey A',organization_id:orgId,role:'editor',lifecycle_status:'draft',archived_at:null,questions:{elements:[{name:'q1',type:'text'}]}}]};
     if (/SELECT respondent_id/.test(sql)) return {rows:[{respondent_id:7,name:'Person',contact_info:'person@example.com',uuid:'secret-token',lang:'English'}]};
-    if (/SELECT lang,text FROM email/.test(sql)) return {rows:[{lang:'English',text:'Please participate'}]};
+    if (/SELECT lang,text,invitation_subject FROM email/.test(sql)) return {rows:[{lang:'English',text:'Please participate',invitation_subject:'Leadership pulse invitation'}]};
     if (/SELECT id,request_fingerprint/.test(sql)||/SELECT id FROM survey_launches/.test(sql)) return {rows:[],rowCount:0};
     if (/SELECT 1 FROM email_worker_heartbeats/.test(sql)) return {rows:[{}],rowCount:1};
     if (/INSERT INTO survey_launches/.test(sql)) return {rows:[{id:launchId,created_at:new Date()}],rowCount:1};
@@ -206,7 +209,10 @@ test('transactional launch locks control then survey, snapshots all work, activa
   const deliveryCall=calls.find(({sql})=>/INSERT INTO survey_email_deliveries/.test(sql));
   assert.equal(deliveryCall.values.includes('secret-token'),false,'raw bearer token is not persisted in outbox columns');
   assert.equal(deliveryCall.values[12],RENDERER_VERSION);
-  const launchedPayload=buildInvitationPayload({to:'person@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',bodyText:'Please participate',surveyBaseUrl:'https://survey.test',surveyName:'Survey A',token:'secret-token',language:'english',deliveryId:deliveryCall.values[0],environment:'test',rendererVersion:RENDERER_VERSION});
+  const templateCall=calls.find(({sql})=>/INSERT INTO survey_launch_templates/.test(sql));
+  assert.equal(templateCall.values[2],'Leadership pulse invitation');
+  assert.equal(deliveryCall.values[9],'Leadership pulse invitation');
+  const launchedPayload=buildInvitationPayload({to:'person@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'Leadership pulse invitation',bodyText:'Please participate',surveyBaseUrl:'https://survey.test',surveyName:'Survey A',token:'secret-token',language:'english',deliveryId:deliveryCall.values[0],environment:'test',rendererVersion:RENDERER_VERSION});
   assert.equal(deliveryCall.values[14],payloadHash(launchedPayload));
   assert.equal(releaseCount,1,'launchSurvey releases its checked-out connection exactly once');
 });

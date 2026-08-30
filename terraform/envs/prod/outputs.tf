@@ -136,6 +136,11 @@ output "survey_aliases" {
   description = "Complete canonical and legacy alias set retained on the survey CloudFront distribution."
 }
 
+output "survey_active_link_domain" {
+  value       = var.survey_link_domain
+  description = "Persisted hostname used for newly generated survey links; changing it does not alter the certificate or alias set."
+}
+
 output "survey_certificate_validation_records" {
   value = {
     for option in aws_acm_certificate.prod_survey_canonical.domain_validation_options : option.domain_name => {

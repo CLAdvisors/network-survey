@@ -31,9 +31,12 @@ locals {
   resend_webhook_previous_secret_parameter_name = "${local.ssm_parameter_prefix}/api/resend-webhook-secret-previous"
   bootstrap_admin_password_parameter_name       = "${local.ssm_parameter_prefix}/api/bootstrap-admin-password"
 
-  frontend_url         = "https://${var.dashboard_domain}"
+  frontend_url = "https://${var.dashboard_domain}"
+
+  # Keep certificate identity and every issued-link alias stable when operators
+  # switch only the hostname used to generate new survey links.
   survey_url           = "https://${var.survey_link_domain}"
-  survey_domains       = distinct(concat([var.survey_domain, var.survey_link_domain], var.additional_survey_domains))
+  survey_domains       = distinct(concat([var.survey_certificate_domain, var.survey_domain], var.additional_survey_domains))
   other_survey_origins = [for domain in local.survey_domains : "https://${domain}" if domain != var.survey_link_domain]
   session_cookie_name  = "sessionId"
   api_config_db_host   = coalesce(var.api_config_db_host_override, aws_db_instance.prod_replacement.address)
@@ -197,7 +200,7 @@ module "survey_frontend" {
 
   site_name            = "survey"
   bucket_name          = local.survey_bucket_name
-  domain_name          = var.survey_link_domain
+  domain_name          = var.survey_certificate_domain
   domain_names         = local.survey_domains
   acm_certificate_arn  = aws_acm_certificate_validation.prod_survey_canonical.certificate_arn
   enable_custom_domain = var.enable_frontend_custom_domains

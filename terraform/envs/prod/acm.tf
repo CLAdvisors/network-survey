@@ -56,10 +56,12 @@ moved {
 # only one viewer certificate, so this additive certificate covers the canonical
 # hostname and every retained legacy alias.
 resource "aws_acm_certificate" "prod_survey_canonical" {
-  domain_name = var.survey_link_domain
+  # Certificate identity is deliberately independent of the active link domain.
+  # Rolling new links back to a retained alias must not replace this certificate.
+  domain_name = var.survey_certificate_domain
   subject_alternative_names = [
-    for domain in distinct(concat([var.survey_domain], var.additional_survey_domains)) : domain
-    if domain != var.survey_link_domain
+    for domain in local.survey_domains : domain
+    if domain != var.survey_certificate_domain
   ]
   validation_method = "DNS"
 
@@ -71,6 +73,11 @@ resource "aws_acm_certificate" "prod_survey_canonical" {
   lifecycle {
     create_before_destroy = true
     prevent_destroy       = true
+
+    precondition {
+      condition     = contains(local.survey_domains, var.survey_link_domain)
+      error_message = "survey_link_domain must be retained in the stable survey certificate, CloudFront alias, and CORS domain set."
+    }
   }
 }
 

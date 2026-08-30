@@ -71,40 +71,91 @@ ACM validation CNAMEs that must remain in external DNS:
 
 ## Canonical survey domain rollout
 
-New respondent and demo links use `survey_link_domain`. The existing
-`survey_domain` and any `additional_survey_domains` remain aliases on the same
-CloudFront distribution and allowed API origins, so previously issued tokenized
-links continue to work.
+`survey_certificate_domain` fixes the primary identity of the additive
+certificate. The complete alias set consists of that domain, `survey_domain`,
+and `additional_survey_domains`; it remains attached to CloudFront and allowed
+by API CORS regardless of which alias is active. `survey_link_domain` controls
+only the hostname used for newly generated respondent and demo links and must be
+one of those retained aliases. Changing it must not replace a certificate,
+remove an alias, or invalidate a previously issued tokenized link.
 
-Roll this out without replacing the distribution or historical certificate:
+ACM validation DNS and application routing DNS are separate. ACM's validation
+CNAME only proves domain ownership. The application CNAME must also point
+`survey.cladvisorsurveys.com` to the `survey_cloudfront_domain` output before
+canonical links are enabled.
 
-1. Create only `aws_acm_certificate.prod_survey_canonical` and publish the
-   `survey_certificate_validation_records` output through the approved external
-   DNS process.
-2. Wait for ACM to report `ISSUED`.
-3. Review a saved full plan. It must retain the existing survey distribution,
-   bucket, OAC, legacy alias, and `aws_acm_certificate.prod_survey`; it must not
-   replace or destroy API, dashboard, worker, database, network, or certificate
-   resources.
-4. Apply the reviewed in-place alias/certificate/runtime-config update.
-5. Verify both canonical and legacy URLs serve the same frontend and that API
-   CORS accepts both origins. Keep every legacy alias and validation CNAME until
-   an explicit issued-link retirement is approved.
-
-Do not use the historical emergency hotfix packaging or remote-deploy scripts;
-current deployment tooling must continue to release and fence the API, delivery
-worker, and webhook worker together.
-
-## Plan/apply
-
-Local commands:
+The checked-in default deliberately keeps new links on the legacy hostname.
+For a first-time cutover, retain that persisted value through the certificate,
+alias, and application-DNS phases:
 
 ```sh
 export TF_VAR_db_password=...
 terraform -chdir=terraform/envs/prod init
-terraform -chdir=terraform/envs/prod plan
-terraform -chdir=terraform/envs/prod apply
+
+# Request only the additive certificate. Review and apply the same saved plan.
+terraform -chdir=terraform/envs/prod plan \
+  -target=aws_acm_certificate.prod_survey_canonical \
+  -out=survey-certificate.tfplan
+terraform -chdir=terraform/envs/prod apply survey-certificate.tfplan
+
+# Publish every record from this output through the approved external DNS process.
+terraform -chdir=terraform/envs/prod output survey_certificate_validation_records
+
+# After the validation records resolve, wait for ACM to issue the certificate.
+terraform -chdir=terraform/envs/prod plan \
+  -target=aws_acm_certificate_validation.prod_survey_canonical \
+  -out=survey-validation.tfplan
+terraform -chdir=terraform/envs/prod apply survey-validation.tfplan
+
+# Attach all aliases while link generation remains on the legacy hostname.
+terraform -chdir=terraform/envs/prod plan -out=survey-aliases.tfplan
+terraform -chdir=terraform/envs/prod apply survey-aliases.tfplan
+terraform -chdir=terraform/envs/prod output -raw survey_cloudfront_domain
 ```
+
+Create the externally managed application CNAME for
+`survey.cladvisorsurveys.com` using that CloudFront output. Wait for public DNS
+propagation, then verify canonical and legacy hostnames serve the same frontend,
+TLS is valid, and API CORS accepts both origins. Do not put respondent tokens in
+DNS or HTTP verification logs.
+
+Only after those checks pass, activate canonical link generation through a
+separate reviewed configuration change. Persist `survey_link_domain =
+survey.cladvisorsurveys.com` in the approved production variable source (for
+this repository, update its checked-in default); do not rely on a temporary
+shell override that later automation would silently undo. Then apply the saved
+plan and run the current coordinated deployment workflow so the API and fenced
+delivery/webhook workers load the updated runtime configuration:
+
+```sh
+terraform -chdir=terraform/envs/prod plan -out=survey-link-cutover.tfplan
+terraform -chdir=terraform/envs/prod apply survey-link-cutover.tfplan
+# Run the approved current deployment workflow, then verify newly generated links.
+```
+
+Verify the generated hostname without recording a respondent token. A Terraform
+apply updates the versioned runtime-config object but does not reload the running
+processes, so the deployment step is mandatory.
+
+The cutover plan must retain the distribution, bucket, OAC, complete alias set,
+`aws_acm_certificate.prod_survey`, and
+`aws_acm_certificate.prod_survey_canonical`. It must not replace or destroy API,
+dashboard, worker, database, network, or certificate resources.
+
+To roll back only new-link generation, persist
+`survey_link_domain=demo.ona.survey.bennetts.work`, repeat the saved-plan
+workflow, and run the same coordinated deployment workflow. Reject the rollback
+plan if it changes ACM or CloudFront aliases. Existing canonical and legacy
+links must continue to work. Keep every alias and validation/application CNAME
+until an explicit issued-link retirement is approved.
+
+Saved plan files can contain sensitive values. Restrict their permissions and
+delete them after the reviewed apply. Do not run `terraform apply` without the
+reviewed plan filename, because that creates a new, unreviewed plan.
+
+Do not use the historical emergency hotfix packaging or remote-deploy scripts;
+current deployment tooling must continue to release and fence the API, delivery
+worker, and webhook worker together.
 
 GitHub Actions uses environment secret `TF_VAR_DB_PASSWORD`. The old root
 production workspace is intentionally blocked.

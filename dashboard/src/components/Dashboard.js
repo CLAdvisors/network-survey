@@ -95,6 +95,7 @@ const Dashboard = () => {
   }, [selectSurvey, canViewSensitiveSurveyData]);
 
   const handleSelectRow = (childData) => {
+    pendingSelectionId.current = null;
     if (surveyId(childData) !== surveyId(selectSurvey)) {
       relatedRequest.current += 1;
       setQuestionData(null);
@@ -120,7 +121,7 @@ const Dashboard = () => {
   };
 
   const handleSurveyCopied = async (copiedSurvey) => {
-    const copiedId = surveyId(copiedSurvey);
+    const copiedId = copiedSurvey?.id || copiedSurvey?.survey_id || null;
     if (!copiedId) {
       setSnackbar({ severity: 'error', message: 'The copied survey was created, but its stable ID was not returned.' });
       return;
@@ -171,7 +172,11 @@ const Dashboard = () => {
   }, []);
 
   const selectedIsLifecycleLocked = Boolean(selectSurvey) && lifecycleStatus(selectSurvey) !== 'draft';
-  const selectedReadOnly = !canEditSurvey(selectSurvey) || selectedIsLifecycleLocked;
+  const selectedCanEdit = canEditSurvey(selectSurvey);
+  const selectedCanViewRespondents = canViewSensitiveSurveyData(selectSurvey);
+  const selectedReadOnly = !selectedCanEdit || selectedIsLifecycleLocked;
+  const hasInvitationDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.invitationSubject || dirty.invitationBody);
+  const hasRespondentDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.respondents);
 
   return (
     <Box
@@ -250,34 +255,38 @@ const Dashboard = () => {
         />
       </CollapsibleSection>
 
-      {canEditSurvey(selectSurvey) && (
-        <CollapsibleSection title="Email Notifications">
-          <InvitationSubjectEditor
-            key="invitation-subject-editor"
-            surveyId={surveyId(selectSurvey)}
-            readOnly={selectedIsLifecycleLocked}
-            onDirtyChange={handleDirtyChange}
-          />
-          <EmailNotificationEditor
-            key="invitation-body-editor"
-            surveyId={surveyId(selectSurvey)}
-            readOnly={selectedIsLifecycleLocked}
-            onDirtyChange={handleDirtyChange}
-          />
-        </CollapsibleSection>
+      {(selectedCanEdit || hasInvitationDrafts) && (
+        <Box sx={{ display: selectedCanEdit ? 'block' : 'none' }} aria-hidden={!selectedCanEdit}>
+          <CollapsibleSection title="Email Notifications">
+            <InvitationSubjectEditor
+              key="invitation-subject-editor"
+              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
+              readOnly={selectedIsLifecycleLocked}
+              onDirtyChange={handleDirtyChange}
+            />
+            <EmailNotificationEditor
+              key="invitation-body-editor"
+              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
+              readOnly={selectedIsLifecycleLocked}
+              onDirtyChange={handleDirtyChange}
+            />
+          </CollapsibleSection>
+        </Box>
       )}
 
-      {canViewSensitiveSurveyData(selectSurvey) && (
-        <CollapsibleSection title="Survey Respondents">
-          {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
-          <RespondentTable
-            rows={respondentData}
-            surveyName={surveyId(selectSurvey)}
-            onRespondentsUpdate={replaceSurveys}
-            readOnly={selectedReadOnly}
-            onDirtyChange={handleDirtyChange}
-          />
-        </CollapsibleSection>
+      {(selectedCanViewRespondents || hasRespondentDrafts) && (
+        <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
+          <CollapsibleSection title="Survey Respondents">
+            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
+            <RespondentTable
+              rows={selectedCanViewRespondents ? respondentData : null}
+              surveyName={selectedCanViewRespondents ? surveyId(selectSurvey) : null}
+              onRespondentsUpdate={replaceSurveys}
+              readOnly={selectedReadOnly}
+              onDirtyChange={handleDirtyChange}
+            />
+          </CollapsibleSection>
+        </Box>
       )}
     </Box>
   );

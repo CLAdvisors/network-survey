@@ -11,8 +11,8 @@ vi.mock('../api/axios', () => ({ default: { get: vi.fn(), post: vi.fn() } }));
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
     memberships: [{ role: 'editor' }],
-    canEditSurvey: (survey) => Boolean(survey),
-    canViewSensitiveSurveyData: () => true,
+    canEditSurvey: (survey) => Boolean(survey) && survey.role !== 'viewer',
+    canViewSensitiveSurveyData: (survey) => Boolean(survey) && survey.role !== 'viewer',
   }),
 }));
 
@@ -52,6 +52,7 @@ const surveys = [
   { id: 'survey-a', name: 'Alpha', role: 'editor', lifecycleStatus: 'draft' },
   { id: 'survey-b', name: 'Beta', role: 'editor', lifecycleStatus: 'active' },
   { id: 'survey-c', name: 'Gamma', role: 'editor', lifecycleStatus: 'draft' },
+  { id: 'survey-d', name: 'Delta', role: 'viewer', lifecycleStatus: 'draft' },
 ];
 
 beforeEach(() => {
@@ -78,6 +79,21 @@ test('dirty state remains scoped to its owning survey across every editable sect
   await userEvent.click(screen.getByRole('button', { name: 'Select Gamma' }));
   expect(screen.getByTestId('dirty-survey-c')).toBeEmptyDOMElement();
   expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('invitationBody,invitationSubject,questions,respondents');
+});
+
+test('keeps owning editor instances and scoped drafts while visiting a survey without edit access', async () => {
+  const theme = createTheme();
+  render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
+  const subjectMount = screen.getByTestId('subject-editor').dataset.mount;
+  await userEvent.click(screen.getByRole('button', { name: 'Dirty subject' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Dirty respondents' }));
+
+  await userEvent.click(screen.getByRole('button', { name: 'Select Delta' }));
+  expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('invitationSubject,respondents');
+  await userEvent.click(screen.getByRole('button', { name: 'Select Alpha' }));
+  expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-mount', subjectMount);
+  expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('invitationSubject,respondents');
 });
 
 test('selects a successful copy by returned stable ID and loads its related data', async () => {

@@ -115,11 +115,14 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
     }
   };
 
-  const handleLaunchAccepted = (payload) => {
+  const handleLaunchAccepted = async (payload) => {
     setStartOpen(false);
     notify('Invitation launch queued. Track acceptance and failures in delivery status.');
-    onLifecycleChange?.(id, payload);
-    onViewLifecycle?.(row);
+    const refreshedSurveys = await onLifecycleChange?.(id, payload);
+    const refreshed = Array.isArray(refreshedSurveys)
+      ? refreshedSurveys.find((survey) => surveyId(survey) === id)
+      : null;
+    if (refreshed) onViewLifecycle?.(refreshed);
   };
 
   const handleTransition = async () => {

@@ -6,11 +6,11 @@ import {
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
 
-const TableUploadButton = ({ onUpload, templateData, tableName }) => {
+const TableUploadButton = ({ onUpload, templateData, tableName, disabled = false }) => {
 
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file || disabled) return;
 
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -54,6 +54,7 @@ const TableUploadButton = ({ onUpload, templateData, tableName }) => {
           component="label"
           startIcon={<UploadFileIcon />}
           size="small"
+          disabled={disabled}
         >
           Upload
           <input

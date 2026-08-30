@@ -131,7 +131,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
         />
       ),
     }
-  ].filter(column => !readOnly || column.field !== 'actions');
+  ].filter(column => (!readOnly && !hasChanges) || column.field !== 'actions');
 
   const TEMPLATE_DATA = [
     'Title,Question name,Question title,Question type,Max answers,Required',
@@ -317,6 +317,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
               onUpload={handleUpload}
               templateData={TEMPLATE_DATA}
               tableName="Questions"
+              disabled={hasChanges}
             />
             {hasChanges && (
               <Button

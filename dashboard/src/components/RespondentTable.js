@@ -160,7 +160,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
         />
       ),
     }
-  ].filter(column => !readOnly || column.field !== 'actions');
+  ].filter(column => (!readOnly && !hasChanges) || column.field !== 'actions');
 
 
 
@@ -330,6 +330,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
               onUpload={handleUpload}
               templateData={TEMPLATE_DATA}
               tableName="Respondents"
+              disabled={hasChanges}
             />
             {hasChanges && (
               <Button

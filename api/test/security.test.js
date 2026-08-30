@@ -1746,9 +1746,28 @@ test('CLA organization migration preserves survey data and enforces stable child
   const bootstrap = fs.readFileSync(path.join(__dirname, '../../scripts/deploy/bootstrap-admin.js'), 'utf8');
   const cleanup = fs.readFileSync(path.join(__dirname, '../../scripts/deploy/finalize-legacy-accounts.js'), 'utf8');
 
+  const includedFiles = (xml) => [...xml.matchAll(/<include file="([^"]+)"/g)].map((match) => match[1]);
+  const masterIncludes = includedFiles(changelog);
+  const cutoverIncludes = includedFiles(cutoverChangelog);
+
+  const postCutoverMasterIncludes = [
+    'v1_6_survey_lifecycle_email_delivery.sql',
+    'v1_7_email_webhook_delivery_truth.sql',
+  ];
+  const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
+
   assert.doesNotMatch(changelog, /v1_7_cla_organization_backfill\.sql/);
-  assert.match(cutoverChangelog, /master-changelog\.xml/);
-  assert.match(cutoverChangelog, /v1_7_cla_organization_backfill\.sql/);
+  assert.deepEqual(
+    cutoverIncludes,
+    [...sharedPreCutoverIncludes, 'v1_7_cla_organization_backfill.sql'],
+    'the historical cutover must establish CLA ownership before lifecycle preflight requires tenant IDs'
+  );
+  assert.deepEqual(
+    masterIncludes.slice(sharedPreCutoverIncludes.length),
+    postCutoverMasterIncludes,
+    'switching from the recorded cutover root to master must add only the reviewed lifecycle and webhook migrations'
+  );
+  assert.equal(new Set(cutoverIncludes).size, cutoverIncludes.length, 'cutover includes must not be duplicated');
   assert.match(migration, /VALUES \('CLA', 'cla'\)/);
   assert.match(migration, /WHERE r\.survey_id IS NULL/);
   assert.match(migration, /WHERE e\.survey_id IS NULL/);

@@ -45,22 +45,77 @@ subjects. Respondent/response payloads and legacy email bodies must reconcile.
    `enable_cla_production_cutover=true` and `enable_cla_owner_bootstrap=true`.
    It must contain only in-place runtime IAM policy and config-object changes; no
    destroys or replacements. This one-time apply was completed before cutover.
-5. Deploy the reviewed release with `CLA_PRODUCTION_CUTOVER=true`. This selects
+5. Before deploying, rehearse both changelog roots against a disposable snapshot
+   restore (never the live database). The historical cutover root must run the
+   shared pre-lifecycle schema followed by `v1_7_cla_organization_backfill.sql`.
+   Switching that same database to `master-changelog.xml` must then report only
+   the seven lifecycle and eight webhook changesets as pending. Apply them, rerun
+   master, and require a no-op. Do not continue if the include-order regression
+   test or either exact pending-set check fails.
+6. Deploy the reviewed release with `CLA_PRODUCTION_CUTOVER=true`. This selects
    `cla-production-cutover.xml`; the universal local/CI/staging master changelog
-   cannot execute `v1_7`. Liquibase aborts on null/orphaned/disagreeing child
-   relationships, active slug collisions, orphaned audit survey IDs, or an empty
-   survey set. Bootstrap `create-or-verify` mode is retry-safe: it creates the
-   approved owner once and subsequently requires exact identity and credential.
-6. Confirm external API health, then authenticate as the new CLA owner and verify
+   cannot execute the CLA organization backfill. Liquibase aborts on
+   null/orphaned/disagreeing child relationships, active slug collisions,
+   orphaned audit survey IDs, or an empty survey set. Bootstrap
+   `create-or-verify` mode is retry-safe: it creates the approved owner once and
+   subsequently requires exact identity and credential.
+7. Confirm external API health, then authenticate as the new CLA owner and verify
    survey listing/results. Login updates `users.last_login_at` and is required by
    cleanup.
-7. Run `finalize-legacy-accounts.js` in `dry-run` mode with the exact snapshot ID,
+8. Run `finalize-legacy-accounts.js` in `dry-run` mode with the exact snapshot ID,
    counts, and legacy user IDs above. Review output.
-8. Repeat in `apply` mode with `CONFIRM_FINAL_SNAPSHOT_ID` exactly matching the
+9. Repeat in `apply` mode with `CONFIRM_FINAL_SNAPSHOT_ID` exactly matching the
    recorded snapshot.
-9. Run post-migration reconciliation and respondent-link smoke tests.
-10. Remove the one-time production bootstrap config/IAM access and rotate/delete
+10. Run post-migration reconciliation and respondent-link smoke tests, including
+    previously issued tokenized links.
+11. Return `enable_cla_production_cutover` to `false` before any later release;
+    normal releases must use `master-changelog.xml`.
+12. Remove the one-time production bootstrap config/IAM access and rotate/delete
     the bootstrap SecureString after the owner password is rotated.
+
+## Current cutover-to-master transition
+
+The CLA backfill must precede lifecycle migration because lifecycle preflight
+requires every survey and child row to have stable tenant IDs. Never add lifecycle
+or webhook files before the backfill in the historical cutover root.
+
+Before releasing current main against a database that previously used
+`cla-production-cutover.xml`:
+
+1. Restore the latest approved snapshot into an isolated private rehearsal
+   database with all writers and provider credentials disabled.
+2. Confirm `DATABASECHANGELOG` contains exactly one successful
+   `cla-organization-backfill-1` and none of the lifecycle/webhook changesets.
+3. Run master `validate`, `status --verbose`, and `update-sql`. Require exactly
+   seven lifecycle plus eight webhook changesets pending; the CLA backfill must
+   not be pending.
+4. Apply master, rerun it, and require zero pending changesets. Reconcile all
+   survey/respondent/template counts and stable IDs, verify existing bearer links,
+   and confirm delivery, sending, webhook, and suppression controls remain off.
+5. Rehearse snapshot-endpoint rollback without modifying either database.
+6. For the real transition, quiesce all writers and explicitly disable and verify
+   delivery claiming, provider sending, webhook claiming/processing, ingestion,
+   and suppression enforcement before deployment. This prevents deploy handoff
+   from restoring a previously enabled control before reconciliation.
+7. Confirm a fresh final snapshot and rollback manifest, set both one-time CLA
+   flags to `false`, and deploy only the rehearsed immutable release. Do not
+   reactivate traffic or workers until master reports zero pending changesets,
+   reconciliation passes, and the published privacy policy is reachable from the
+   canonical and retained legacy survey origins.
+
+## Current master-transition rollback
+
+Record a fresh pre-transition snapshot and a compatible post-CLA/pre-lifecycle
+application artifact during rehearsal. If transition validation fails, restore
+that fresh snapshot to a unique private endpoint, switch only the reviewed runtime
+DB endpoint, and deploy that recorded compatible artifact with both CLA one-time
+flags false. Verify the rehearsal manifest and existing respondent links before
+reopening traffic. Preserve both the failed migrated database and the restored
+rollback database; never overwrite either one.
+
+The historical pre-CLA snapshot and artifact below are only for reversing the
+original CLA organization cutover. They are not valid rollback points for the
+current master transition because they would discard post-cutover data.
 
 ## Cleanup invocation environment
 
@@ -95,7 +150,7 @@ command logs, Terraform variables, or repository files.
 - `sgarcia@cladvisors.com` is active CLA owner and not platform admin.
 - Legacy users 1 and 2 are disabled, have no memberships, and have no sessions.
 
-## Rollback
+## Historical CLA cutover rollback
 
 Application artifact rollback does not reverse this data migration. If validation
 fails after commit:

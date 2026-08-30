@@ -19,6 +19,12 @@ vi.mock('../context/AuthContext', () => ({
   }),
 }));
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((yes) => { resolve = yes; });
+  return { promise, resolve };
+};
+
 beforeEach(() => {
   canEdit = true;
   vi.clearAllMocks();
@@ -118,6 +124,30 @@ test('users without edit access do not see copy or email demo actions', async ()
   await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
   expect(screen.queryByText('Copy Survey')).not.toBeInTheDocument();
   expect(screen.queryByText('Send Email Demo')).not.toBeInTheDocument();
+});
+
+test('locks a selected survey immediately after launch acceptance while refresh is delayed', async () => {
+  const refresh = deferred();
+  const viewed = vi.fn();
+  api.get.mockResolvedValue({ data: {
+    lifecycleStatus: 'draft', eligibleCount: 1, excludedCount: 0,
+    canLaunch: true, blockers: [], warnings: [], templateCoverage: [],
+  } });
+  api.post.mockResolvedValue({ status: 202, data: { lifecycleStatus: 'active', launch: { id: 'launch-1' } } });
+  render(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey', lifecycleStatus: 'draft' }}
+    onLifecycleChange={() => refresh.promise}
+    onViewLifecycle={viewed}
+  />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Launch Survey'));
+  await screen.findByText('1 eligible');
+  await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeEnabled());
+  await userEvent.click(screen.getByRole('button', { name: 'Queue invitations' }));
+  await waitFor(() => expect(viewed).toHaveBeenCalledWith(expect.objectContaining({ id: 'survey-1', lifecycleStatus: 'active' })));
+  refresh.resolve([]);
 });
 
 test('passes only this row’s unsaved sections into the launch blocker', async () => {

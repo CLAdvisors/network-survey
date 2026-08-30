@@ -118,6 +118,10 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
   const handleLaunchAccepted = async (payload) => {
     setStartOpen(false);
     notify('Invitation launch queued. Track acceptance and failures in delivery status.');
+    onViewLifecycle?.({
+      ...row,
+      lifecycleStatus: payload?.lifecycleStatus || payload?.launch?.lifecycleStatus || 'active',
+    });
     const refreshedSurveys = await onLifecycleChange?.(id, payload);
     const refreshed = Array.isArray(refreshedSurveys)
       ? refreshedSurveys.find((survey) => surveyId(survey) === id)

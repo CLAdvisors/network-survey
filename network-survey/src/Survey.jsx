@@ -1,13 +1,17 @@
 import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Box, Container, Typography } from '@mui/material';
 import { AppPage, Surface, appShadows } from '@network-survey/frontend-react';
 import Header from './Header';
 import SurveyComponent from './SurveyComponent';
 import Logo from './logo.svg?react';
 import { PRODUCTION_SURVEY_WRAPPER_SX } from '@network-survey/frontend-shared';
+import { instructionsForSurvey } from './surveyInstructions';
 
 const Survey = () => {
   const [title, setTitle] = useState('');
+  const [searchParams] = useSearchParams();
+  const surveyName = searchParams.get('surveyName');
 
   return (
     <AppPage sx={{ pb: 4 }}>
@@ -40,8 +44,7 @@ const Survey = () => {
               Survey Instructions
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
-              For each question below, indicate the people you interact with at work.
-              {' '}The survey will take 10-15 minutes to complete; please plan to finish in one session.
+              {instructionsForSurvey(surveyName, title)}
             </Typography>
           </Box>
 

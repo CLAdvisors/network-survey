@@ -12,6 +12,7 @@ import {
 } from '@network-survey/frontend-shared';
 import Header from './Header';
 import Logo from './logo.svg?react';
+import { DEFAULT_SURVEY_INSTRUCTIONS } from './surveyInstructions';
 import {
   disposeTagboxSearchPlaceholder,
   restoreTagboxSearchPlaceholder,
@@ -227,7 +228,7 @@ export default function MobileSurveyHarness() {
                   Survey Instructions
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
-                  For each question below, indicate the people you interact with at work. The survey will take 10–15 minutes to complete; please plan to finish in one session.
+                  {DEFAULT_SURVEY_INSTRUCTIONS}
                 </Typography>
               </Box>
                 <Box

@@ -92,6 +92,7 @@ jobs:
           SQL
           PGPASSWORD=postgres createdb -h 127.0.0.1 -U postgres -T ONA_upgrade ONA_conflict
           PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d ONA_conflict -v ON_ERROR_STOP=1 \
+            -c "ALTER TABLE respondent DROP CONSTRAINT respondent_survey_id_fkey" \
             -c "UPDATE respondent SET survey_id=gen_random_uuid() WHERE survey_name='Upgrade Active'"
           if docker run --rm --network host -v "$PWD/db:/db" liquibase/liquibase:4.29 \
             --url=jdbc:postgresql://127.0.0.1:5432/ONA_conflict --username=postgres --password=postgres \

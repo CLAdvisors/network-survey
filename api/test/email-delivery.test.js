@@ -1,9 +1,11 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
+const fs = require('node:fs');
+const path = require('node:path');
+const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
 const { evaluateReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
-const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous } = require('../email-worker');
+const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
 test('invitation rendering escapes templates and emits equivalent accessible HTML/text', () => {
   const token = 'respondent-token-123';
@@ -21,6 +23,71 @@ test('invitation rendering escapes templates and emits equivalent accessible HTM
   assert.equal((payload.html.match(new RegExp(token, 'g')) || []).length, 1);
   assert.equal((payload.text.match(new RegExp(token, 'g')) || []).length, 1);
   assert.doesNotMatch(payload.html, /stripe|lorem ipsum/i);
+});
+
+test('current invitations include the approved privacy notice and accessible policy link', () => {
+  const payload = buildInvitationPayload({
+    to: 'person@example.com', bodyText: 'Please participate.', surveyBaseUrl: 'https://survey.example.test/form',
+    surveyName: 'Leadership & Team', token: 'respondent-token', language: 'English',
+  });
+  for (const clause of [
+    'confidential, but not anonymous',
+    'will not be shared with your employer',
+    'groups of at least five respondents',
+    'will not disclose how an identifiable individual responded or who nominated them',
+    'Open-ended comments are not attributed',
+    'de-identified survey data for research, benchmarking',
+    'retained for up to three years',
+  ]) {
+    assert.match(payload.html, new RegExp(clause, 'i'));
+    assert.match(payload.text, new RegExp(clause, 'i'));
+  }
+  assert.match(payload.html, /href="https:\/\/survey\.example\.test\/privacy-policy\.html"/);
+  assert.match(payload.text, /Employee Survey Platform Privacy Policy: https:\/\/survey\.example\.test\/privacy-policy\.html/);
+});
+
+test('policy links are root-relative, validated, and escaped in invitation HTML', () => {
+  assert.equal(buildPrivacyPolicyUrl('https://survey.example.test/forms/'), 'https://survey.example.test/privacy-policy.html');
+  assert.throws(() => buildPrivacyPolicyUrl('not a URL'), /valid HTTP\(S\) URL/);
+  assert.throws(() => buildPrivacyPolicyUrl('javascript:alert(1)'), /HTTP\(S\) URL without/);
+  assert.throws(() => buildPrivacyPolicyUrl('https://user:secret@example.test'), /without credentials/);
+  assert.throws(() => buildPrivacyPolicyUrl('https://example.test/?next=other'), /query parameters/);
+  const payload = buildInvitationPayload({to:'person@example.com',bodyText:'<script>unsafe</script>',surveyBaseUrl:'https://survey.example.test',surveyName:'A" onmouseover="alert(1)',token:'token',rendererVersion:RENDERER_VERSION});
+  assert.doesNotMatch(payload.html, /<script>|href="[^"]*" onmouseover=/i);
+  assert.match(payload.html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
+});
+
+test('versioned rendering preserves queued v1/v2 payload hashes and v3 tag behavior', () => {
+  const base={to:'a@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',bodyText:'Welcome',surveyBaseUrl:'https://survey.test',surveyName:'S',token:'secret-token',language:'en',deliveryId:'11111111-1111-4111-8111-111111111111',environment:'staging'};
+  const expected = new Map([
+    [LEGACY_RENDERER_VERSION, 'c378d13b62c038b6b67a51e559bbedbee00fd19443c7bfe671c6a123c5d04be9'],
+    [TAGGED_RENDERER_VERSION, 'c07845c9d4f2a5aa6c5ffb3a9b70ad1f5e78a69ceb9971c7d7c85463737abdad'],
+    [RENDERER_VERSION, '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd'],
+  ]);
+  for (const [rendererVersion, hash] of expected) {
+    const payload = buildInvitationPayload({...base,rendererVersion});
+    assert.equal(payloadHash(payload), hash);
+    assert.equal('tags' in payload, rendererVersion !== LEGACY_RENDERER_VERSION);
+  }
+  assert.throws(() => buildInvitationPayload({...base,rendererVersion:'survey-invitation-unknown'}), /Unsupported invitation renderer/);
+});
+
+test('worker reconstructs queued payloads from renderer version and snapshotted survey name', () => {
+  const base={id:'11111111-1111-4111-8111-111111111111',to_address:'a@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',body_text:'Welcome',survey_base_url:'https://survey.test',uuid:'secret-token',language:'en',render_inputs:{surveyName:'S'}};
+  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:LEGACY_RENDERER_VERSION},'Renamed','staging')), 'c378d13b62c038b6b67a51e559bbedbee00fd19443c7bfe671c6a123c5d04be9');
+  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:TAGGED_RENDERER_VERSION},'Renamed','staging')), 'c07845c9d4f2a5aa6c5ffb3a9b70ad1f5e78a69ceb9971c7d7c85463737abdad');
+  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:RENDERER_VERSION},'Renamed','staging')), '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd');
+});
+
+test('published privacy policy is the approved complete document', () => {
+  const policyPath = path.join(__dirname, '../../network-survey/public/privacy-policy.html');
+  const policy = fs.readFileSync(policyPath, 'utf8');
+  assert.match(policy, /<h1>Employee Survey Platform Privacy Policy<\/h1>/);
+  assert.match(policy, /Effective Date: August 1, 2026/);
+  for (let section = 1; section <= 15; section += 1) assert.match(policy, new RegExp(`<h2>${section}\\.`));
+  assert.match(policy, /mailto:info@contemporaryleadership\.com/);
+  assert.doesNotMatch(policy, /Lorem ipsum|\[August 1, 2026\]/i);
+  assert.equal(require('node:crypto').createHash('sha256').update(policy).digest('hex'), '76059717bbe70c9cb2868c62ba1a74aaab1ef6e2ef6a2813b9c92bd2a460bb6b');
 });
 
 test('Resend HTTP provider transmits idempotency and requires an accepted message id', async () => {
@@ -116,7 +183,8 @@ test('transactional launch locks control then survey, snapshots all work, activa
   const orgId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const launchId='22222222-2222-4222-8222-222222222222';
   const calls=[];
-  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+  let releaseCount=0;
+  const client={release(){releaseCount+=1;},async query(sql,values=[]){calls.push({sql,values});
     if (/SELECT \* FROM email_worker_control/.test(sql)) return {rows:[{claiming_enabled:true,minimum_release:''}]};
     if (/SELECT \* FROM email_sending_control/.test(sql)) return {rows:[{sending_enabled:true,minimum_release:'release-pinned-by-sending'}]};
     if (/SELECT s\.\*, om\.role/.test(sql)) return {rows:[{id:surveyId,name:'Survey A',organization_id:orgId,role:'editor',lifecycle_status:'draft',archived_at:null,questions:{elements:[{name:'q1',type:'text'}]}}]};
@@ -137,6 +205,10 @@ test('transactional launch locks control then survey, snapshots all work, activa
   assert.match(calls.at(-1).sql,/COMMIT/);
   const deliveryCall=calls.find(({sql})=>/INSERT INTO survey_email_deliveries/.test(sql));
   assert.equal(deliveryCall.values.includes('secret-token'),false,'raw bearer token is not persisted in outbox columns');
+  assert.equal(deliveryCall.values[12],RENDERER_VERSION);
+  const launchedPayload=buildInvitationPayload({to:'person@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',bodyText:'Please participate',surveyBaseUrl:'https://survey.test',surveyName:'Survey A',token:'secret-token',language:'english',deliveryId:deliveryCall.values[0],environment:'test',rendererVersion:RENDERER_VERSION});
+  assert.equal(deliveryCall.values[14],payloadHash(launchedPayload));
+  assert.equal(releaseCount,1,'launchSurvey releases its checked-out connection exactly once');
 });
 
 test('close atomically cancels queued work, fences leased work, and writes strict audit', async()=>{

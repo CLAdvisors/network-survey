@@ -113,9 +113,22 @@ function buildSurveyEmailHtml(text, link, language = 'en') {
   return require('./email').renderInvitation({ bodyText: text, link, language }).html;
 }
 
+function buildSurveyUrl(baseUrl, query, nodeEnv = process.env.NODE_ENV) {
+  if (!baseUrl) throw new Error('Missing SURVEY_URL environment variable');
+  const url = new URL(baseUrl);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('SURVEY_URL must be an HTTP(S) base URL without credentials, query parameters, or a fragment');
+  }
+  if (['prod', 'production'].includes(String(nodeEnv).toLowerCase()) && url.protocol !== 'https:') {
+    throw new Error('SURVEY_URL must use HTTPS in production');
+  }
+  for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
+  return url.toString();
+}
+
 async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Network Survey', language = 'en') {
   if (!directSurveyProvider) throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
-  const link = `${process.env.SURVEY_URL}/?surveyName=${encodeURIComponent(survey.name)}&demoToken=${encodeURIComponent(demoToken)}`;
+  const link = buildSurveyUrl(process.env.SURVEY_URL, { surveyName: survey.name, demoToken });
   const rendered = require('./email').renderInvitation({ bodyText: text, link, language });
   return invokeSynchronousProvider(email, () => directSurveyProvider.send(
     { from: 'CLA Survey <survey@cladvisors.com>', to: email, subject: `[Demo] ${subject}`, ...rendered },
@@ -263,16 +276,21 @@ function prepareSurveyForDemo(value) {
 app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '256kb' }), createResendWebhookHandler({ pool, env: process.env }));
 app.use(express.json());
 
+function configuredCorsOrigins(env = process.env) {
+  const additionalSurveyOrigins = String(env.SURVEY_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  return [...new Set([env.FRONTEND_URL, env.SURVEY_URL, ...additionalSurveyOrigins]
+    .filter(Boolean)
+    .map((origin) => origin.replace(/\/$/, '')))];
+}
+
 app.use(cors({
   origin: function(origin, callback) {
-    const allowedOrigins = [
-      process.env.FRONTEND_URL?.replace(/\/$/, ''),
-      process.env.SURVEY_URL?.replace(/\/$/, '')
-    ].filter(Boolean); // Remote undefined values if any
-    
-    // Normalize origin by removing trailing slash if present
+    const allowedOrigins = configuredCorsOrigins();
     const normalizedOrigin = origin ? origin.replace(/\/$/, '') : origin;
-    
+
     if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
@@ -3366,4 +3384,6 @@ module.exports = {
   normalizeInvitationLanguage,
   normalizeInvitationTemplates,
   insertEmails,
+  configuredCorsOrigins,
+  buildSurveyUrl,
 };

@@ -99,8 +99,26 @@ variable "dashboard_domain" {
 }
 
 variable "survey_domain" {
-  description = "Domain name for the production survey app"
+  description = "Existing production survey domain retained as a CloudFront alias for issued links"
   default     = "demo.ona.survey.bennetts.work"
+}
+
+variable "survey_certificate_domain" {
+  description = "Stable primary domain on the additive survey certificate; do not change this to roll back link generation"
+  type        = string
+  default     = "survey.cladvisorsurveys.com"
+}
+
+variable "survey_link_domain" {
+  description = "Active production survey domain used only for newly generated links; persist the canonical value only after application DNS is verified"
+  type        = string
+  default     = "demo.ona.survey.bennetts.work"
+}
+
+variable "additional_survey_domains" {
+  description = "Additional production survey aliases retained alongside the existing and canonical domains"
+  type        = list(string)
+  default     = []
 }
 
 variable "replacement_resource_environment" {

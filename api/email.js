@@ -3,7 +3,9 @@
 const crypto = require('crypto');
 
 const DEFAULT_SENDER = 'CLA Survey <survey@cladvisors.com>';
-const RENDERER_VERSION = 'survey-invitation-v2';
+const LEGACY_RENDERER_VERSION = 'survey-invitation-v1';
+const TAGGED_RENDERER_VERSION = 'survey-invitation-v2';
+const RENDERER_VERSION = 'survey-invitation-v3';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -33,7 +35,18 @@ function documentLanguage(language) {
   return codes[normalized] || (/^[a-z]{2}(?:-[a-z0-9]{2,8})*$/i.test(normalized) ? normalized : 'en');
 }
 
-function renderInvitation({ bodyText, link, language = 'en' }) {
+function buildPrivacyPolicyUrl(surveyBaseUrl) {
+  if (!surveyBaseUrl) throw new Error('Survey base URL is required');
+  let url;
+  try { url = new URL(surveyBaseUrl); }
+  catch { throw new Error('Survey base URL must be a valid HTTP(S) URL'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('Survey base URL must be an HTTP(S) URL without credentials, query parameters, or fragments');
+  }
+  return new URL('/privacy-policy.html', url).toString();
+}
+
+function renderLegacyInvitation({ bodyText, link, language = 'en' }) {
   const normalized = normalizeTemplateText(bodyText);
   const lang = documentLanguage(language);
   const paragraphs = normalized.split(/\n{2,}/).map((paragraph) =>
@@ -45,11 +58,38 @@ function renderInvitation({ bodyText, link, language = 'en' }) {
   return { html, text };
 }
 
-function buildInvitationPayload({ to, sender = DEFAULT_SENDER, subject = 'CLA Network Survey', bodyText, surveyBaseUrl, surveyName, token, language, deliveryId, environment }) {
+const PRIVACY_PARAGRAPHS = [
+  'This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.',
+  'Survey results are generally reported in groups of at least five respondents. Certain analyses, particularly Organizational Network Analysis (ONA), may identify individuals when doing so is an intended part of the analysis—for example, identifying key organizational connectors—but CLA will not disclose how an identifiable individual responded or who nominated them.',
+  'Open-ended comments are not attributed to individual respondents. However, what you write may sometimes reveal your identity, so please avoid including your name or unnecessary identifying information if you wish to protect your confidentiality.',
+  'CLA may use de-identified survey data for research, benchmarking, and to improve our assessments and methodologies. Identifiable survey data is generally retained for up to three years, and you may request deletion of your personal information, subject to applicable legal and other permitted exceptions.',
+];
+
+function renderPrivacyInvitation({ bodyText, link, language = 'en', privacyPolicyUrl }) {
+  const legacy = renderLegacyInvitation({ bodyText, link, language });
+  const privacyHtml = `<section aria-labelledby="privacy-heading"><h2 id="privacy-heading" style="font-size:20px;line-height:28px;color:#1e293b">Your Privacy</h2>${PRIVACY_PARAGRAPHS.map((paragraph) => `<p style="font-size:16px;line-height:24px;color:#334155">${escapeHtml(paragraph)}</p>`).join('')}<p style="font-size:16px;line-height:24px;color:#334155">For more information, review our <a href="${escapeHtml(privacyPolicyUrl)}">Employee Survey Platform Privacy Policy</a>.</p></section>`;
+  const html = legacy.html.replace('<p>— The CLA team</p>', `${privacyHtml}<p>— The CLA team</p>`);
+  const text = legacy.text.replace('\n\n— The CLA team', `\n\nYour Privacy\n\n${PRIVACY_PARAGRAPHS.join('\n\n')}\n\nEmployee Survey Platform Privacy Policy: ${privacyPolicyUrl}\n\n— The CLA team`);
+  return { html, text };
+}
+
+function renderInvitation({ bodyText, link, language = 'en', rendererVersion = RENDERER_VERSION, privacyPolicyUrl }) {
+  if ([LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION].includes(rendererVersion)) {
+    return renderLegacyInvitation({ bodyText, link, language });
+  }
+  if (rendererVersion === RENDERER_VERSION) {
+    const policyUrl = privacyPolicyUrl || new URL('/privacy-policy.html', link).toString();
+    return renderPrivacyInvitation({ bodyText, link, language, privacyPolicyUrl: policyUrl });
+  }
+  throw new Error(`Unsupported invitation renderer version: ${rendererVersion}`);
+}
+
+function buildInvitationPayload({ to, sender = DEFAULT_SENDER, subject = 'CLA Network Survey', bodyText, surveyBaseUrl, surveyName, token, language, deliveryId, environment, rendererVersion = RENDERER_VERSION }) {
   const link = buildSurveyLink(surveyBaseUrl, surveyName, token);
-  const rendered = renderInvitation({ bodyText, link, language });
+  const privacyPolicyUrl = rendererVersion === RENDERER_VERSION ? buildPrivacyPolicyUrl(surveyBaseUrl) : undefined;
+  const rendered = renderInvitation({ bodyText, link, language, rendererVersion, privacyPolicyUrl });
   const payload = { from: sender, to, subject, html: rendered.html, text: rendered.text };
-  if (deliveryId && environment) {
+  if ([TAGGED_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) && deliveryId && environment) {
     payload.tags = [
       { name: 'app', value: 'network_survey' },
       { name: 'environment', value: String(environment).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 256) },
@@ -165,4 +205,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction };
+module.exports = { DEFAULT_SENDER, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction };

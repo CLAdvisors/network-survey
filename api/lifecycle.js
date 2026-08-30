@@ -244,7 +244,7 @@ async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotenc
       const language = normalizeLanguage(recipient.lang);
       const bodyText = readiness.templateMap.get(language);
       const deliveryId = crypto.randomUUID();
-      const payload = buildInvitationPayload({ to:String(recipient.contact_info).trim().toLowerCase(),sender,subject,bodyText,surveyBaseUrl:config.SURVEY_URL,surveyName:survey.name,token:recipient.uuid,language,deliveryId,environment:env });
+      const payload = buildInvitationPayload({ to:String(recipient.contact_info).trim().toLowerCase(),sender,subject,bodyText,surveyBaseUrl:config.SURVEY_URL,surveyName:survey.name,token:recipient.uuid,language,deliveryId,environment:env,rendererVersion:RENDERER_VERSION });
       await client.query(`INSERT INTO survey_email_deliveries(id,launch_id,survey_id,organization_id,respondent_id,to_address,recipient_display_name,language,sender,subject,template_hash,survey_base_url,renderer_version,render_inputs,expected_payload_hash,provider_idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16)`, [deliveryId,launch.id,survey.id,survey.organization_id,recipient.respondent_id,String(recipient.contact_info).trim().toLowerCase(),recipient.name,language,sender,subject,fingerprint(bodyText),config.SURVEY_URL,RENDERER_VERSION,JSON.stringify({surveyName:survey.name}),payloadHash(payload),`survey-delivery-${deliveryId}`]);
     }
     await client.query(`UPDATE survey SET lifecycle_status='active',started_at=now(),started_by_user_id=$1,closed_at=NULL,closed_by_user_id=NULL,lifecycle_version=lifecycle_version+1 WHERE id=$2`, [user.id,survey.id]);

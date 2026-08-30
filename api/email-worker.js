@@ -15,6 +15,10 @@ const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));
 const isOutsideProviderIdempotencyWindow=(startedAt,now,hours)=>Boolean(startedAt)&&new Date(startedAt).getTime()<=new Date(now).getTime()-hours*3600000;
 const canRetryAmbiguous=({firstProviderStartedAt,providerAttemptCount,createdAt,now,idempotencyHours,maxAttempts,maxAgeHours})=>Boolean(firstProviderStartedAt)&&!isOutsideProviderIdempotencyWindow(firstProviderStartedAt,now,idempotencyHours)&&Number(providerAttemptCount)<maxAttempts&&new Date(createdAt).getTime()>new Date(now).getTime()-maxAgeHours*3600000;
 const bounded=(value,max=500)=>value===null||value===undefined?null:sanitizeProviderMessage(value).slice(0,max);
+const buildDeliveryPayload=(row,surveyName,environment)=>{
+  const renderInputs=typeof row.render_inputs==='string'?JSON.parse(row.render_inputs):row.render_inputs;
+  return buildInvitationPayload({to:row.to_address,sender:row.sender,subject:row.subject,bodyText:row.body_text,surveyBaseUrl:row.survey_base_url,surveyName:renderInputs?.surveyName||surveyName,token:row.uuid,language:row.language,deliveryId:row.id,environment,rendererVersion:row.renderer_version});
+};
 
 class DeliveryWorker {
   constructor({pool,provider,env=process.env,clock=()=>new Date(),random=Math.random,sleepFn=sleep,instanceId}={}){
@@ -63,8 +67,9 @@ class DeliveryWorker {
         const blocked=await client.query(`SELECT 1 FROM email_suppressions WHERE provider_account_scope=$1 AND normalized_address=$2 AND (provider_active OR locally_overridden_at IS NULL) LIMIT 1`,[this.env.RESEND_PROVIDER_ACCOUNT_SCOPE||this.environment,String(row.to_address).trim().toLowerCase()]);
         if(blocked.rowCount){await this.cancelSuppressed(client,row);await client.query('COMMIT');return {action:'suppressed'};}
       }
-      const tagged=row.renderer_version==='survey-invitation-v2';
-      const payload=buildInvitationPayload({to:row.to_address,sender:row.sender,subject:row.subject,bodyText:row.body_text,surveyBaseUrl:row.survey_base_url,surveyName:survey.name,token:row.uuid,language:row.language,deliveryId:tagged?row.id:null,environment:tagged?this.environment:null});
+      let payload;
+      try{payload=buildDeliveryPayload(row,survey.name,this.environment);}
+      catch{await this.finalizeTerminal(client,row,'uncertain','renderer_reconstruction_failed','Stored invitation renderer inputs could not be reconstructed safely');await client.query('COMMIT');return {action:'mismatch'};}
       if(payloadHash(payload)!==row.expected_payload_hash){await this.finalizeTerminal(client,row,'uncertain','payload_hash_mismatch','Rendered provider payload no longer matches launch snapshot');await client.query('COMMIT');return {action:'mismatch'};}
       const remaining=new Date(row.lease_expires_at).getTime()-this.clock().getTime()-2000;
       if(remaining<=1000){await this.releaseWithoutSend(client,row,'lease_too_short_before_provider');await client.query('COMMIT');return {action:'short_lease'};}
@@ -103,4 +108,4 @@ class DeliveryWorker {
 
 async function main(){const pool=createPool();const provider=new ResendProvider({apiKey:process.env.RESEND_API_KEY||process.env.RESEND_KEY,timeoutMs:Number(process.env.EMAIL_PROVIDER_TIMEOUT_MS||15000)});const worker=new DeliveryWorker({pool,provider});const stop=()=>worker.stop();process.on('SIGTERM',stop);process.on('SIGINT',stop);try{await worker.run();}finally{await pool.end();}}
 if(require.main===module)main().catch((error)=>{console.error('Email worker failed:',bounded(error.message));process.exit(1);});
-module.exports={DeliveryWorker,createPool,isOutsideProviderIdempotencyWindow,canRetryAmbiguous};
+module.exports={DeliveryWorker,createPool,isOutsideProviderIdempotencyWindow,canRetryAmbiguous,buildDeliveryPayload};

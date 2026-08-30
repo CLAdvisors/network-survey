@@ -104,11 +104,9 @@ function evaluateReadiness(survey, data, config = process.env) {
     if (text) templateMap.set(language, text);
     if (subject.length > 255) blockers.push({ code: 'template_subject_invalid', language, message: `The ${language} invitation subject must contain 255 characters or fewer.` });
     else if (subject) templateSubjectMap.set(language, subject);
+    else if (text) blockers.push({ code: 'template_subject_missing', language, message: `A nonempty ${language} invitation subject is required.` });
   }
-  for (const language of languages) {
-    if (!templateMap.has(language)) blockers.push({ code: 'template_missing', language, message: `A nonempty ${language} template is required.` });
-    if (!templateSubjectMap.has(language)) blockers.push({ code: 'template_subject_missing', language, message: `A nonempty ${language} invitation subject is required.` });
-  }
+  for (const language of languages) if (!templateMap.has(language)) blockers.push({ code: 'template_missing', language, message: `A nonempty ${language} template is required.` });
   if (!config.SURVEY_URL) blockers.push({ code: 'survey_url_missing', message: 'Survey URL is not configured.' });
   if (!(config.RESEND_API_KEY || config.RESEND_KEY)) blockers.push({ code: 'provider_key_missing', message: 'Email provider is not configured.' });
   if (!(config.SURVEY_EMAIL_SENDER || DEFAULT_SENDER)) blockers.push({ code: 'sender_missing', message: 'Survey sender is not configured.' });

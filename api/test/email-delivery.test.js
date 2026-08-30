@@ -145,6 +145,11 @@ test('readiness validates the entire audience and exact normalized template cove
   assert.ok(missingSubject.blockers.some(({code})=>code==='template_subject_missing'));
   const oversizedSubject = evaluateReadiness(survey, { recipients:[{respondent_id:6,contact_info:'x@example.com',uuid:'token',lang:'English'}], templates:[{lang:'English',text:'Welcome',invitation_subject:'x'.repeat(256)}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.ok(oversizedSubject.blockers.some(({code})=>code==='template_subject_invalid'));
+  const unusedMissingSubject = evaluateReadiness(survey, { recipients:[{respondent_id:7,contact_info:'x@example.com',uuid:'token',lang:'English'}], templates:[
+    {lang:'English',text:'Welcome',invitation_subject:'Invitation'},
+    {lang:'French',text:'Bienvenue',invitation_subject:null},
+  ] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  assert.ok(unusedMissingSubject.blockers.some(({code,language})=>code==='template_subject_missing' && language==='french'));
   assert.equal(good.templateSubjectMap.get('english'),'Team invitation');
   const manyInvalid = evaluateReadiness(survey, { recipients:Array.from({length:150},(_,index)=>({respondent_id:index,contact_info:'invalid',uuid:null,lang:''})), templates:[] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.ok(manyInvalid.blockerCount > 100);

@@ -18,6 +18,7 @@ dotenvFlow.config();
 const { ResendProvider, reserveProviderRateOnClient } = require('./email');
 const lifecycle = require('./lifecycle');
 const { createResendWebhookHandler } = require('./webhooks');
+const { displayedRespondentPredicate, displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -405,6 +406,10 @@ function isPlatformAdmin(user) {
 function legacySurveyPredicate(alias = '') {
   const prefix = alias ? `${alias}.` : '';
   return `(${prefix}survey_id = $1 OR (${prefix}survey_id IS NULL AND ${prefix}survey_name = $2))`;
+}
+
+function surveySummaryRespondentCount(value) {
+  return String(Number(value || 0));
 }
 
 async function columnExists(tableName, columnName) {
@@ -1198,13 +1203,13 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
        WHERE survey_id = $3 OR (survey_id IS NULL AND survey_name = $4)`,
       [copied.name, copied.id, source.id, source.name]
     );
+    // Keep the exact internal placeholder expected by legacy status flows, but
+    // never copy source roster rows or participant-linked state into the new survey.
     await client.query(
       `INSERT INTO Respondent
          (name, contact_info, survey_name, survey_id, can_respond, uuid, lang, response, email_sent)
-       SELECT name, contact_info, $1, $2, can_respond, gen_random_uuid()::text, lang, NULL, FALSE
-       FROM Respondent
-       WHERE survey_id = $3 OR (survey_id IS NULL AND survey_name = $4)`,
-      [copied.name, copied.id, source.id, source.name]
+       VALUES ('None', 'N/A', $1, $2, FALSE, gen_random_uuid()::text, 'English', NULL, FALSE)`,
+      [copied.name, copied.id]
     );
     await client.query(
       `INSERT INTO audit_events
@@ -1219,6 +1224,7 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
       title: copied.title,
       organizationId: copied.organization_id,
       sourceSurveyId: source.id,
+      respondentsCopied: false,
       respondentStateReset: true,
     };
   } catch (error) {
@@ -2735,6 +2741,7 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
         `SELECT r.name, r.contact_info
          FROM Respondent r
          WHERE ${legacySurveyPredicate('r')}
+           AND ${displayedRespondentPredicate('r')}
            AND r.uuid != $3
            AND CONCAT(COALESCE(r.name, ''), ' (', COALESCE(r.contact_info, ''), ')') = ANY($4::text[])`,
         [validation.respondent.survey_id, surveyName, userId, requestedValues]
@@ -2779,6 +2786,7 @@ app.get('/api/admin/names', requireAuth, async (req, res) => {
       SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
       WHERE ${legacySurveyPredicate('r')}
+      AND ${displayedRespondentPredicate('r')}
       AND (r.name ILIKE $3 OR r.contact_info ILIKE $3)
       ORDER BY r.name
       OFFSET $4
@@ -2847,6 +2855,7 @@ app.get('/api/names', respondentRateLimiter, async (req, res) => {
       SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
       WHERE ${legacySurveyPredicate('r')}
+      AND ${displayedRespondentPredicate('r')}
       AND ($3::text IS NULL OR r.uuid != $3)
       AND (r.name ILIKE $4 OR r.contact_info ILIKE $4)
       ORDER BY r.name
@@ -3040,7 +3049,7 @@ app.get('/api/targets', requireAuth, async(req, res) => {
                WHERE ${legacySurveyPredicate('r')}`;
   client.query(query, [survey.id, survey.name])
     .then(response => {
-        const respondents = response.rows.map((row, index) => ({
+        const respondents = response.rows.filter((row) => !isLegacyPlaceholderRespondent(row)).map((row) => ({
             id: row.respondent_id,
             name: row.name,
             email: row.contact_info,
@@ -3073,7 +3082,7 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
     return res.status(500).json({ message: 'Failed to retrieve surveys.' });
   }
 
-  const query = isPlatformAdmin(req.user) ? `
+  const query = (isPlatformAdmin(req.user) ? `
   SELECT s.id, s.name, s.organization_id, o.name AS organization_name,
          'owner'::text AS role,
          s.creation_date, s.lifecycle_status, s.started_at, s.closed_at,
@@ -3142,7 +3151,7 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
   WHERE s.archived_at IS NULL
   GROUP BY s.id, s.name, s.organization_id, o.name, om.role, starter.display_name, starter.username, s.creation_date, s.questions, s.lifecycle_status, s.started_at, s.closed_at
   ORDER BY s.creation_date DESC NULLS LAST
-  `;
+  `).replace('COUNT(r.respondent_id) AS number_of_respondents', `${displayedRespondentCountExpression('r')} AS number_of_respondents`);
 
   client.query(query, isPlatformAdmin(req.user) ? [] : [req.user.id])
     .then(result => {
@@ -3152,7 +3161,7 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
         organizationId: row.organization_id,
         organizationName: row.organization_name,
         role: row.role,
-        respondents: Math.max(0, Number(row.number_of_respondents || 0) - 1) + "",
+        respondents: surveySummaryRespondentCount(row.number_of_respondents),
         questions: row.number_of_questions + "",
         date: row.creation_date,
         lifecycleStatus: row.lifecycle_status,
@@ -3186,7 +3195,7 @@ app.get('/api/surveyStatus', requireAuth, async (req, res) => {
 
   // NEW DB CODE
   const query = `
-  SELECT COUNT(r.respondent_id) AS number_of_respondents
+  SELECT ${displayedRespondentCountExpression('r')} AS number_of_respondents
   FROM Respondent r
   WHERE ${legacySurveyPredicate('r')};
   `;
@@ -3200,7 +3209,7 @@ app.get('/api/surveyStatus', requireAuth, async (req, res) => {
       const is_questions_null = survey.questions === null;
       // Process the returned values
       res.status(200).json( {
-        userDataStatus: number_of_respondents >  1 ? true : false,
+        userDataStatus: Number(number_of_respondents) > 0,
         questionDataStatus: !is_questions_null
       });
     })
@@ -3386,4 +3395,7 @@ module.exports = {
   insertEmails,
   configuredCorsOrigins,
   buildSurveyUrl,
+  displayedRespondentCountExpression,
+  isLegacyPlaceholderRespondent,
+  surveySummaryRespondentCount,
 };

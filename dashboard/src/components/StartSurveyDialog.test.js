@@ -19,6 +19,12 @@ const readiness = {
   templateCoverage: [{ language: 'English', covered: true }],
 };
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((yes) => { resolve = yes; });
+  return { promise, resolve };
+};
+
 beforeEach(() => vi.clearAllMocks());
 
 test('shows readiness and queues one truthful idempotent launch', async () => {
@@ -37,6 +43,57 @@ test('shows readiness and queues one truthful idempotent launch', async () => {
   expect(body).toEqual({ kind: 'initial' });
   expect(config.headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/i);
   expect(accepted).toHaveBeenCalledWith({ launchId: 'launch-1' });
+});
+
+test('blocks launch with an accessible survey-specific warning for all unsaved sections', async () => {
+  api.get.mockResolvedValue({ data: readiness });
+  const view = render(<StartSurveyDialog
+    open
+    survey={{ id: 'survey-1', name: 'Team Survey' }}
+    onClose={() => {}}
+    onAccepted={() => {}}
+    unsavedChanges={{ invitationSubject: true, invitationBody: true, questions: true, respondents: true }}
+  />);
+
+  const warning = await screen.findByText(/“Team Survey” has unsaved changes/i);
+  expect(warning).toHaveTextContent('invitation subject, invitation body, survey questions, survey respondents');
+  expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
+  expect(api.post).not.toHaveBeenCalled();
+
+  view.rerender(<StartSurveyDialog open survey={{ id: 'survey-2', name: 'Other Survey' }} onClose={() => {}} onAccepted={() => {}} unsavedChanges={{}} />);
+  await waitFor(() => expect(screen.queryByText(/has unsaved changes/i)).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeEnabled());
+});
+
+test('blocks launch while this survey has a pending mutation', async () => {
+  api.get.mockResolvedValue({ data: readiness });
+  render(<StartSurveyDialog
+    open
+    survey={{ id: 'survey-1', name: 'Team Survey' }}
+    onClose={() => {}}
+    onAccepted={() => {}}
+    pendingOperations={{ questions: true }}
+  />);
+
+  expect(await screen.findByText(/Wait for the current update to survey questions to finish before launching “Team Survey”/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
+  expect(api.post).not.toHaveBeenCalled();
+});
+
+test('ignores readiness that resolves after switching to another survey', async () => {
+  const first = deferred();
+  api.get
+    .mockReturnValueOnce(first.promise)
+    .mockResolvedValueOnce({ data: { ...readiness, eligibleCount: 7 } });
+  const view = render(<StartSurveyDialog open survey={{ id: 'survey-1', name: 'First' }} onClose={() => {}} onAccepted={() => {}} />);
+  view.rerender(<StartSurveyDialog open survey={{ id: 'survey-2', name: 'Second' }} onClose={() => {}} onAccepted={() => {}} />);
+  expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
+
+  expect(await screen.findByText('7 eligible')).toBeInTheDocument();
+  first.resolve({ data: { ...readiness, eligibleCount: 99 } });
+  await Promise.resolve();
+  expect(screen.queryByText('99 eligible')).not.toBeInTheDocument();
+  expect(screen.getByText('7 eligible')).toBeInTheDocument();
 });
 
 test('replaces stale readiness with launch-time blockers after a 422', async () => {

@@ -13,16 +13,25 @@ import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
 import { lifecycleStatus, surveyId } from "./surveyLifecycle";
+import { surveyOperationGeneration } from "./useSurveyOperationState";
 
 const Dashboard = () => {
   const theme = useTheme();
   const [surveyData, setSurveyData] = React.useState(null);
   const [selectSurvey, setSelectSurvey] = React.useState(null);
   const [questionData, setQuestionData] = React.useState(null);
+  const [questionLoading, setQuestionLoading] = React.useState(false);
+  const [questionError, setQuestionError] = React.useState(null);
+  const [relatedRefresh, setRelatedRefresh] = React.useState(0);
   const [respondentData, setRespondentData] = React.useState(null);
+  const [respondentLoading, setRespondentLoading] = React.useState(false);
+  const [respondentError, setRespondentError] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
+  const [dirtyBySurvey, setDirtyBySurvey] = React.useState({});
+  const [operationsBySurvey, setOperationsBySurvey] = React.useState({});
   const surveyRequest = React.useRef(0);
+  const pendingSelectionId = React.useRef(null);
   const relatedRequest = React.useRef(0);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
 
@@ -34,6 +43,14 @@ const Dashboard = () => {
       const surveys = response.data.surveys || [];
       setSurveyData(surveys);
       setSelectSurvey((current) => {
+        const preferredId = pendingSelectionId.current;
+        if (preferredId) {
+          const preferred = surveys.find((survey) => surveyId(survey) === preferredId);
+          if (preferred) {
+            pendingSelectionId.current = null;
+            return preferred;
+          }
+        }
         if (!current) return null;
         return surveys.find((survey) => surveyId(survey) === surveyId(current)) || null;
       });
@@ -58,38 +75,86 @@ const Dashboard = () => {
     const fetchRelatedData = async () => {
       if (!selectSurvey) {
         setQuestionData(null);
+        setQuestionLoading(false);
+        setQuestionError(null);
         setRespondentData(null);
+        setRespondentLoading(false);
+        setRespondentError(null);
         return;
       }
       const selectedId = surveyId(selectSurvey);
+      const canViewRespondents = canViewSensitiveSurveyData(selectSurvey);
+      if (canViewRespondents) {
+        setRespondentLoading(true);
+        setRespondentError(null);
+      } else {
+        setRespondentData(null);
+        setRespondentLoading(false);
+        setRespondentError(null);
+      }
+      const questionGeneration = surveyOperationGeneration('questions', selectedId);
+      setQuestionLoading(true);
+      setQuestionError(null);
       try {
         const questionResponse = await api.get(`/listQuestions?surveyName=${selectedId}`, { signal: controller.signal });
-        if (request === relatedRequest.current) setQuestionData(questionResponse.data.questions);
+        if (request === relatedRequest.current) {
+          if (surveyOperationGeneration('questions', selectedId) !== questionGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setQuestionData(questionResponse.data.questions);
+          setQuestionLoading(false);
+        }
       } catch (err) {
-        if (!controller.signal.aborted && request === relatedRequest.current) setQuestionData(null);
+        if (!controller.signal.aborted && request === relatedRequest.current) {
+          if (surveyOperationGeneration('questions', selectedId) !== questionGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setQuestionData(null);
+          setQuestionError('Unable to load survey questions. Retry before editing this survey.');
+          setQuestionLoading(false);
+        }
       }
 
-      if (!canViewSensitiveSurveyData(selectSurvey)) {
-        if (request === relatedRequest.current) setRespondentData(null);
-        return;
-      }
+      if (!canViewRespondents) return;
+      const respondentGeneration = surveyOperationGeneration('respondents', selectedId);
       try {
         const respondentResponse = await api.get(`/targets?surveyName=${selectedId}`, { signal: controller.signal });
-        const filteredRespondents = respondentResponse.data.filter((respondent) => respondent.name !== "None");
-        if (request === relatedRequest.current) setRespondentData(filteredRespondents);
+        if (request === relatedRequest.current) {
+          if (surveyOperationGeneration('respondents', selectedId) !== respondentGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setRespondentData(respondentResponse.data);
+          setRespondentLoading(false);
+        }
       } catch (err) {
-        if (!controller.signal.aborted && request === relatedRequest.current) setRespondentData(null);
+        if (!controller.signal.aborted && request === relatedRequest.current) {
+          if (surveyOperationGeneration('respondents', selectedId) !== respondentGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setRespondentData(null);
+          setRespondentError('Unable to load survey respondents. Retry before editing this survey.');
+          setRespondentLoading(false);
+        }
       }
     };
     fetchRelatedData();
     return () => controller.abort();
-  }, [selectSurvey, canViewSensitiveSurveyData]);
+  }, [selectSurvey, canViewSensitiveSurveyData, relatedRefresh]);
 
   const handleSelectRow = (childData) => {
+    pendingSelectionId.current = null;
     if (surveyId(childData) !== surveyId(selectSurvey)) {
       relatedRequest.current += 1;
       setQuestionData(null);
+      setQuestionLoading(true);
+      setQuestionError(null);
       setRespondentData(null);
+      setRespondentLoading(canViewSensitiveSurveyData(childData));
+      setRespondentError(null);
     }
     setSelectSurvey(childData);
   };
@@ -110,8 +175,24 @@ const Dashboard = () => {
     }
   };
 
-  const handleSurveyCopied = async () => {
-    await fetchSurveyData();
+  const handleSurveyCopied = async (copiedSurvey) => {
+    const copiedId = copiedSurvey?.id || copiedSurvey?.survey_id || null;
+    if (!copiedId) {
+      setSnackbar({ severity: 'error', message: 'The copied survey was created, but its stable ID was not returned.' });
+      return;
+    }
+    pendingSelectionId.current = copiedId;
+    relatedRequest.current += 1;
+    setQuestionData(null);
+    setQuestionLoading(true);
+    setQuestionError(null);
+    setRespondentData(null);
+    setRespondentLoading(true);
+    setRespondentError(null);
+    const surveys = await fetchSurveyData();
+    if (!surveys.some((survey) => surveyId(survey) === copiedId)) {
+      setSnackbar({ severity: 'info', message: 'The copied survey was created and will be selected when refresh completes.' });
+    }
   };
 
   const handleSurveyDeleted = async (deletedSurveyName) => {
@@ -123,18 +204,51 @@ const Dashboard = () => {
     }
   };
 
-  const replaceSurveys = (updatedSurveys) => {
-    setSurveyData(updatedSurveys);
-    setSelectSurvey((current) => current && updatedSurveys.find((survey) => surveyId(survey) === surveyId(current)) || null);
-  };
-
   const handlePanelSurveyRefresh = React.useCallback(async (selectedId) => {
     const surveys = await fetchSurveyData();
     return surveys.find((survey) => surveyId(survey) === selectedId);
   }, [fetchSurveyData]);
 
+  const handleDirtyChange = React.useCallback((owningSurveyId, section, dirty) => {
+    if (!owningSurveyId || !section) return;
+    setDirtyBySurvey((current) => {
+      const surveyDirty = { ...(current[owningSurveyId] || {}) };
+      if (dirty) surveyDirty[section] = true;
+      else delete surveyDirty[section];
+      if (Object.keys(surveyDirty).length === 0) {
+        if (!current[owningSurveyId]) return current;
+        const next = { ...current };
+        delete next[owningSurveyId];
+        return next;
+      }
+      return { ...current, [owningSurveyId]: surveyDirty };
+    });
+  }, []);
+
+  const handleOperationChange = React.useCallback((owningSurveyId, section, pending) => {
+    if (!owningSurveyId || !section) return;
+    setOperationsBySurvey((current) => {
+      const surveyOperations = { ...(current[owningSurveyId] || {}) };
+      if (pending) surveyOperations[section] = true;
+      else delete surveyOperations[section];
+      if (Object.keys(surveyOperations).length === 0) {
+        if (!current[owningSurveyId]) return current;
+        const next = { ...current };
+        delete next[owningSurveyId];
+        return next;
+      }
+      return { ...current, [owningSurveyId]: surveyOperations };
+    });
+  }, []);
+
   const selectedIsLifecycleLocked = Boolean(selectSurvey) && lifecycleStatus(selectSurvey) !== 'draft';
-  const selectedReadOnly = !canEditSurvey(selectSurvey) || selectedIsLifecycleLocked;
+  const selectedCanEdit = canEditSurvey(selectSurvey);
+  const selectedCanViewRespondents = canViewSensitiveSurveyData(selectSurvey);
+  const selectedReadOnly = !selectedCanEdit || selectedIsLifecycleLocked;
+  const hasInvitationDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.invitationSubject || dirty.invitationBody);
+  const hasRespondentDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.respondents);
+  const hasInvitationOperations = Object.values(operationsBySurvey).some((pending) => pending.invitationSubject || pending.invitationBody);
+  const hasRespondentOperations = Object.values(operationsBySurvey).some((pending) => pending.respondents);
 
   return (
     <Box
@@ -189,6 +303,8 @@ const Dashboard = () => {
           onSurveyCopied={handleSurveyCopied}
           selectedSurvey={selectSurvey}
           onLifecycleChange={fetchSurveyData}
+          dirtyBySurvey={dirtyBySurvey}
+          operationsBySurvey={operationsBySurvey}
         />
       </CollapsibleSection>
 
@@ -204,40 +320,56 @@ const Dashboard = () => {
       <CollapsibleSection title="Survey Questions">
         {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
         <QuestionTable
-          key={surveyId(selectSurvey) || 'no-survey'}
-          rows={questionData} 
+          rows={questionData}
+          loading={questionLoading}
+          loadError={questionError}
+          onRetry={() => setRelatedRefresh((value) => value + 1)}
           surveyName={surveyId(selectSurvey)}
-          onQuestionsUpdate={replaceSurveys}
+          onSurveyDataChanged={fetchSurveyData}
           readOnly={selectedReadOnly}
+          onDirtyChange={handleDirtyChange}
+          onOperationChange={handleOperationChange}
         />
       </CollapsibleSection>
 
-      {canEditSurvey(selectSurvey) && (
-        <CollapsibleSection title="Email Notifications">
-          <InvitationSubjectEditor
-            key="invitation-subject-editor"
-            surveyId={surveyId(selectSurvey)}
-            readOnly={selectedIsLifecycleLocked}
-          />
-          <EmailNotificationEditor
-            key="invitation-body-editor"
-            surveyId={surveyId(selectSurvey)}
-            readOnly={selectedIsLifecycleLocked}
-          />
-        </CollapsibleSection>
+      {(selectedCanEdit || hasInvitationDrafts || hasInvitationOperations) && (
+        <Box sx={{ display: selectedCanEdit ? 'block' : 'none' }} aria-hidden={!selectedCanEdit}>
+          <CollapsibleSection title="Email Notifications">
+            <InvitationSubjectEditor
+              key="invitation-subject-editor"
+              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
+              readOnly={selectedIsLifecycleLocked}
+              onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
+            />
+            <EmailNotificationEditor
+              key="invitation-body-editor"
+              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
+              readOnly={selectedIsLifecycleLocked}
+              onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
+            />
+          </CollapsibleSection>
+        </Box>
       )}
 
-      {canViewSensitiveSurveyData(selectSurvey) && (
-        <CollapsibleSection title="Survey Respondents">
-          {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
-          <RespondentTable
-            key={surveyId(selectSurvey)}
-            rows={respondentData}
-            surveyName={surveyId(selectSurvey)}
-            onRespondentsUpdate={replaceSurveys}
-            readOnly={selectedReadOnly}
-          />
-        </CollapsibleSection>
+      {(selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations) && (
+        <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
+          <CollapsibleSection title="Survey Respondents">
+            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
+            <RespondentTable
+              rows={selectedCanViewRespondents ? respondentData : null}
+              loading={selectedCanViewRespondents && respondentLoading}
+              loadError={selectedCanViewRespondents ? respondentError : null}
+              onRetry={() => setRelatedRefresh((value) => value + 1)}
+              surveyName={selectedCanViewRespondents ? surveyId(selectSurvey) : null}
+              onSurveyDataChanged={fetchSurveyData}
+              readOnly={selectedReadOnly}
+              onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
+            />
+          </CollapsibleSection>
+        </Box>
       )}
     </Box>
   );

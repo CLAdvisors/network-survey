@@ -16,11 +16,12 @@ import CloseIcon from "@mui/icons-material/Close";
 import DownloadIcon from "@mui/icons-material/Download";
 import api from "../api/axios";
 import { LANGUAGES } from "@network-survey/frontend-shared";
+import useSurveyOperationState from "./useSurveyOperationState";
 
 const apiErrorMessage = (error, fallback) =>
   error.response?.data?.message || error.response?.data?.error || fallback;
 
-const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
+const EmailNotificationEditor = ({ surveyId, readOnly = false, onDirtyChange, onOperationChange }) => {
   const theme = useTheme();
   const [selectedLanguage, setSelectedLanguage] = React.useState(LANGUAGES[0]);
   const [notificationText, setNotificationText] = React.useState("");
@@ -28,12 +29,13 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
   const [hasChanges, setHasChanges] = React.useState(false);
   const [notifications, setNotifications] = React.useState({});
   const [loading, setLoading] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
   const [alert, setAlert] = React.useState({ show: false, type: "info", message: "" });
   const requestVersion = React.useRef(0);
   const surveyIdRef = React.useRef(surveyId);
   const draftsRef = React.useRef(new Map());
+  const { begin, end, isPending, generation, advanceGeneration } = useSurveyOperationState('invitationBody', onOperationChange);
+  const saving = isPending(surveyId);
   surveyIdRef.current = surveyId;
 
   const selectTemplate = React.useCallback((language, templates) => {
@@ -46,13 +48,13 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
 
   React.useEffect(() => {
     const version = ++requestVersion.current;
+    const loadGeneration = generation(surveyId);
     const controller = new AbortController();
     setNotifications({});
     setSelectedLanguage(LANGUAGES[0]);
     setNotificationText("");
     setOriginalText("");
     setHasChanges(false);
-    setSaving(false);
     setImporting(false);
     setAlert({ show: false, type: "info", message: "" });
 
@@ -60,7 +62,7 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
     setLoading(true);
     api.get(`/survey-notifications/${surveyId}`, { signal: controller.signal })
       .then(({ data }) => {
-        if (controller.signal.aborted || version !== requestVersion.current) return;
+        if (controller.signal.aborted || version !== requestVersion.current || generation(surveyId) !== loadGeneration) return;
         const templates = data.notifications || {};
         const draft = draftsRef.current.get(surveyId);
         const draftLanguage = LANGUAGES.find(item => item.label === draft?.language);
@@ -74,7 +76,7 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
         setHasChanges(draft !== undefined && draft.text !== persistedText);
       })
       .catch((error) => {
-        if (controller.signal.aborted || version !== requestVersion.current) return;
+        if (controller.signal.aborted || version !== requestVersion.current || generation(surveyId) !== loadGeneration) return;
         setAlert({ show: true, type: "error", message: apiErrorMessage(error, "Failed to load notifications.") });
       })
       .finally(() => {
@@ -84,33 +86,33 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
     return () => controller.abort();
   }, [surveyId, selectTemplate]);
 
-  React.useEffect(() => {
-    if (readOnly && hasChanges) {
-      draftsRef.current.delete(surveyId);
-      setNotificationText(originalText);
-      setHasChanges(false);
-    }
-  }, [readOnly, hasChanges, originalText]);
-
   const handleLanguageChange = (_event, language) => {
     if (!language || hasChanges) return;
     selectTemplate(language, notifications);
   };
 
   const handleSave = async () => {
-    if (readOnly || !selectedLanguage || !hasChanges || saving || importing) return;
+    if (readOnly || !selectedLanguage || !hasChanges || saving || importing || !begin(surveyId)) return;
     const version = requestVersion.current;
     const targetSurveyId = surveyId;
     const targetLanguage = selectedLanguage.label;
     const targetText = notificationText;
-    setSaving(true);
+    const savedDraft = draftsRef.current.get(targetSurveyId);
+    const savedGeneration = generation(targetSurveyId);
     try {
       await api.post("/updateEmails", {
         surveyName: targetSurveyId,
         templates: [{ language: targetLanguage, text: targetText }],
       });
-      if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
-      draftsRef.current.delete(targetSurveyId);
+      const draftUnchanged = Boolean(savedDraft) &&
+        draftsRef.current.get(targetSurveyId) === savedDraft &&
+        generation(targetSurveyId) === savedGeneration;
+      if (draftUnchanged) {
+        draftsRef.current.delete(targetSurveyId);
+        onDirtyChange?.(targetSurveyId, 'invitationBody', false);
+      }
+      advanceGeneration(targetSurveyId);
+      if (targetSurveyId !== surveyIdRef.current || !draftUnchanged) return;
       setNotifications((current) => ({ ...current, [targetLanguage]: targetText }));
       setOriginalText(targetText);
       setHasChanges(false);
@@ -119,25 +121,34 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
       if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
       setAlert({ show: true, type: "error", message: apiErrorMessage(error, "Failed to save notification.") });
     } finally {
-      if (version === requestVersion.current && targetSurveyId === surveyIdRef.current) setSaving(false);
+      end(targetSurveyId);
     }
   };
 
   const handleFileUpload = (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file || readOnly || hasChanges) return;
+    if (!file || readOnly || hasChanges || !begin(surveyId)) return;
     const version = requestVersion.current;
     const targetSurveyId = surveyId;
-    const reader = new FileReader();
+    const operationGeneration = generation(targetSurveyId);
+    let reader;
+    try {
+      reader = new FileReader();
+    } catch (error) {
+      end(targetSurveyId);
+      setAlert({ show: true, type: "error", message: "Failed to read the CSV file." });
+      return;
+    }
     setImporting(true);
     reader.onload = async (loadEvent) => {
       try {
-        if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
+        if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current || generation(targetSurveyId) !== operationGeneration) return;
         await api.post("/updateEmails", { surveyName: targetSurveyId, csvData: loadEvent.target?.result });
-        if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
+        if (generation(targetSurveyId) === operationGeneration) advanceGeneration(targetSurveyId);
+        if (targetSurveyId !== surveyIdRef.current || generation(targetSurveyId) !== operationGeneration + 1) return;
         const response = await api.get(`/survey-notifications/${targetSurveyId}`);
-        if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
+        if (targetSurveyId !== surveyIdRef.current || generation(targetSurveyId) !== operationGeneration + 1) return;
         const templates = response.data.notifications || {};
         setNotifications(templates);
         selectTemplate(selectedLanguage, templates);
@@ -147,15 +158,23 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
         setAlert({ show: true, type: "error", message: apiErrorMessage(error, "Failed to update notifications from CSV.") });
       } finally {
         if (version === requestVersion.current && targetSurveyId === surveyIdRef.current) setImporting(false);
+        end(targetSurveyId);
       }
     };
-    reader.onerror = () => {
+    const handleReadFailure = () => {
       if (version === requestVersion.current && targetSurveyId === surveyIdRef.current) {
         setImporting(false);
         setAlert({ show: true, type: "error", message: "Failed to read the CSV file." });
       }
+      end(targetSurveyId);
     };
-    reader.readAsText(file);
+    reader.onerror = handleReadFailure;
+    reader.onabort = handleReadFailure;
+    try {
+      reader.readAsText(file);
+    } catch (error) {
+      handleReadFailure();
+    }
   };
 
   const handleDownloadTemplate = () => {
@@ -217,13 +236,15 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false }) => {
             setHasChanges(nextText !== originalText);
             if (nextText === originalText) draftsRef.current.delete(surveyId);
             else draftsRef.current.set(surveyId, { language: selectedLanguage.label, text: nextText });
+            advanceGeneration(surveyId);
+            onDirtyChange?.(surveyId, 'invitationBody', nextText !== originalText);
           }}
           disabled={readOnly || loading || saving || importing}
           placeholder={`Enter notification text for ${selectedLanguage?.label || "the selected language"}...`}
           sx={{ "& .MuiOutlinedInput-root": { backgroundColor: theme.palette.background.default } }}
         />
         <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
-          <Button variant="outlined" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={() => { draftsRef.current.delete(surveyId); setNotificationText(originalText); setHasChanges(false); }}>Revert</Button>
+          <Button variant="outlined" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={() => { draftsRef.current.delete(surveyId); advanceGeneration(surveyId); onDirtyChange?.(surveyId, 'invitationBody', false); setNotificationText(originalText); setHasChanges(false); }}>Revert</Button>
           <Button variant="contained" disabled={readOnly || loading || saving || importing || !hasChanges} onClick={handleSave}>{saving ? "Saving…" : "Save body"}</Button>
         </Box>
       </Box>

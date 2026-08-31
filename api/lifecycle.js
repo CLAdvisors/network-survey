@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { DEFAULT_SENDER, RENDERER_VERSION, normalizeTemplateText, buildInvitationPayload, payloadHash } = require('./email');
+const { displayedRespondentPredicate } = require('./respondent-utils');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -53,11 +54,11 @@ async function loadReadinessData(client, survey) {
     [survey.id]
   );
   const templateResult = await client.query(
-    `SELECT lang,text FROM email WHERE survey_id=$1 ORDER BY lang LIMIT ${MAX_LAUNCH_TEMPLATES + 1}`,
+    `SELECT lang,text,invitation_subject FROM email WHERE survey_id=$1 ORDER BY lang LIMIT ${MAX_LAUNCH_TEMPLATES + 1}`,
     [survey.id]
   );
   const excludedResult = await client.query(
-    `SELECT count(*)::int AS count FROM respondent WHERE survey_id=$1 AND can_respond IS NOT TRUE`,
+    `SELECT count(*)::int AS count FROM respondent r WHERE survey_id=$1 AND can_respond IS NOT TRUE AND ${displayedRespondentPredicate('r')}`,
     [survey.id]
   );
   return { recipients: recipientResult.rows, templates: templateResult.rows, excludedCount: Number(excludedResult.rows[0]?.count || 0) };
@@ -92,6 +93,7 @@ function evaluateReadiness(survey, data, config = process.env) {
     addresses.set(address, recipient.respondent_id);
   }
   const templateMap = new Map();
+  const templateSubjectMap = new Map();
   const templateCounts = new Map();
   for (const template of data.templates) {
     const language = normalizeLanguage(template.lang);
@@ -99,7 +101,11 @@ function evaluateReadiness(survey, data, config = process.env) {
     templateCounts.set(language, (templateCounts.get(language) || 0) + 1);
     if (templateCounts.get(language) > 1) blockers.push({ code: 'template_duplicate', language, message: `More than one ${language} template is configured.` });
     const text = normalizeTemplateText(template.text);
+    const subject = typeof template.invitation_subject === 'string' ? template.invitation_subject.trim() : '';
     if (text) templateMap.set(language, text);
+    if (subject.length > 255) blockers.push({ code: 'template_subject_invalid', language, message: `The ${language} invitation subject must contain 255 characters or fewer.` });
+    else if (subject) templateSubjectMap.set(language, subject);
+    else if (text) blockers.push({ code: 'template_subject_missing', language, message: `A nonempty ${language} invitation subject is required.` });
   }
   for (const language of languages) if (!templateMap.has(language)) blockers.push({ code: 'template_missing', language, message: `A nonempty ${language} template is required.` });
   if (!config.SURVEY_URL) blockers.push({ code: 'survey_url_missing', message: 'Survey URL is not configured.' });
@@ -122,6 +128,7 @@ function evaluateReadiness(survey, data, config = process.env) {
     warnings,
     canLaunch: blockerCount === 0,
     templateMap,
+    templateSubjectMap,
   };
 }
 
@@ -236,13 +243,14 @@ async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotenc
     const launchResult = await client.query(`INSERT INTO survey_launches(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id) VALUES($1,$2,'initial',$3,$4,$5) RETURNING id,created_at`, [survey.id,survey.organization_id,effectiveKey,requestFingerprint,user.id]);
     const launch = launchResult.rows[0];
     const sender = config.SURVEY_EMAIL_SENDER || DEFAULT_SENDER;
-    const subject = 'CLA Network Survey';
     for (const [language, bodyText] of readiness.templateMap) {
+      const subject = readiness.templateSubjectMap.get(language);
       await client.query('INSERT INTO survey_launch_templates(launch_id,language,subject,body_text,template_hash) VALUES($1,$2,$3,$4,$5)', [launch.id,language,subject,bodyText,fingerprint(bodyText)]);
     }
     for (const recipient of data.recipients) {
       const language = normalizeLanguage(recipient.lang);
       const bodyText = readiness.templateMap.get(language);
+      const subject = readiness.templateSubjectMap.get(language);
       const deliveryId = crypto.randomUUID();
       const payload = buildInvitationPayload({ to:String(recipient.contact_info).trim().toLowerCase(),sender,subject,bodyText,surveyBaseUrl:config.SURVEY_URL,surveyName:survey.name,token:recipient.uuid,language,deliveryId,environment:env,rendererVersion:RENDERER_VERSION });
       await client.query(`INSERT INTO survey_email_deliveries(id,launch_id,survey_id,organization_id,respondent_id,to_address,recipient_display_name,language,sender,subject,template_hash,survey_base_url,renderer_version,render_inputs,expected_payload_hash,provider_idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16)`, [deliveryId,launch.id,survey.id,survey.organization_id,recipient.respondent_id,String(recipient.contact_info).trim().toLowerCase(),recipient.name,language,sender,subject,fingerprint(bodyText),config.SURVEY_URL,RENDERER_VERSION,JSON.stringify({surveyName:survey.name}),payloadHash(payload),`survey-delivery-${deliveryId}`]);

@@ -45,7 +45,40 @@ const {
   isTrustedStateChangingOrigin,
   configuredCorsOrigins,
   buildSurveyUrl,
+  displayedRespondentCountExpression,
+  isLegacyPlaceholderRespondent,
+  surveySummaryRespondentCount,
 } = require('../server');
+const { displayedRespondentPredicate } = require('../respondent-utils');
+
+test('survey respondent summaries count displayed roster rows and only exclude the exact legacy placeholder', () => {
+  const displayedRows = (rows) => rows.filter((row) => !isLegacyPlaceholderRespondent(row));
+  assert.equal(surveySummaryRespondentCount(displayedRows([]).length), '0', 'zero respondents');
+  assert.equal(displayedRows([{ name:'None',contact_info:'N/A',can_respond:false }]).length, 0, 'exact placeholder');
+  assert.equal(displayedRows([
+    { name:'Imported Person',contact_info:'person@example.test',can_respond:true },
+    { name:'Imported Observer',contact_info:'observer@example.test',can_respond:false },
+  ]).length, 2, 'imported survey without a placeholder');
+  assert.equal(displayedRows([
+    { name:'None',contact_info:'real@example.test',can_respond:false },
+    { name:'Genuine Person',contact_info:'genuine@example.test',can_respond:true },
+  ]).length, 2, 'genuine rows, including a person named None');
+
+  const expression = displayedRespondentCountExpression('r');
+  assert.match(expression, /COUNT\(r\.respondent_id\) FILTER/);
+  assert.match(expression, /name IS DISTINCT FROM 'None'/);
+  assert.match(expression, /contact_info IS DISTINCT FROM 'N\/A'/);
+  assert.match(expression, /can_respond IS DISTINCT FROM FALSE/);
+  assert.equal(surveySummaryRespondentCount(2), '2');
+  assert.match(displayedRespondentPredicate('r'), /r\.name IS DISTINCT FROM 'None'/);
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /const query = \(isPlatformAdmin\(req\.user\) \? `[\s\S]+` : `[\s\S]+`\)\.replace\('COUNT\(r\.respondent_id\) AS number_of_respondents', `\$\{displayedRespondentCountExpression\('r'\)\}/);
+  assert.doesNotMatch(serverSource, /number_of_respondents \|\| 0\) - 1/);
+  assert.match(serverSource, /SELECT \$\{displayedRespondentCountExpression\('r'\)\} AS number_of_respondents[\s\S]+userDataStatus: Number\(number_of_respondents\) > 0/);
+  assert.equal((serverSource.match(/displayedRespondentPredicate\('r'\)/g) || []).length, 3, 'all respondent-backed choice paths exclude the exact placeholder');
+  const lifecycleSource = fs.readFileSync(path.join(__dirname, '../lifecycle.js'), 'utf8');
+  assert.match(lifecycleSource, /can_respond IS NOT TRUE AND \$\{displayedRespondentPredicate\('r'\)\}/);
+});
 
 test('new survey links use the canonical HTTPS origin while CORS retains legacy origins', () => {
   assert.equal(
@@ -1269,6 +1302,9 @@ test('/api/user validates lazy tagbox answers against exact same-survey responde
   });
   assert.equal(valid.status, 200);
   assert.equal(persisted.length, 3);
+  assert.match(choiceQueries[0].sql, /r\.name IS DISTINCT FROM 'None'/);
+  assert.match(choiceQueries[0].sql, /r\.contact_info IS DISTINCT FROM 'N\/A'/);
+  assert.match(choiceQueries[0].sql, /r\.can_respond IS DISTINCT FROM FALSE/);
   assert.match(choiceQueries[0].sql, /r\.uuid != \$3/);
   assert.match(choiceQueries[0].sql,
     /CONCAT\(COALESCE\(r\.name, ''\), ' \(', COALESCE\(r\.contact_info, ''\), '\)'\) = ANY\(\$4::text\[\]\)/);
@@ -1494,6 +1530,9 @@ test('signed demo links load configured questions and real respondents but canno
         }] };
       }
       assert.match(sql, /FROM Respondent r/);
+      assert.match(sql, /r\.name IS DISTINCT FROM 'None'/);
+      assert.match(sql, /r\.contact_info IS DISTINCT FROM 'N\/A'/);
+      assert.match(sql, /r\.can_respond IS DISTINCT FROM FALSE/);
       assert.deepEqual(values, [surveyId, 'Survey A', null, '%%', 0, 100]);
       return { rows: [
         { name: 'Real Person One', contact_info: 'one@example.com', total_count: '2' },
@@ -2070,7 +2109,7 @@ test('dashboard read-only tables hide edit controls and demo email avoids public
   assert.match(questionTable, /editable: !readOnly/);
   assert.match(questionTable, /!readOnly &&/);
   assert.match(respondentTable, /readOnly = false/);
-  assert.match(respondentTable, /disabled=\{readOnly\}/);
+  assert.match(respondentTable, /disabled=\{readOnly \|\| operationPending \|\| !respondentsReady\}/);
   assert.match(respondentTable, /!readOnly &&/);
   assert.match(respondentTable, /surveyName,/);
   assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);
@@ -2124,7 +2163,7 @@ test('role policy matrix matches org-scoped authorization decisions', () => {
   assert.equal(hasAnyRole('owner', ADMIN_ROLES), true);
 });
 
-test('survey copy transaction preserves configuration and roster while resetting respondent state', async (t) => {
+test('survey copy preserves questions and email templates without copying participants or linked state', async (t) => {
   const originalConnect = pool.connect;
   t.after(() => { pool.connect = originalConnect; });
 
@@ -2158,6 +2197,7 @@ test('survey copy transaction preserves configuration and roster while resetting
   assert.equal(copied.name, 'CopiedSurvey');
   assert.equal(copied.title, 'Configured title');
   assert.equal(copied.organizationId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(copied.respondentsCopied, false);
   assert.equal(copied.respondentStateReset, true);
   assert.equal(calls[0].sql, 'BEGIN ISOLATION LEVEL REPEATABLE READ');
   assert.match(calls[1].sql, /JOIN organization_memberships/);
@@ -2175,11 +2215,14 @@ test('survey copy transaction preserves configuration and roster while resetting
   const emailCopy = calls.find(({ sql }) => /INSERT INTO EMAIL/.test(sql));
   assert.match(emailCopy.sql, /lang, text, invitation_subject/);
   assert.match(emailCopy.sql, /SELECT \$1, \$2, lang, text, invitation_subject/);
-  const rosterCopy = calls.find(({ sql }) => /INSERT INTO Respondent/.test(sql));
-  assert.match(rosterCopy.sql, /gen_random_uuid\(\)::text/);
-  assert.match(rosterCopy.sql, /lang, NULL, FALSE/);
-  assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*\bresponse\b[\s\S]*FROM Respondent/);
-  assert.doesNotMatch(rosterCopy.sql, /SELECT[\s\S]*r?\.uuid[\s\S]*FROM Respondent/);
+  const placeholderInsert = calls.find(({ sql }) => /INSERT INTO Respondent/.test(sql));
+  assert.match(placeholderInsert.sql, /VALUES \('None', 'N\/A', \$1, \$2, FALSE, gen_random_uuid\(\)::text, 'English', NULL, FALSE\)/);
+  assert.deepEqual(placeholderInsert.values, ['CopiedSurvey', '22222222-2222-4222-8222-222222222222']);
+  assert.equal(calls.some(({ sql }) => /SELECT[\s\S]+FROM Respondent/i.test(sql)), false);
+  assert.equal(calls.some(({ sql }) => /survey_email_deliveries|survey_email_attempts|survey_launches/i.test(sql)), false);
+  assert.doesNotMatch(JSON.stringify(calls), /participant@example\.test|source-participant-token|Private Participant/);
+  assert.equal(calls.some(({ sql }) => /\b(?:UPDATE|DELETE)\b[\s\S]+(?:Survey|EMAIL|Respondent)/i.test(sql)), false, 'source rows remain unchanged');
+  assert.equal([{ name:'None',email:'N/A',canRespond:false }].filter((row) => !isLegacyPlaceholderRespondent(row)).length, 0, 'copied roster displays zero participants');
   assert.ok(calls.some(({ sql, values }) => /survey\.copied/.test(sql) && values[0] === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'));
 });
 
@@ -2240,7 +2283,7 @@ test('survey copy rejects collisions and cross-org/non-editor access without wri
   assert.equal(calls.some(sql => /INSERT INTO/.test(sql)), false);
 });
 
-test('survey copy rolls back every write when roster copying fails', async (t) => {
+test('survey copy rolls back survey and template writes when placeholder creation fails', async (t) => {
   const originalConnect = pool.connect;
   t.after(() => { pool.connect = originalConnect; });
 
@@ -2255,7 +2298,7 @@ test('survey copy rolls back every write when roster copying fails', async (t) =
       if (/INSERT INTO Survey/.test(sql)) {
         return { rows: [{ id: 'copy-id', name: 'Copy', title: null, organization_id: 'org-a' }] };
       }
-      if (/INSERT INTO Respondent/.test(sql)) throw new Error('roster copy failed');
+      if (/INSERT INTO Respondent/.test(sql)) throw new Error('placeholder creation failed');
       return { rows: [] };
     },
     release() {},
@@ -2263,7 +2306,7 @@ test('survey copy rolls back every write when roster copying fails', async (t) =
 
   await assert.rejects(
     copySurveyForUser({ actor: { id: 9 }, sourceSurveyId: 'source-id', name: 'Copy' }),
-    /roster copy failed/
+    /placeholder creation failed/
   );
   assert.ok(calls.some(sql => /INSERT INTO Survey/.test(sql)));
   assert.equal(calls.includes('COMMIT'), false);

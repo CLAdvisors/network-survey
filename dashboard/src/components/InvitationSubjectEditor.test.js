@@ -54,7 +54,7 @@ test('disables subject changes when the survey lifecycle is read-only', async ()
   expect(screen.getByText(/Invitation subjects are read-only/)).toBeInTheDocument();
 });
 
-test('ignores an old subject save after switching away and back to the same survey', async () => {
+test('keeps the owning subject locked while its save is pending across survey switches', async () => {
   const oldSave = deferred();
   api.get.mockImplementation(async (url) => ({
     data: url.includes('survey-1')
@@ -74,12 +74,69 @@ test('ignores an old subject save after switching away and back to the same surv
   await waitFor(() => expect(subject).toHaveValue('Subject 2'));
   view.rerender(<InvitationSubjectEditor surveyId="survey-1" />);
   await waitFor(() => expect(subject).toHaveValue('Old pending save'));
-  await userEvent.clear(subject);
-  await userEvent.type(subject, 'Newer draft');
-  await act(async () => oldSave.resolve({ data: { message: 'saved' } }));
+  expect(subject).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
 
-  expect(subject).toHaveValue('Newer draft');
-  expect(screen.queryByText('Invitation email subject saved.')).not.toBeInTheDocument();
+  await act(async () => oldSave.resolve({ data: { message: 'saved' } }));
+  expect(subject).toHaveValue('Old pending save');
+  expect(subject).toBeEnabled();
+  expect(screen.getByText('Invitation email subject saved.')).toBeInTheDocument();
+});
+
+test('ignores a pre-save subject reload that resolves after the save', async () => {
+  const pendingSave = deferred();
+  const staleReload = deferred();
+  let surveyOneLoads = 0;
+  api.get.mockImplementation((url) => {
+    if (url.includes('survey-1')) {
+      surveyOneLoads += 1;
+      if (surveyOneLoads === 2) return staleReload.promise;
+      return Promise.resolve({ data: { notifications: {}, notificationSubjects: { English: 'Subject 1' } } });
+    }
+    return Promise.resolve({ data: { notifications: {}, notificationSubjects: { English: 'Subject 2' } } });
+  });
+  api.put.mockReturnValue(pendingSave.promise);
+
+  const view = render(<InvitationSubjectEditor surveyId="survey-1" />);
+  const subject = await screen.findByLabelText(/Invitation email subject/);
+  await waitFor(() => expect(subject).toHaveValue('Subject 1'));
+  await userEvent.clear(subject);
+  await userEvent.type(subject, 'Saved subject');
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  view.rerender(<InvitationSubjectEditor surveyId="survey-2" />);
+  await waitFor(() => expect(subject).toHaveValue('Subject 2'));
+  view.rerender(<InvitationSubjectEditor surveyId="survey-1" />);
+  await act(async () => pendingSave.resolve({ data: { message: 'saved' } }));
+  await waitFor(() => expect(subject).toHaveValue('Saved subject'));
+
+  await act(async () => staleReload.resolve({ data: { notifications: {}, notificationSubjects: { English: 'Subject 1' } } }));
+  expect(subject).toHaveValue('Saved subject');
+});
+
+test('clears the owning survey dirty state when a save succeeds after switching away', async () => {
+  const pendingSave = deferred();
+  const onDirtyChange = vi.fn();
+  api.get.mockImplementation(async (url) => ({
+    data: url.includes('survey-1')
+      ? { notifications: { English: 'Body 1' }, notificationSubjects: { English: 'Subject 1' } }
+      : { notifications: { English: 'Body 2' }, notificationSubjects: { English: 'Subject 2' } },
+  }));
+  api.put.mockReturnValue(pendingSave.promise);
+
+  const view = render(<InvitationSubjectEditor surveyId="survey-1" onDirtyChange={onDirtyChange} />);
+  const subject = await screen.findByLabelText(/Invitation email subject/);
+  await waitFor(() => expect(subject).toHaveValue('Subject 1'));
+  await userEvent.clear(subject);
+  await userEvent.type(subject, 'Saved in background');
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  view.rerender(<InvitationSubjectEditor surveyId="survey-2" onDirtyChange={onDirtyChange} />);
+  await waitFor(() => expect(subject).toHaveValue('Subject 2'));
+
+  onDirtyChange.mockClear();
+  await act(async () => pendingSave.resolve({ data: { message: 'saved' } }));
+  expect(onDirtyChange).toHaveBeenCalledWith('survey-1', 'invitationSubject', false);
+  expect(subject).toHaveValue('Subject 2');
 });
 
 test('preserves an unsaved subject draft across survey switches and allows reverting it', async () => {

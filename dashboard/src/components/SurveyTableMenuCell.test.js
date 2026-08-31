@@ -6,21 +6,29 @@ import SurveyTableMenuCell from './SurveyTableMenuCell';
 import api from '../api/axios';
 
 let canEdit = true;
+let canArchive = false;
 
 vi.mock('../api/axios', () => ({
-  default: { post: vi.fn(), delete: vi.fn() },
+  default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
 
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
     canEditSurvey: () => canEdit,
-    canArchiveSurvey: () => false,
+    canArchiveSurvey: () => canArchive,
     hasSurveyRole: () => false,
   }),
 }));
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((yes) => { resolve = yes; });
+  return { promise, resolve };
+};
+
 beforeEach(() => {
   canEdit = true;
+  canArchive = false;
   vi.clearAllMocks();
 });
 
@@ -55,7 +63,9 @@ test('an editor copies a survey with a clear destination name and sees success',
 
   await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
   await userEvent.click(await screen.findByText('Copy Survey'));
-  expect(screen.getByText(/complete configuration and respondent roster from “Leadership Survey”/)).toBeInTheDocument();
+  expect(screen.getByText(/Copy the survey title, question schema, and invitation email subject\/body templates from “Leadership Survey”/)).toBeInTheDocument();
+  expect(screen.getByText(/No participants, contact details, response state, invitation links, or delivery history will be copied/)).toBeInTheDocument();
+  expect(screen.getByText(/empty participant roster/i)).toBeInTheDocument();
 
   const nameInput = screen.getByLabelText(/Copied survey name/);
   expect(nameInput).toHaveValue('LeadershipSurveyCopy');
@@ -111,6 +121,35 @@ test('copy default remains unique and valid at the survey-name length boundary',
   expect(defaultName).toMatch(/^[A-Za-z0-9]+$/);
 });
 
+test('blocks copy and archive while this survey has drafts or pending updates', async () => {
+  canArchive = true;
+  const view = render(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey' }}
+    unsavedChanges={{ questions: true }}
+  />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Copy Survey'));
+  expect(await screen.findByText(/Save or undo changes to “Leadership Survey” before continuing.*Copy uses only persisted survey content/)).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: 'Copy survey' })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Send Email Demo'));
+  expect(await screen.findByText(/Save or undo changes to “Leadership Survey” before continuing.*Email demos use only persisted survey content/)).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: /send demo survey email/i })).not.toBeInTheDocument();
+
+  view.rerender(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey' }}
+    pendingOperations={{ respondents: true }}
+  />);
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Archive Survey'));
+  expect(await screen.findByText(/Wait for the current update to “Leadership Survey” to finish.*Archive is unavailable/)).toBeInTheDocument();
+  expect(screen.queryByText(/Archive “Leadership Survey”/)).not.toBeInTheDocument();
+  expect(api.post).not.toHaveBeenCalled();
+  expect(api.delete).not.toHaveBeenCalled();
+});
+
 test('users without edit access do not see copy or email demo actions', async () => {
   canEdit = false;
   render(<SurveyTableMenuCell row={{ id: 'survey-1', name: 'Leadership Survey' }} />);
@@ -118,6 +157,46 @@ test('users without edit access do not see copy or email demo actions', async ()
   await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
   expect(screen.queryByText('Copy Survey')).not.toBeInTheDocument();
   expect(screen.queryByText('Send Email Demo')).not.toBeInTheDocument();
+});
+
+test('locks a selected survey immediately after launch acceptance while refresh is delayed', async () => {
+  const refresh = deferred();
+  const viewed = vi.fn();
+  api.get.mockResolvedValue({ data: {
+    lifecycleStatus: 'draft', eligibleCount: 1, excludedCount: 0,
+    canLaunch: true, blockers: [], warnings: [], templateCoverage: [],
+  } });
+  api.post.mockResolvedValue({ status: 202, data: { lifecycleStatus: 'active', launch: { id: 'launch-1' } } });
+  render(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey', lifecycleStatus: 'draft' }}
+    onLifecycleChange={() => refresh.promise}
+    onViewLifecycle={viewed}
+  />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Launch Survey'));
+  await screen.findByText('1 eligible');
+  await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeEnabled());
+  await userEvent.click(screen.getByRole('button', { name: 'Queue invitations' }));
+  await waitFor(() => expect(viewed).toHaveBeenCalledWith(expect.objectContaining({ id: 'survey-1', lifecycleStatus: 'active' })));
+  refresh.resolve([]);
+});
+
+test('passes only this row’s unsaved sections into the launch blocker', async () => {
+  api.get.mockResolvedValue({ data: {
+    lifecycleStatus: 'draft', eligibleCount: 1, excludedCount: 0,
+    canLaunch: true, blockers: [], warnings: [], templateCoverage: [],
+  } });
+  render(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey', lifecycleStatus: 'draft' }}
+    unsavedChanges={{ questions: true, respondents: true }}
+  />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Launch Survey'));
+  expect(await screen.findByText(/“Leadership Survey” has unsaved changes in survey questions, survey respondents/i)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
 });
 
 test('an active survey offers status and close, but no launch or reminder bypass', async () => {

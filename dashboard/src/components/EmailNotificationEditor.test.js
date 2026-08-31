@@ -73,6 +73,25 @@ test('shows the CSV import API error and restores editing controls', async () =>
   expect(body).toHaveValue('Original');
 });
 
+test('releases the body operation lock when FileReader construction fails', async () => {
+  const onOperationChange = vi.fn();
+  vi.stubGlobal('FileReader', class {
+    constructor() { throw new Error('reader unavailable'); }
+  });
+  api.get.mockResolvedValue(response('Original'));
+
+  const view = render(<EmailNotificationEditor surveyId="survey-1" onOperationChange={onOperationChange} />);
+  await waitFor(() => expect(screen.getByLabelText('Invitation email body')).toHaveValue('Original'));
+  await userEvent.upload(
+    view.container.querySelector('input[type="file"]'),
+    new File(['Language,Text\nEnglish,Hello'], 'templates.csv', { type: 'text/csv' })
+  );
+
+  expect(await screen.findByText('Failed to read the CSV file.')).toBeInTheDocument();
+  expect(onOperationChange).toHaveBeenNthCalledWith(1, 'survey-1', 'invitationBody', true);
+  expect(onOperationChange).toHaveBeenNthCalledWith(2, 'survey-1', 'invitationBody', false);
+});
+
 test('preserves a dirty body draft across survey switches', async () => {
   api.get.mockImplementation((url) => Promise.resolve(
     url.endsWith('survey-1') ? response('Body one') : response('Body two')
@@ -130,7 +149,54 @@ test('ignores stale loads and stale saves after switching surveys', async () => 
   expect(screen.queryByText('Notification text saved successfully.')).not.toBeInTheDocument();
 });
 
-test('reverts dirty content and disables editing when lifecycle becomes read-only', async () => {
+test('keeps the owning body locked while its save is pending across survey switches', async () => {
+  const pendingSave = deferred();
+  api.get.mockImplementation((url) => Promise.resolve(
+    url.endsWith('survey-1') ? response('Body one') : response('Body two')
+  ));
+  api.post.mockReturnValue(pendingSave.promise);
+
+  const view = render(<EmailNotificationEditor surveyId="survey-1" />);
+  const body = await screen.findByLabelText('Invitation email body');
+  await waitFor(() => expect(body).toHaveValue('Body one'));
+  await userEvent.type(body, ' pending');
+  await userEvent.click(screen.getByRole('button', { name: 'Save body' }));
+
+  view.rerender(<EmailNotificationEditor surveyId="survey-2" />);
+  await waitFor(() => expect(body).toHaveValue('Body two'));
+  view.rerender(<EmailNotificationEditor surveyId="survey-1" />);
+  await waitFor(() => expect(body).toHaveValue('Body one pending'));
+  expect(body).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+
+  await act(async () => pendingSave.resolve({ data: { message: 'saved' } }));
+  expect(body).toBeEnabled();
+  expect(body).toHaveValue('Body one pending');
+});
+
+test('clears the owning survey dirty state when a body save succeeds after switching away', async () => {
+  const pendingSave = deferred();
+  const onDirtyChange = vi.fn();
+  api.get.mockImplementation((url) => Promise.resolve(
+    url.endsWith('survey-1') ? response('Body one') : response('Body two')
+  ));
+  api.post.mockReturnValue(pendingSave.promise);
+
+  const view = render(<EmailNotificationEditor surveyId="survey-1" onDirtyChange={onDirtyChange} />);
+  const body = await screen.findByLabelText('Invitation email body');
+  await waitFor(() => expect(body).toHaveValue('Body one'));
+  await userEvent.type(body, ' saved');
+  await userEvent.click(screen.getByRole('button', { name: 'Save body' }));
+  view.rerender(<EmailNotificationEditor surveyId="survey-2" onDirtyChange={onDirtyChange} />);
+  await waitFor(() => expect(body).toHaveValue('Body two'));
+
+  onDirtyChange.mockClear();
+  await act(async () => pendingSave.resolve({ data: { message: 'saved' } }));
+  expect(onDirtyChange).toHaveBeenCalledWith('survey-1', 'invitationBody', false);
+  expect(body).toHaveValue('Body two');
+});
+
+test('preserves dirty content while disabling editing when lifecycle becomes read-only', async () => {
   api.get.mockResolvedValue(response('Locked body'));
   const view = render(<EmailNotificationEditor surveyId="survey-1" />);
   const body = await screen.findByLabelText('Invitation email body');
@@ -138,7 +204,7 @@ test('reverts dirty content and disables editing when lifecycle becomes read-onl
   await userEvent.type(body, ' draft');
 
   view.rerender(<EmailNotificationEditor surveyId="survey-1" readOnly />);
-  await waitFor(() => expect(body).toHaveValue('Locked body'));
+  await waitFor(() => expect(body).toHaveValue('Locked body draft'));
   expect(body).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Save body' })).toBeDisabled();
   expect(screen.getByText(/read-only after a survey has been launched/i)).toBeInTheDocument();

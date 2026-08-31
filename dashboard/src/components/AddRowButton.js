@@ -2,13 +2,14 @@ import React from 'react';
 import { Button, Zoom } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 
-const AddRowButton = ({ onClick }) => {
+const AddRowButton = ({ onClick, disabled = false }) => {
   return (
-    <Zoom in={true} style={{ transitionDelay: '100ms' }}>
+    <Zoom {...{ in: true }} style={{ transitionDelay: '100ms' }}>
       <Button
         variant="outlined"
         startIcon={<AddIcon />}
         onClick={onClick}
+        disabled={disabled}
         size="small"
         sx={{
           borderRadius: '20px',

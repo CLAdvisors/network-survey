@@ -2,19 +2,21 @@ import React from 'react';
 import { Alert, Autocomplete, Box, Button, Paper, Snackbar, TextField, Typography } from '@mui/material';
 import { LANGUAGES } from '@network-survey/frontend-shared';
 import api from '../api/axios';
+import useSurveyOperationState from './useSurveyOperationState';
 
 const DEFAULT_SUBJECT = 'CLA Network Survey';
 
-const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) => {
+const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange, onOperationChange }) => {
   const [language, setLanguage] = React.useState(LANGUAGES[0]);
   const [subjects, setSubjects] = React.useState({});
   const [subject, setSubject] = React.useState(DEFAULT_SUBJECT);
   const [originalSubject, setOriginalSubject] = React.useState(DEFAULT_SUBJECT);
   const [loading, setLoading] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
   const [notice, setNotice] = React.useState(null);
   const surveyIdRef = React.useRef(surveyId);
   const draftsRef = React.useRef(new Map());
+  const { begin, end, isPending, generation, advanceGeneration } = useSurveyOperationState('invitationSubject', onOperationChange);
+  const saving = isPending(surveyId);
   const operationVersion = React.useRef(0);
   const operationIdentity = React.useRef(`${surveyId}:${readOnly}`);
   const nextOperationIdentity = `${surveyId}:${readOnly}`;
@@ -27,8 +29,8 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
   React.useEffect(() => {
     if (!surveyId) return;
     let active = true;
+    const loadGeneration = generation(surveyId);
     setLoading(true);
-    setSaving(false);
     setNotice(null);
     setSubjects({});
     setLanguage(LANGUAGES[0]);
@@ -36,7 +38,7 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
     setOriginalSubject(DEFAULT_SUBJECT);
     api.get(`/survey-notifications/${surveyId}`)
       .then(({ data }) => {
-        if (!active) return;
+        if (!active || generation(surveyId) !== loadGeneration) return;
         const nextSubjects = data.notificationSubjects || {};
         const draft = draftsRef.current.get(surveyId);
         const initialLanguage = LANGUAGES.find(item => item.label === draft?.language) || LANGUAGES[0];
@@ -46,7 +48,7 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
         setSubject(draft?.subject ?? initialSubject);
         setOriginalSubject(initialSubject);
       })
-      .catch(() => active && setNotice({ severity: 'error', message: 'Failed to load invitation subjects.' }))
+      .catch(() => active && generation(surveyId) === loadGeneration && setNotice({ severity: 'error', message: 'Failed to load invitation subjects.' }))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
   }, [surveyId]);
@@ -60,27 +62,31 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
   };
 
   const handleSave = async () => {
-    if (readOnly) return;
+    if (readOnly || !begin(surveyId)) return;
     const trimmedSubject = subject.trim();
     if (!trimmedSubject) {
       setNotice({ severity: 'error', message: 'Invitation email subject is required.' });
+      end(surveyId);
       return;
     }
     const targetSurveyId = surveyId;
     const targetLanguage = language.label;
     const version = operationVersion.current;
     const savedDraft = draftsRef.current.get(targetSurveyId);
-    setSaving(true);
+    const savedGeneration = generation(targetSurveyId);
     try {
       await api.put(`/survey-notifications/${targetSurveyId}/subject`, {
         language: targetLanguage,
         subject: trimmedSubject,
       });
-      const draftUnchanged = Boolean(savedDraft) && draftsRef.current.get(targetSurveyId) === savedDraft;
+      const draftUnchanged = Boolean(savedDraft) &&
+        draftsRef.current.get(targetSurveyId) === savedDraft &&
+        generation(targetSurveyId) === savedGeneration;
       if (draftUnchanged) {
         draftsRef.current.delete(targetSurveyId);
         onDirtyChange?.(targetSurveyId, 'invitationSubject', false);
       }
+      advanceGeneration(targetSurveyId);
       if (surveyIdRef.current !== targetSurveyId || !draftUnchanged) return;
       setSubjects(previous => ({ ...previous, [targetLanguage]: trimmedSubject }));
       setSubject(trimmedSubject);
@@ -93,7 +99,7 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
         message: error.response?.data?.message || error.response?.data?.error || 'Failed to save invitation email subject.',
       });
     } finally {
-      if (surveyIdRef.current === targetSurveyId && version === operationVersion.current) setSaving(false);
+      end(targetSurveyId);
     }
   };
 
@@ -126,6 +132,7 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
             const dirty = nextSubject !== originalSubject;
             if (dirty) draftsRef.current.set(surveyId, { language: language.label, subject: nextSubject });
             else draftsRef.current.delete(surveyId);
+            advanceGeneration(surveyId);
             onDirtyChange?.(surveyId, 'invitationSubject', dirty);
           }}
           inputProps={{ maxLength: 255 }}
@@ -137,6 +144,7 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
           variant="outlined"
           onClick={() => {
             draftsRef.current.delete(surveyId);
+            advanceGeneration(surveyId);
             onDirtyChange?.(surveyId, 'invitationSubject', false);
             setSubject(originalSubject);
           }}

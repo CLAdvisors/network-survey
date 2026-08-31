@@ -6,6 +6,7 @@ import { createTheme, ThemeProvider } from '@mui/material/styles';
 import { beforeEach, expect, test, vi } from 'vitest';
 import Dashboard from './Dashboard';
 import api from '../api/axios';
+import { advanceSurveyOperationGeneration } from './useSurveyOperationState';
 
 vi.mock('../api/axios', () => ({ default: { get: vi.fn(), post: vi.fn() } }));
 vi.mock('../context/AuthContext', () => ({
@@ -27,7 +28,8 @@ vi.mock('./SurveyTable', () => ({
   ))}</div>,
 }));
 vi.mock('./QuestionTable', () => ({
-  default: ({ surveyName, onDirtyChange, onSurveyDataChanged }) => <>
+  default: ({ rows, surveyName, onDirtyChange, onSurveyDataChanged }) => <>
+    <span data-testid="question-data">{rows?.map((row) => row.text).join(',') || 'none'}</span>
     <button onClick={() => onDirtyChange?.(surveyName, 'questions', true)}>Dirty questions</button>
     <button onClick={() => onSurveyDataChanged?.()}>Refresh after question change</button>
   </>,
@@ -43,9 +45,9 @@ vi.mock('./CreateSurveyDialog', () => ({ default: () => null }));
 
 let mountSequence = 0;
 vi.mock('./InvitationSubjectEditor', () => ({
-  default: ({ surveyId, readOnly, onDirtyChange }) => {
+  default: ({ surveyId, readOnly, onDirtyChange, onOperationChange }) => {
     const mount = React.useRef(++mountSequence);
-    return <div data-testid="subject-editor" data-survey={surveyId} data-readonly={String(readOnly)} data-mount={`subject-${mount.current}`}>Invitation Email Subject<button onClick={() => onDirtyChange?.(surveyId, 'invitationSubject', true)}>Dirty subject</button></div>;
+    return <div data-testid="subject-editor" data-survey={surveyId} data-readonly={String(readOnly)} data-mount={`subject-${mount.current}`}>Invitation Email Subject<button onClick={() => onDirtyChange?.(surveyId, 'invitationSubject', true)}>Dirty subject</button><button onClick={() => onOperationChange?.(surveyId, 'invitationSubject', true)}>Start subject operation</button></div>;
   },
 }));
 vi.mock('./EmailNotificationEditor', () => ({
@@ -109,6 +111,18 @@ test('keeps owning editor instances and scoped drafts while visiting a survey wi
   expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('invitationSubject,respondents');
 });
 
+test('keeps an editor mounted while its owning survey operation is pending', async () => {
+  const theme = createTheme();
+  render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
+  const subjectMount = screen.getByTestId('subject-editor').dataset.mount;
+  await userEvent.click(screen.getByRole('button', { name: 'Start subject operation' }));
+
+  await userEvent.click(screen.getByRole('button', { name: 'Select Delta' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Select Alpha' }));
+  expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-mount', subjectMount);
+});
+
 test('selects a successful copy by returned stable ID and loads its related data', async () => {
   const copied = { id: 'survey-copy', name: 'AlphaCopy', role: 'editor', lifecycleStatus: 'draft', respondents: '0' };
   api.get.mockImplementation((url) => {
@@ -124,6 +138,25 @@ test('selects a successful copy by returned stable ID and loads its related data
   expect(api.get).toHaveBeenCalledWith('/listQuestions?surveyName=survey-copy', expect.any(Object));
   expect(api.get).toHaveBeenCalledWith('/targets?surveyName=survey-copy', expect.any(Object));
   expect(screen.getByTestId('respondent-count-survey-copy')).toHaveTextContent('0');
+});
+
+test('ignores related question data loaded before a successful mutation generation', async () => {
+  const staleQuestions = deferred();
+  api.get.mockImplementation((url) => {
+    if (url === '/surveys') return Promise.resolve({ data: { surveys } });
+    if (url.startsWith('/listQuestions')) return staleQuestions.promise;
+    return Promise.resolve({ data: [] });
+  });
+
+  const theme = createTheme();
+  render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
+  await waitFor(() => expect(api.get).toHaveBeenCalledWith('/listQuestions?surveyName=survey-a', expect.any(Object)));
+  advanceSurveyOperationGeneration('questions', 'survey-a');
+  staleQuestions.resolve({ data: { questions: [{ text: 'Stale question' }] } });
+
+  await waitFor(() => expect(screen.getByTestId('question-data')).toHaveTextContent('none'));
+  expect(screen.getByTestId('question-data')).not.toHaveTextContent('Stale question');
 });
 
 test('child mutations cannot replace a newer lifecycle lock with a delayed survey response', async () => {

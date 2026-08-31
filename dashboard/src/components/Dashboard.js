@@ -13,6 +13,7 @@ import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
 import { lifecycleStatus, surveyId } from "./surveyLifecycle";
+import { surveyOperationGeneration } from "./useSurveyOperationState";
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -23,6 +24,7 @@ const Dashboard = () => {
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
   const [dirtyBySurvey, setDirtyBySurvey] = React.useState({});
+  const [operationsBySurvey, setOperationsBySurvey] = React.useState({});
   const surveyRequest = React.useRef(0);
   const pendingSelectionId = React.useRef(null);
   const relatedRequest = React.useRef(0);
@@ -72,22 +74,38 @@ const Dashboard = () => {
         return;
       }
       const selectedId = surveyId(selectSurvey);
+      const questionGeneration = surveyOperationGeneration('questions', selectedId);
       try {
         const questionResponse = await api.get(`/listQuestions?surveyName=${selectedId}`, { signal: controller.signal });
-        if (request === relatedRequest.current) setQuestionData(questionResponse.data.questions);
+        if (
+          request === relatedRequest.current &&
+          surveyOperationGeneration('questions', selectedId) === questionGeneration
+        ) setQuestionData(questionResponse.data.questions);
       } catch (err) {
-        if (!controller.signal.aborted && request === relatedRequest.current) setQuestionData(null);
+        if (
+          !controller.signal.aborted &&
+          request === relatedRequest.current &&
+          surveyOperationGeneration('questions', selectedId) === questionGeneration
+        ) setQuestionData(null);
       }
 
       if (!canViewSensitiveSurveyData(selectSurvey)) {
         if (request === relatedRequest.current) setRespondentData(null);
         return;
       }
+      const respondentGeneration = surveyOperationGeneration('respondents', selectedId);
       try {
         const respondentResponse = await api.get(`/targets?surveyName=${selectedId}`, { signal: controller.signal });
-        if (request === relatedRequest.current) setRespondentData(respondentResponse.data);
+        if (
+          request === relatedRequest.current &&
+          surveyOperationGeneration('respondents', selectedId) === respondentGeneration
+        ) setRespondentData(respondentResponse.data);
       } catch (err) {
-        if (!controller.signal.aborted && request === relatedRequest.current) setRespondentData(null);
+        if (
+          !controller.signal.aborted &&
+          request === relatedRequest.current &&
+          surveyOperationGeneration('respondents', selectedId) === respondentGeneration
+        ) setRespondentData(null);
       }
     };
     fetchRelatedData();
@@ -166,12 +184,30 @@ const Dashboard = () => {
     });
   }, []);
 
+  const handleOperationChange = React.useCallback((owningSurveyId, section, pending) => {
+    if (!owningSurveyId || !section) return;
+    setOperationsBySurvey((current) => {
+      const surveyOperations = { ...(current[owningSurveyId] || {}) };
+      if (pending) surveyOperations[section] = true;
+      else delete surveyOperations[section];
+      if (Object.keys(surveyOperations).length === 0) {
+        if (!current[owningSurveyId]) return current;
+        const next = { ...current };
+        delete next[owningSurveyId];
+        return next;
+      }
+      return { ...current, [owningSurveyId]: surveyOperations };
+    });
+  }, []);
+
   const selectedIsLifecycleLocked = Boolean(selectSurvey) && lifecycleStatus(selectSurvey) !== 'draft';
   const selectedCanEdit = canEditSurvey(selectSurvey);
   const selectedCanViewRespondents = canViewSensitiveSurveyData(selectSurvey);
   const selectedReadOnly = !selectedCanEdit || selectedIsLifecycleLocked;
   const hasInvitationDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.invitationSubject || dirty.invitationBody);
   const hasRespondentDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.respondents);
+  const hasInvitationOperations = Object.values(operationsBySurvey).some((pending) => pending.invitationSubject || pending.invitationBody);
+  const hasRespondentOperations = Object.values(operationsBySurvey).some((pending) => pending.respondents);
 
   return (
     <Box
@@ -247,10 +283,11 @@ const Dashboard = () => {
           onSurveyDataChanged={fetchSurveyData}
           readOnly={selectedReadOnly}
           onDirtyChange={handleDirtyChange}
+          onOperationChange={handleOperationChange}
         />
       </CollapsibleSection>
 
-      {(selectedCanEdit || hasInvitationDrafts) && (
+      {(selectedCanEdit || hasInvitationDrafts || hasInvitationOperations) && (
         <Box sx={{ display: selectedCanEdit ? 'block' : 'none' }} aria-hidden={!selectedCanEdit}>
           <CollapsibleSection title="Email Notifications">
             <InvitationSubjectEditor
@@ -258,18 +295,20 @@ const Dashboard = () => {
               surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
               readOnly={selectedIsLifecycleLocked}
               onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
             />
             <EmailNotificationEditor
               key="invitation-body-editor"
               surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
               readOnly={selectedIsLifecycleLocked}
               onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
             />
           </CollapsibleSection>
         </Box>
       )}
 
-      {(selectedCanViewRespondents || hasRespondentDrafts) && (
+      {(selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations) && (
         <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
           <CollapsibleSection title="Survey Respondents">
             {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
@@ -279,6 +318,7 @@ const Dashboard = () => {
               onSurveyDataChanged={fetchSurveyData}
               readOnly={selectedReadOnly}
               onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
             />
           </CollapsibleSection>
         </Box>

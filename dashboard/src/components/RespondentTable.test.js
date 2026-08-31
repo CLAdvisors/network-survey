@@ -91,6 +91,8 @@ test('clears the owning survey respondent draft when its save succeeds after swi
   await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(api.post).toHaveBeenCalled());
+  expect(screen.queryByRole('button', { name: 'Edit respondent' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 
   view.rerender(
     <RespondentTable

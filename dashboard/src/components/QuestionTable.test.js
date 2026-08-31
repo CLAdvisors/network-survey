@@ -20,7 +20,7 @@ vi.mock('@mui/x-data-grid', () => ({
 }));
 
 vi.mock('./TableUploadButton', () => ({
-  default: ({ onUpload }) => <button onClick={() => onUpload('Title,Question name,Question title,Question type,Max answers,Required\nSurvey,q2,Imported,text,,true')}>Upload questions</button>,
+  default: ({ onUpload, disabled }) => <button disabled={disabled} onClick={() => onUpload('Title,Question name,Question title,Question type,Max answers,Required\nSurvey,q2,Imported,text,,true')}>Upload questions</button>,
 }));
 vi.mock('./AddRowButton', () => ({ default: () => null }));
 vi.mock('./TableMenuCell', () => ({ default: () => null }));
@@ -31,7 +31,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-test('preserves a newer question draft when an earlier upload completes', async () => {
+test('locks question mutations while an upload is pending', async () => {
   const pendingUpload = deferred();
   const onDirtyChange = vi.fn();
   const onSurveyDataChanged = vi.fn().mockResolvedValue([]);
@@ -51,13 +51,12 @@ test('preserves a newer question draft when an earlier upload completes', async 
   );
   await userEvent.click(screen.getByRole('button', { name: 'Upload questions' }));
   await waitFor(() => expect(api.post).toHaveBeenCalled());
-  await userEvent.click(screen.getByRole('button', { name: 'Edit question' }));
-  expect(screen.getByTestId('question-text')).toHaveTextContent('One edited');
-  onDirtyChange.mockClear();
+  expect(screen.queryByRole('button', { name: 'Edit question' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Upload questions' })).toBeDisabled();
 
   await act(async () => pendingUpload.resolve({ status: 200 }));
-  expect(onDirtyChange).not.toHaveBeenCalledWith('survey-1', 'questions', false);
-  expect(screen.getByTestId('question-text')).toHaveTextContent('One edited');
+  expect(screen.getByTestId('question-text')).toHaveTextContent('Uploaded');
+  expect(screen.getByRole('button', { name: 'Upload questions' })).toBeEnabled();
   expect(onSurveyDataChanged).toHaveBeenCalledTimes(1);
 });
 

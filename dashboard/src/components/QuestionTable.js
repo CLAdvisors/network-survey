@@ -10,13 +10,16 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import TableMenuCell from './TableMenuCell';
 import { parseQuestionsCsv } from '../utils/questionsCsv';
 import { buildQuestionTableSchema } from '../utils/questionTableSchema';
+import useSurveyOperationState from './useSurveyOperationState';
 
-const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false, onDirtyChange }) => {
+const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false, onDirtyChange, onOperationChange }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
   const draftsRef = useRef(new Map());
+  const { begin, end, isPending, generation, advanceGeneration } = useSurveyOperationState('questions', onOperationChange);
+  const operationPending = isPending(surveyName);
   const operationVersion = useRef(0);
   const surveyIdentity = useRef(surveyName);
   if (surveyIdentity.current !== surveyName) {
@@ -57,8 +60,9 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
 
   const handleDeleteQuestion = async (row) => {
     const targetSurveyId = surveyName;
+    if (!begin(targetSurveyId)) return;
     const version = operationVersion.current;
-    const operationDraft = draftsRef.current.get(targetSurveyId);
+    const operationGeneration = generation(targetSurveyId);
     try {
       const response = await api.delete('/question', {
         data: {
@@ -68,11 +72,12 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
       });
 
       if (response.status === 200) {
+        advanceGeneration(targetSurveyId);
         await onSurveyDataChanged?.();
         if (
           version !== operationVersion.current ||
           targetSurveyId !== surveyIdentity.current ||
-          draftsRef.current.get(targetSurveyId) !== operationDraft
+          generation(targetSurveyId) !== operationGeneration + 1
         ) return;
         // Remove the question from the local state
         const updatedRows = tableRows
@@ -99,15 +104,17 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         message: 'Failed to delete question. Please try again.',
         severity: 'error'
       });
+    } finally {
+      end(targetSurveyId);
     }
   };
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly },
+    { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly && !operationPending },
     { field: 'type', headerName: 'Question type', width: 150, editable: false },
-    { field: 'required', headerName: 'Required', width: 100, type: 'boolean', editable: !readOnly },
-    { field: 'max', headerName: 'Max answers', width: 150,  editable: !readOnly  },
+    { field: 'required', headerName: 'Required', width: 100, type: 'boolean', editable: !readOnly && !operationPending },
+    { field: 'max', headerName: 'Max answers', width: 150, editable: !readOnly && !operationPending },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -128,7 +135,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         />
       ),
     }
-  ].filter(column => (!readOnly && !hasChanges) || column.field !== 'actions');
+  ].filter(column => (!readOnly && !hasChanges && !operationPending) || column.field !== 'actions');
 
   const TEMPLATE_DATA = [
     'Title,Question name,Question title,Question type,Max answers,Required',
@@ -139,7 +146,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
 
 
   const handleProcessRowUpdate = (newRow) => {
-    if (readOnly) return originalRows.find(row => row.id === newRow.id) || newRow;
+    if (readOnly || operationPending) return originalRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
@@ -151,6 +158,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
     setHasChanges(hasUnsavedChanges);
     if (hasUnsavedChanges) draftsRef.current.set(surveyName, { rows: updatedRows });
     else draftsRef.current.delete(surveyName);
+    advanceGeneration(surveyName);
     onDirtyChange?.(surveyName, 'questions', hasUnsavedChanges);
     return newRow;
   };
@@ -165,16 +173,21 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
 
   const handleSave = async () => {
     const targetSurveyId = surveyName;
+    if (!begin(targetSurveyId)) return;
     const savedDraft = draftsRef.current.get(targetSurveyId);
+    const savedGeneration = generation(targetSurveyId);
     try {
       const response = await saveRows(tableRows, targetSurveyId);
 
       if (response.status === 200) {
-        const draftUnchanged = Boolean(savedDraft) && draftsRef.current.get(targetSurveyId) === savedDraft;
+        const draftUnchanged = Boolean(savedDraft) &&
+          draftsRef.current.get(targetSurveyId) === savedDraft &&
+          generation(targetSurveyId) === savedGeneration;
         if (draftUnchanged) {
           draftsRef.current.delete(targetSurveyId);
           onDirtyChange?.(targetSurveyId, 'questions', false);
         }
+        advanceGeneration(targetSurveyId);
         await onSurveyDataChanged?.();
         if (targetSurveyId !== surveyIdentity.current || !draftUnchanged || draftsRef.current.has(targetSurveyId)) return;
 
@@ -203,13 +216,16 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         message: 'Failed to save changes. Please try again.',
         severity: 'error'
       });
+    } finally {
+      end(targetSurveyId);
     }
   };
 
   const handleUpload = async (csvContent) => {
     const targetSurveyId = surveyName;
+    if (!begin(targetSurveyId)) return;
     const version = operationVersion.current;
-    const operationDraft = draftsRef.current.get(targetSurveyId);
+    const operationGeneration = generation(targetSurveyId);
     try {
       // Parse the new CSV content
       const newQuestions = parseQuestionsCsv(csvContent);
@@ -228,17 +244,18 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
       const response = await saveRows(combinedQuestions, targetSurveyId);
 
       if (response.status === 200) {
+        advanceGeneration(targetSurveyId);
         await onSurveyDataChanged?.();
         if (
           version !== operationVersion.current ||
           targetSurveyId !== surveyIdentity.current ||
-          draftsRef.current.get(targetSurveyId) !== operationDraft
+          generation(targetSurveyId) !== operationGeneration + 1
         ) return;
         const questionResponse = await api.get(`/listQuestions?surveyName=${targetSurveyId}`);
         if (
           version !== operationVersion.current ||
           targetSurveyId !== surveyIdentity.current ||
-          draftsRef.current.get(targetSurveyId) !== operationDraft
+          generation(targetSurveyId) !== operationGeneration + 1
         ) return;
         const refreshedRows = questionResponse.data.questions.map((row, index) => ({
           ...row,
@@ -264,10 +281,13 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         severity: 'error'
       });
       throw err;
+    } finally {
+      end(targetSurveyId);
     }
   };
 
   const handleAddRow = () => {
+    if (operationPending) return;
     const newId = Math.max(0, ...tableRows.map(row => row.id)) + 1;
     const newRow = {
       id: newId,
@@ -284,6 +304,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
     setTableRows(updatedRows);
     setHasChanges(true);
     draftsRef.current.set(surveyName, { rows: updatedRows });
+    advanceGeneration(surveyName);
     onDirtyChange?.(surveyName, 'questions', true);
   };
 
@@ -309,18 +330,19 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         </Typography>
         {!readOnly && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <AddRowButton onClick={handleAddRow} />
+            <AddRowButton onClick={handleAddRow} disabled={operationPending} />
             <TableUploadButton
               onUpload={handleUpload}
               templateData={TEMPLATE_DATA}
               tableName="Questions"
-              disabled={hasChanges}
+              disabled={hasChanges || operationPending}
             />
             {hasChanges && (
               <Button
                 variant="contained"
                 startIcon={<SaveIcon />}
                 onClick={handleSave}
+                disabled={operationPending}
                 size="small"
               >
                 Save
@@ -338,7 +360,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         }}
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={readOnly ? undefined : handleProcessRowUpdate}
+        processRowUpdate={readOnly || operationPending ? undefined : handleProcessRowUpdate}
         components={{
           Toolbar: GridToolbar,
         }}

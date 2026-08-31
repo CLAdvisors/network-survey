@@ -184,7 +184,10 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
                     }
                   });
                   const nextRevision = responseRevision(response);
-                  if (nextRevision !== null && targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+                  if (nextRevision !== null) {
+                    acceptedRevisionRef.current.set(targetSurveyId, Math.max(acceptedRevisionRef.current.get(targetSurveyId) ?? -1, nextRevision));
+                    if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+                  }
                   advanceGeneration(targetSurveyId);
                   await params.row.onRespondentDeleted(targetSurveyId, { replaceDraft: true });
                 } catch (error) {
@@ -337,7 +340,10 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
           additions,
         });
         const nextRevision = responseRevision(response);
-        if (nextRevision !== null && targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+        if (nextRevision !== null) {
+          acceptedRevisionRef.current.set(targetSurveyId, Math.max(acceptedRevisionRef.current.get(targetSurveyId) ?? -1, nextRevision));
+          if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+        }
         advanceGeneration(targetSurveyId);
         if (draftsRef.current.get(targetSurveyId) === savedDraft) {
           await fetchRespondentData(targetSurveyId, { replaceDraft: false });
@@ -368,7 +374,10 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
 
       if (response.status === 200) {
         const nextRevision = responseRevision(response);
-        if (nextRevision !== null && targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+        if (nextRevision !== null) {
+          acceptedRevisionRef.current.set(targetSurveyId, Math.max(acceptedRevisionRef.current.get(targetSurveyId) ?? -1, nextRevision));
+          if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+        }
         advanceGeneration(targetSurveyId);
         await fetchRespondentData(targetSurveyId, { replaceDraft: true });
       }

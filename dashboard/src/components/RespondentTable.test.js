@@ -205,6 +205,9 @@ test('clears an obsolete refresh error when a later parent load is authoritative
   await userEvent.click(screen.getByRole('button', { name: 'Complete delayed upload' }));
   expect(await screen.findByText(/authoritative roster could not be refreshed/i)).toBeInTheDocument();
 
+  view.rerender(<RespondentTable revision={0} surveyName="survey-1" rows={[]} />);
+  expect(screen.getByText(/authoritative roster could not be refreshed/i)).toBeInTheDocument();
+
   view.rerender(<RespondentTable revision={1} surveyName="survey-1" rows={[
     { id: 1, name: 'Imported', email: 'imported@example.test', canRespond: true, language: 'English' },
   ]} />);

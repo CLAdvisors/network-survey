@@ -98,6 +98,7 @@ test('survey response summaries use current eligibility, SQL non-NULL completion
   assert.deepEqual(surveyResponseSummary('0', '0'), { eligibleCount:0, completedCount:0, responseRatePercent:null });
   assert.deepEqual(surveyResponseSummary('4', '0'), { eligibleCount:4, completedCount:0, responseRatePercent:0 });
   assert.deepEqual(surveyResponseSummary(3, 1), { eligibleCount:3, completedCount:1, responseRatePercent:33 });
+  assert.deepEqual(surveyResponseSummary(8, 1), { eligibleCount:8, completedCount:1, responseRatePercent:13 }, 'exact halves round up');
   assert.deepEqual(surveyResponseSummary(6, 4), { eligibleCount:6, completedCount:4, responseRatePercent:67 });
   assert.deepEqual(surveyResponseSummary(4, 4), { eligibleCount:4, completedCount:4, responseRatePercent:100 });
   assert.deepEqual(surveyResponseSummary('invalid', Infinity), { eligibleCount:0, completedCount:0, responseRatePercent:null });

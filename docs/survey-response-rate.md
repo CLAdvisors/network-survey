@@ -18,4 +18,4 @@ The exact legacy placeholder (`name = 'None'`, `contact_info = 'N/A'`, `can_resp
 
 Both authorization variants compute the two filtered counts in the existing grouped survey-list query. They issue no respondent-detail or per-survey requests, and the correlated latest-launch aggregate remains separate, so delivery rows cannot multiply respondent counts. The response-rate work is a constant number of filtered counters during the same respondent scan: for a 1,000-person roster it adds O(1) state and O(1,000) simple boolean/NULL checks, without increasing result cardinality or exposing respondent data.
 
-Local verification covers a generated 1,000-row aggregate fixture and asserts one survey-list query per request. No external or staging load test is required or permitted for this change.
+Local verification covers the semantics and rounding with a generated 1,000-row roster fixture and asserts one survey-list query per authorization variant. PostgreSQL was not available locally, so no `EXPLAIN ANALYZE` timing is claimed; the evidence here is the unchanged query cardinality and single-pass filtered-count structure. No external or staging load test was run.

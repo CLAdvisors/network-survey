@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
 import SurveyTable from './SurveyTable';
-import { responseRateDescription, responseRateLabel, responseRateSummary } from './surveyResponseRate';
+import { responseRateDescription, responseRateLabel, responseRateSortValue, responseRateSummary } from './surveyResponseRate';
 
 vi.mock('../api/axios', () => ({ default: { get: vi.fn() } }));
 
@@ -11,7 +11,13 @@ vi.mock('@mui/x-data-grid', () => ({
   DataGrid: ({ rows, columns }) => (
     <div>
       {columns.filter((column) => ['responseRateSortValue', 'invitationSummary', 'providerSummary'].includes(column.field)).map((column) => (
-        <section key={column.field} aria-label={column.headerName} data-sortable={String(column.sortable !== false)}>
+        <section
+          key={column.field}
+          aria-label={column.headerName}
+          data-sortable={String(column.sortable !== false)}
+          data-sorted-values={rows.map((row) => row[column.field]).sort((a, b) => a - b).join(',')}
+          data-export-values={column.valueFormatter ? rows.map((row) => column.valueFormatter(row[column.field], row)).join('|') : ''}
+        >
           {rows.map((row, index) => <span key={row.id}>{column.renderCell({ row, hasFocus: index === 0 })}</span>)}
         </section>
       ))}
@@ -82,6 +88,12 @@ describe('survey response-rate normalization', () => {
     expect(summary).toEqual({ eligibleCount:0, completedCount:0, responseRatePercent:null });
     expect(responseRateLabel(summary)).toBe('No eligible respondents');
     expect(responseRateDescription(summary)).toMatch(/no eligible respondents/i);
+    expect(responseRateSortValue(summary)).toBe(-1);
+    expect(responseRateSortValue(responseRateSummary({
+      eligibleRespondents: 5,
+      completedResponses: 0,
+      responseRatePercent: 0,
+    }))).toBe(0);
   });
 });
 
@@ -89,6 +101,7 @@ test('renders a sortable, accessible Response Rate column for every survey', () 
   render(<SurveyTable
     rows={[
       row('zero', { eligibleRespondents:0, completedResponses:0, responseRatePercent:null }),
+      row('none-complete', { eligibleRespondents:5, completedResponses:0, responseRatePercent:0 }),
       row('partial', { eligibleRespondents:'4', completedResponses:'3', responseRatePercent:'75' }),
     ]}
     selectRow={() => {}}
@@ -96,6 +109,8 @@ test('renders a sortable, accessible Response Rate column for every survey', () 
 
   const responseRate = screen.getByRole('region', { name: 'Response Rate' });
   expect(responseRate).toHaveAttribute('data-sortable', 'true');
+  expect(responseRate).toHaveAttribute('data-sorted-values', '-1,0,75');
+  expect(responseRate).toHaveAttribute('data-export-values', 'No eligible respondents|0 / 5 (0%)|3 / 4 (75%)');
   expect(screen.getByText('No eligible respondents')).toHaveAccessibleName(
     'Response rate unavailable because this survey has no eligible respondents.',
   );

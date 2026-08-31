@@ -4,7 +4,7 @@ import { Chip, Stack, Tooltip, Typography } from '@mui/material';
 import MenuCell from './SurveyTableMenuCell';
 import { LifecycleChip } from './SurveyLifecyclePanel';
 import { launchCounts, lifecycleStatus, providerCounts } from './surveyLifecycle';
-import { responseRateDescription, responseRateLabel, responseRateSummary } from './surveyResponseRate';
+import { responseRateDescription, responseRateLabel, responseRateSortValue, responseRateSummary } from './surveyResponseRate';
 
 const SurveyTable = ({
   rows,
@@ -22,7 +22,7 @@ const SurveyTable = ({
       ...row,
       questions: row.questions === 'null' ? '0' : row.questions,
       responseRate,
-      responseRateSortValue: responseRate.responseRatePercent ?? -1,
+      responseRateSortValue: responseRateSortValue(responseRate),
     };
   }), [rows]);
 
@@ -41,6 +41,7 @@ const SurveyTable = ({
       field: 'responseRateSortValue',
       headerName: 'Response Rate',
       width: 185,
+      valueFormatter: (_value, row) => responseRateLabel(row.responseRate),
       renderCell: ({ row, hasFocus }) => {
         const details = responseRateDescription(row.responseRate);
         return <Tooltip title={details} arrow>

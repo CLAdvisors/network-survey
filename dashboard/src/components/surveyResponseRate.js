@@ -22,6 +22,9 @@ export const responseRateSummary = (survey = {}) => {
   return { eligibleCount, completedCount, responseRatePercent };
 };
 
+// Unavailable rates intentionally sort before 0% in ascending order.
+export const responseRateSortValue = (summary) => summary.responseRatePercent ?? -1;
+
 export const responseRateLabel = (summary) => summary.eligibleCount === 0
   ? 'No eligible respondents'
   : `${summary.completedCount} / ${summary.eligibleCount} (${summary.responseRatePercent === null ? 'Rate unavailable' : `${summary.responseRatePercent}%`})`;

@@ -1,7 +1,8 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { expect, test, vi } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import SurveyTable from './SurveyTable';
+import { responseRateDescription, responseRateLabel, responseRateSummary } from './surveyResponseRate';
 
 vi.mock('../api/axios', () => ({ default: { get: vi.fn() } }));
 
@@ -9,8 +10,8 @@ vi.mock('@mui/x-data-grid', () => ({
   GridToolbar: () => null,
   DataGrid: ({ rows, columns }) => (
     <div>
-      {columns.filter((column) => ['invitationSummary', 'providerSummary'].includes(column.field)).map((column) => (
-        <section key={column.field} aria-label={column.headerName}>
+      {columns.filter((column) => ['responseRateSortValue', 'invitationSummary', 'providerSummary'].includes(column.field)).map((column) => (
+        <section key={column.field} aria-label={column.headerName} data-sortable={String(column.sortable !== false)}>
           {rows.map((row, index) => <span key={row.id}>{column.renderCell({ row, hasFocus: index === 0 })}</span>)}
         </section>
       ))}
@@ -19,6 +20,15 @@ vi.mock('@mui/x-data-grid', () => ({
 }));
 
 vi.mock('./SurveyTableMenuCell', () => ({ default: () => null }));
+
+const row = (id, values) => ({
+  id,
+  name: `Survey ${id}`,
+  respondents: 0,
+  questions: 0,
+  lifecycleStatus: 'draft',
+  ...values,
+});
 
 test('keeps survey dispatch acceptance separate from provider outcomes', () => {
   render(<SurveyTable rows={[{
@@ -51,4 +61,45 @@ test('does not promise provider outcomes when no invitations were accepted', () 
   const provider = screen.getByRole('region', { name: 'Provider outcomes' });
   expect(provider).toHaveTextContent('No provider activity');
   expect(provider).not.toHaveTextContent('Awaiting outcomes');
+});
+
+describe('survey response-rate normalization', () => {
+  test.each([
+    [{ eligibleRespondents:0, completedResponses:0, responseRatePercent:null }, { eligibleCount:0, completedCount:0, responseRatePercent:null }],
+    [{ eligibleRespondents:'5', completedResponses:'0', responseRatePercent:'0' }, { eligibleCount:5, completedCount:0, responseRatePercent:0 }],
+    [{ eligibleRespondents:4, completedResponses:3, responseRatePercent:75 }, { eligibleCount:4, completedCount:3, responseRatePercent:75 }],
+    [{ eligibleRespondents:'7', completedResponses:'7', responseRatePercent:'100' }, { eligibleCount:7, completedCount:7, responseRatePercent:100 }],
+  ])('normalizes numeric and string API values without recomputing the server rate', (input, expected) => {
+    expect(responseRateSummary(input)).toEqual(expected);
+  });
+
+  test('uses safe finite fallbacks and a humane zero-denominator label', () => {
+    const summary = responseRateSummary({
+      eligibleRespondents: 'not-a-number',
+      completedResponses: Infinity,
+      responseRatePercent: Infinity,
+    });
+    expect(summary).toEqual({ eligibleCount:0, completedCount:0, responseRatePercent:null });
+    expect(responseRateLabel(summary)).toBe('No eligible respondents');
+    expect(responseRateDescription(summary)).toMatch(/no eligible respondents/i);
+  });
+});
+
+test('renders a sortable, accessible Response Rate column for every survey', () => {
+  render(<SurveyTable
+    rows={[
+      row('zero', { eligibleRespondents:0, completedResponses:0, responseRatePercent:null }),
+      row('partial', { eligibleRespondents:'4', completedResponses:'3', responseRatePercent:'75' }),
+    ]}
+    selectRow={() => {}}
+  />);
+
+  const responseRate = screen.getByRole('region', { name: 'Response Rate' });
+  expect(responseRate).toHaveAttribute('data-sortable', 'true');
+  expect(screen.getByText('No eligible respondents')).toHaveAccessibleName(
+    'Response rate unavailable because this survey has no eligible respondents.',
+  );
+  expect(screen.getByText('3 / 4 (75%)')).toHaveAccessibleName(
+    '3 of 4 eligible respondents completed the survey (75% response rate).',
+  );
 });

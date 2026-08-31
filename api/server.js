@@ -18,7 +18,7 @@ dotenvFlow.config();
 const { ResendProvider, reserveProviderRateOnClient } = require('./email');
 const lifecycle = require('./lifecycle');
 const { createResendWebhookHandler } = require('./webhooks');
-const { displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
+const { displayedRespondentPredicate, displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -2741,6 +2741,7 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
         `SELECT r.name, r.contact_info
          FROM Respondent r
          WHERE ${legacySurveyPredicate('r')}
+           AND ${displayedRespondentPredicate('r')}
            AND r.uuid != $3
            AND CONCAT(COALESCE(r.name, ''), ' (', COALESCE(r.contact_info, ''), ')') = ANY($4::text[])`,
         [validation.respondent.survey_id, surveyName, userId, requestedValues]
@@ -2785,6 +2786,7 @@ app.get('/api/admin/names', requireAuth, async (req, res) => {
       SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
       WHERE ${legacySurveyPredicate('r')}
+      AND ${displayedRespondentPredicate('r')}
       AND (r.name ILIKE $3 OR r.contact_info ILIKE $3)
       ORDER BY r.name
       OFFSET $4
@@ -2853,6 +2855,7 @@ app.get('/api/names', respondentRateLimiter, async (req, res) => {
       SELECT r.name, r.contact_info, COUNT(*) OVER() AS total_count
       FROM Respondent r
       WHERE ${legacySurveyPredicate('r')}
+      AND ${displayedRespondentPredicate('r')}
       AND ($3::text IS NULL OR r.uuid != $3)
       AND (r.name ILIKE $4 OR r.contact_info ILIKE $4)
       ORDER BY r.name

@@ -9,12 +9,12 @@ import api from '../api/axios';
 import { advanceSurveyOperationGeneration } from './useSurveyOperationState';
 
 vi.mock('../api/axios', () => ({ default: { get: vi.fn(), post: vi.fn() } }));
+const authAccess = vi.hoisted(() => ({
+  canEditSurvey: (survey) => Boolean(survey) && survey.role !== 'viewer',
+  canViewSensitiveSurveyData: (survey) => Boolean(survey) && survey.role !== 'viewer',
+}));
 vi.mock('../context/AuthContext', () => ({
-  useAuth: () => ({
-    memberships: [{ role: 'editor' }],
-    canEditSurvey: (survey) => Boolean(survey) && survey.role !== 'viewer',
-    canViewSensitiveSurveyData: (survey) => Boolean(survey) && survey.role !== 'viewer',
-  }),
+  useAuth: () => ({ memberships: [{ role: 'editor' }], ...authAccess }),
 }));
 
 vi.mock('./SurveyTable', () => ({
@@ -35,7 +35,10 @@ vi.mock('./QuestionTable', () => ({
   </>,
 }));
 vi.mock('./RespondentTable', () => ({
-  default: ({ surveyName, onDirtyChange, onSurveyDataChanged }) => <>
+  default: ({ surveyName, loading, loadError, onRetry, onDirtyChange, onSurveyDataChanged }) => <>
+    <span data-testid="respondent-loading">{String(Boolean(loading))}</span>
+    <span data-testid="respondent-error">{loadError || ''}</span>
+    {loadError && <button onClick={onRetry}>Retry respondents</button>}
     <button onClick={() => onDirtyChange?.(surveyName, 'respondents', true)}>Dirty respondents</button>
     <button onClick={() => onSurveyDataChanged?.()}>Refresh after respondent change</button>
   </>,
@@ -94,6 +97,33 @@ test('dirty state remains scoped to its owning survey across every editable sect
   await userEvent.click(screen.getByRole('button', { name: 'Select Gamma' }));
   expect(screen.getByTestId('dirty-survey-c')).toBeEmptyDOMElement();
   expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('invitationBody,invitationSubject,questions,respondents');
+});
+
+test('surfaces respondent load failures and retries before permitting edits', async () => {
+  let targetLoads = 0;
+  api.get.mockImplementation((url) => {
+    if (url === '/surveys') return Promise.resolve({ data: { surveys } });
+    if (url.startsWith('/listQuestions')) return Promise.resolve({ data: { questions: [] } });
+    if (url.startsWith('/targets')) {
+      targetLoads += 1;
+      return targetLoads === 1
+        ? Promise.reject(new Error('targets unavailable'))
+        : Promise.resolve({ data: [{ id: 1, name: 'Loaded Person' }] });
+    }
+    return Promise.resolve({ data: [] });
+  });
+
+  const theme = createTheme();
+  render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
+
+  await waitFor(() => expect(screen.getByTestId('respondent-error')).toHaveTextContent('Unable to load survey respondents'));
+  await userEvent.click(screen.getByRole('button', { name: 'Retry respondents' }));
+  await waitFor(() => {
+    expect(targetLoads).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('respondent-error')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('respondent-loading')).toHaveTextContent('false');
+  });
 });
 
 test('keeps owning editor instances and scoped drafts while visiting a survey without edit access', async () => {

@@ -75,6 +75,7 @@ test('survey respondent summaries count displayed roster rows and only exclude t
   assert.match(serverSource, /const query = \(isPlatformAdmin\(req\.user\) \? `[\s\S]+` : `[\s\S]+`\)\.replace\('COUNT\(r\.respondent_id\) AS number_of_respondents', `\$\{displayedRespondentCountExpression\('r'\)\}/);
   assert.doesNotMatch(serverSource, /number_of_respondents \|\| 0\) - 1/);
   assert.match(serverSource, /SELECT \$\{displayedRespondentCountExpression\('r'\)\} AS number_of_respondents[\s\S]+userDataStatus: Number\(number_of_respondents\) > 0/);
+  assert.equal((serverSource.match(/displayedRespondentPredicate\('r'\)/g) || []).length, 3, 'all respondent-backed choice paths exclude the exact placeholder');
   const lifecycleSource = fs.readFileSync(path.join(__dirname, '../lifecycle.js'), 'utf8');
   assert.match(lifecycleSource, /can_respond IS NOT TRUE AND \$\{displayedRespondentPredicate\('r'\)\}/);
 });
@@ -1301,6 +1302,9 @@ test('/api/user validates lazy tagbox answers against exact same-survey responde
   });
   assert.equal(valid.status, 200);
   assert.equal(persisted.length, 3);
+  assert.match(choiceQueries[0].sql, /r\.name IS DISTINCT FROM 'None'/);
+  assert.match(choiceQueries[0].sql, /r\.contact_info IS DISTINCT FROM 'N\/A'/);
+  assert.match(choiceQueries[0].sql, /r\.can_respond IS DISTINCT FROM FALSE/);
   assert.match(choiceQueries[0].sql, /r\.uuid != \$3/);
   assert.match(choiceQueries[0].sql,
     /CONCAT\(COALESCE\(r\.name, ''\), ' \(', COALESCE\(r\.contact_info, ''\), '\)'\) = ANY\(\$4::text\[\]\)/);
@@ -1526,6 +1530,9 @@ test('signed demo links load configured questions and real respondents but canno
         }] };
       }
       assert.match(sql, /FROM Respondent r/);
+      assert.match(sql, /r\.name IS DISTINCT FROM 'None'/);
+      assert.match(sql, /r\.contact_info IS DISTINCT FROM 'N\/A'/);
+      assert.match(sql, /r\.can_respond IS DISTINCT FROM FALSE/);
       assert.deepEqual(values, [surveyId, 'Survey A', null, '%%', 0, 100]);
       return { rows: [
         { name: 'Real Person One', contact_info: 'one@example.com', total_count: '2' },
@@ -2102,7 +2109,7 @@ test('dashboard read-only tables hide edit controls and demo email avoids public
   assert.match(questionTable, /editable: !readOnly/);
   assert.match(questionTable, /!readOnly &&/);
   assert.match(respondentTable, /readOnly = false/);
-  assert.match(respondentTable, /disabled=\{readOnly \|\| operationPending\}/);
+  assert.match(respondentTable, /disabled=\{readOnly \|\| operationPending \|\| !respondentsReady\}/);
   assert.match(respondentTable, /!readOnly &&/);
   assert.match(respondentTable, /surveyName,/);
   assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);

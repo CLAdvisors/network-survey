@@ -3,7 +3,7 @@ import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
 import api from '../api/axios';
-import { Box, Paper, Typography, Button, Switch } from '@mui/material';
+import { Alert, Box, CircularProgress, Paper, Typography, Button, Switch } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -38,7 +38,18 @@ const formatRowsToCSV = (rows) => {
   return `${CSV_HEADER}\n${dataRows.join('\n')}`;
 };
 
-const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false, onDirtyChange, onOperationChange }) => {
+const editableRespondentRowsMatch = (left = [], right = []) => {
+  const comparable = (row) => [
+    row.name || '',
+    row.email || row.contact_info || '',
+    row.language || row.lang || 'English',
+    row.canRespond ?? row.can_respond ?? true,
+  ];
+  const normalized = (items) => items.map(comparable).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+};
+
+const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, onRetry, onSurveyDataChanged, readOnly = false, onDirtyChange, onOperationChange }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
@@ -46,6 +57,8 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
   const draftsRef = useRef(new Map());
   const { begin, end, isPending, generation, advanceGeneration } = useSurveyOperationState('respondents', onOperationChange);
   const operationPending = isPending(surveyName);
+  const respondentsReady = Array.isArray(rows) && !loading && !loadError;
+  const hasIncompleteRows = tableRows.some((row) => !String(row.name || '').trim() || !String(row.email || '').trim());
   const surveyIdentity = useRef(surveyName);
   surveyIdentity.current = surveyName;
   const [sortModel, setSortModel] = useState([
@@ -56,13 +69,13 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
   ]);
 
   const columns = [
-    { field: 'name', headerName: 'User Name', width: 150, editable: !readOnly && !operationPending },
-    { field: 'email', headerName: 'Email', width: 200, editable: !readOnly && !operationPending },
+    { field: 'name', headerName: 'User Name', width: 150, editable: !readOnly && !operationPending && respondentsReady },
+    { field: 'email', headerName: 'Email', width: 200, editable: !readOnly && !operationPending && respondentsReady },
     { 
       field: 'language', 
       headerName: 'Language', 
       width: 130,
-      editable: !readOnly && !operationPending,
+      editable: !readOnly && !operationPending && respondentsReady,
       type: 'singleSelect',
       valueOptions: LANGUAGES.map(lang => lang.label),
       renderCell: (params) => {
@@ -79,7 +92,7 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
       renderCell: (params) => (
         <Switch
           checked={params.value}
-          disabled={readOnly || operationPending}
+          disabled={readOnly || operationPending || !respondentsReady}
           onChange={(e) => {
             e.stopPropagation();
             const newValue = e.target.checked;
@@ -142,6 +155,7 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
               icon: <DeleteIcon fontSize="small" />,
               color: 'error.main',
               handler: async (row) => {
+                if (!respondentsReady) return;
                 const targetSurveyId = surveyName;
                 if (!begin(targetSurveyId)) return;
                 try {
@@ -164,12 +178,12 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
         />
       ),
     }
-  ].filter(column => (!readOnly && !hasChanges && !operationPending) || column.field !== 'actions');
+  ].filter(column => (!readOnly && !hasChanges && !operationPending && respondentsReady) || column.field !== 'actions');
 
 
 
   useEffect(() => {
-    if (rows) {
+    if (Array.isArray(rows)) {
       const updatedRows = rows.map(row => ({
         ...row,
         language: row.language || 'English',
@@ -178,9 +192,14 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
       }));
       const original = JSON.parse(JSON.stringify(updatedRows));
       const draft = draftsRef.current.get(surveyName);
-      setTableRows(draft?.rows || updatedRows);
+      const draftPersisted = Boolean(draft) && editableRespondentRowsMatch(draft.rows, updatedRows);
+      if (draftPersisted) {
+        draftsRef.current.delete(surveyName);
+        onDirtyChange?.(surveyName, 'respondents', false);
+      }
+      setTableRows(draft && !draftPersisted ? draft.rows : updatedRows);
       setOriginalRows(original);
-      setHasChanges(Boolean(draft));
+      setHasChanges(Boolean(draft) && !draftPersisted);
     } else {
       setTableRows([]);
       setOriginalRows([]);
@@ -188,11 +207,15 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
     }
   }, [rows, surveyName]);
 
-  const fetchRespondentData = async (targetSurveyId = surveyName) => {
+  const fetchRespondentData = async (targetSurveyId = surveyName, { replaceDraft = false } = {}) => {
+    let applied = false;
     if (targetSurveyId === surveyIdentity.current) {
       try {
         const response = await api.get(`/targets?surveyName=${targetSurveyId}`);
-        if (targetSurveyId === surveyIdentity.current && !draftsRef.current.has(targetSurveyId)) {
+        if (
+          targetSurveyId === surveyIdentity.current &&
+          (replaceDraft || !draftsRef.current.has(targetSurveyId))
+        ) {
           const refreshedRows = response.data.map(row => ({
             ...row,
             language: row.language || 'English',
@@ -202,16 +225,18 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
           setTableRows(refreshedRows);
           setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
           setHasChanges(false);
+          applied = true;
         }
       } catch (error) {
         console.error('Error fetching respondents:', error);
       }
     }
     await onSurveyDataChanged?.();
+    return applied;
   };
 
   const handleProcessRowUpdate = (newRow) => {
-    if (readOnly || operationPending) return originalRows.find(row => row.id === newRow.id) || newRow;
+    if (readOnly || operationPending || !respondentsReady) return originalRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
@@ -233,6 +258,7 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
   };
 
   const handleSave = async () => {
+    if (!respondentsReady || hasIncompleteRows) return;
     const targetSurveyId = surveyName;
     if (!begin(targetSurveyId)) return;
     const savedDraft = draftsRef.current.get(targetSurveyId);
@@ -267,11 +293,16 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
         const draftUnchanged = Boolean(savedDraft) &&
           draftsRef.current.get(targetSurveyId) === savedDraft &&
           generation(targetSurveyId) === persistedGeneration;
-        if (draftUnchanged) {
+        const reloadApplied = await fetchRespondentData(targetSurveyId, { replaceDraft: draftUnchanged });
+        if (
+          draftUnchanged &&
+          (reloadApplied || targetSurveyId !== surveyIdentity.current) &&
+          draftsRef.current.get(targetSurveyId) === savedDraft &&
+          generation(targetSurveyId) === persistedGeneration
+        ) {
           draftsRef.current.delete(targetSurveyId);
           onDirtyChange?.(targetSurveyId, 'respondents', false);
         }
-        await fetchRespondentData(targetSurveyId);
       }
     } catch (error) {
       console.error('Failed to save changes:', error);
@@ -281,6 +312,7 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
   };
 
   const handleUpload = async (csvContent) => {
+    if (!respondentsReady) return;
     const targetSurveyId = surveyName;
     if (!begin(targetSurveyId)) return;
     try {
@@ -301,8 +333,17 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
     }
   };
 
+  const handleDiscard = () => {
+    if (operationPending || !respondentsReady) return;
+    draftsRef.current.delete(surveyName);
+    setTableRows(JSON.parse(JSON.stringify(originalRows)));
+    setHasChanges(false);
+    advanceGeneration(surveyName);
+    onDirtyChange?.(surveyName, 'respondents', false);
+  };
+
   const handleAddRow = () => {
-    if (operationPending) return;
+    if (operationPending || !respondentsReady) return;
     const newId = Math.max(0, ...tableRows.map(row => row.id)) + 1;
     const newRow = {
       id: newId,
@@ -335,7 +376,7 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
         <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold' }}>
           Respondent Table
         </Typography>
-        {!readOnly && (
+        {!readOnly && respondentsReady && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <AddRowButton onClick={handleAddRow} disabled={operationPending} />
             <TableUploadButton
@@ -345,19 +386,40 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
               disabled={hasChanges || operationPending}
             />
             {hasChanges && (
-              <Button
-                variant="contained"
-                startIcon={<SaveIcon />}
-                onClick={handleSave}
-                disabled={operationPending}
-                size="small"
-              >
-                Save
-              </Button>
+              <>
+                <Button onClick={handleDiscard} disabled={operationPending} size="small">
+                  Discard changes
+                </Button>
+                <Button
+                  variant="contained"
+                  startIcon={<SaveIcon />}
+                  onClick={handleSave}
+                  disabled={operationPending || hasIncompleteRows}
+                  size="small"
+                >
+                  Save
+                </Button>
+              </>
             )}
           </Box>
         )}
       </Box>
+
+      {hasChanges && hasIncompleteRows && respondentsReady && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Complete each respondent’s name and email, or discard changes, before saving.
+        </Alert>
+      )}
+      {loading && (
+        <Alert severity="info" icon={<CircularProgress size={18} />} sx={{ mb: 2 }}>
+          Loading survey respondents…
+        </Alert>
+      )}
+      {loadError && (
+        <Alert severity="error" sx={{ mb: 2 }} action={onRetry ? <Button color="inherit" size="small" onClick={onRetry}>Retry</Button> : undefined}>
+          {loadError}
+        </Alert>
+      )}
 
       <DataGrid
         rows={tableRows}
@@ -367,7 +429,7 @@ const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = fal
         }}
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={readOnly || operationPending ? undefined : handleProcessRowUpdate}
+        processRowUpdate={readOnly || operationPending || !respondentsReady ? undefined : handleProcessRowUpdate}
         components={{
           Toolbar: GridToolbar,
         }}

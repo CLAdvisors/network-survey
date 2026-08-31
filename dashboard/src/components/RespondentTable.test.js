@@ -27,8 +27,8 @@ vi.mock('@mui/x-data-grid', () => ({
   ),
 }));
 
-vi.mock('./TableUploadButton', () => ({ default: () => null }));
-vi.mock('./AddRowButton', () => ({ default: () => null }));
+vi.mock('./TableUploadButton', () => ({ default: ({ disabled }) => <button disabled={disabled}>Upload respondents</button> }));
+vi.mock('./AddRowButton', () => ({ default: ({ disabled, onClick }) => <button disabled={disabled} onClick={onClick}>Add respondent</button> }));
 vi.mock('./TableMenuCell', () => ({ default: () => null }));
 
 const deferred = () => {
@@ -57,8 +57,25 @@ test('presents dispatch and provider outcomes as separate respondent fields', as
   expect(screen.getByRole('region', { name: 'Provider outcome time' })).toHaveTextContent(formatDateTime(deliveredAt));
 });
 
-test('refreshes survey summaries when respondent persistence succeeds but target reload fails', async () => {
+test('keeps respondent mutations unavailable until the roster loads successfully', async () => {
+  const retry = vi.fn();
+  const view = render(<RespondentTable rows={null} surveyName="survey-1" loading onRetry={retry} />);
+
+  expect(screen.getByText('Loading survey respondents…')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Add respondent' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Upload respondents' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Edit respondent' })).not.toBeInTheDocument();
+
+  view.rerender(<RespondentTable rows={null} surveyName="survey-1" loadError="Unable to load survey respondents." onRetry={retry} />);
+  expect(screen.getByText('Unable to load survey respondents.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Add respondent' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(retry).toHaveBeenCalledTimes(1);
+});
+
+test('retains the respondent draft when persistence succeeds but target reload fails', async () => {
   const onSurveyDataChanged = vi.fn().mockResolvedValue([]);
+  const onDirtyChange = vi.fn();
   api.post.mockResolvedValue({ status: 200 });
   api.get.mockRejectedValue(new Error('target reload failed'));
 
@@ -67,12 +84,60 @@ test('refreshes survey summaries when respondent persistence succeeds but target
       surveyName="survey-1"
       rows={[{ id: 1, name: 'One Person', email: 'one@example.test', canRespond: true }]}
       onSurveyDataChanged={onSurveyDataChanged}
+      onDirtyChange={onDirtyChange}
     />
   );
   await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
   await waitFor(() => expect(onSurveyDataChanged).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+  expect(onDirtyChange).not.toHaveBeenCalledWith('survey-1', 'respondents', false);
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Person Edited');
+});
+
+test('reconciles a retained draft after a later roster reload confirms it was persisted', async () => {
+  const onDirtyChange = vi.fn();
+  const onSurveyDataChanged = vi.fn().mockResolvedValue([]);
+  api.post.mockResolvedValue({ status: 200 });
+  api.get.mockRejectedValueOnce(new Error('target reload failed'));
+  const view = render(<RespondentTable
+    surveyName="survey-1"
+    rows={[{ id: 1, name: 'One Person', email: 'one@example.test', canRespond: true }]}
+    onDirtyChange={onDirtyChange}
+    onSurveyDataChanged={onSurveyDataChanged}
+  />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Edit respondent' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+  onDirtyChange.mockClear();
+
+  view.rerender(<RespondentTable
+    surveyName="survey-1"
+    rows={[{ id: 99, name: 'One Person Edited', email: 'one@example.test', canRespond: true }]}
+    onDirtyChange={onDirtyChange}
+    onSurveyDataChanged={onSurveyDataChanged}
+  />);
+
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument());
+  expect(onDirtyChange).toHaveBeenCalledWith('survey-1', 'respondents', false);
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Person Edited');
+});
+
+test('allows an incomplete newly added respondent to be discarded', async () => {
+  const onDirtyChange = vi.fn();
+  render(<RespondentTable surveyName="survey-1" rows={[]} onDirtyChange={onDirtyChange} />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Add respondent' }));
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  expect(screen.getByText(/Complete each respondent’s name and email, or discard changes/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Discard changes' })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+
+  expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  expect(screen.getByTestId('respondent-name')).toBeEmptyDOMElement();
+  expect(onDirtyChange).toHaveBeenLastCalledWith('survey-1', 'respondents', false);
 });
 
 test('clears the owning survey respondent draft when its save succeeds after switching away', async () => {

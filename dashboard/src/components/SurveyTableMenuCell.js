@@ -117,7 +117,22 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
     }
   };
 
+  const handleDemoClick = (event) => {
+    stop(event);
+    setAnchorEl(null);
+    if (actionBlocked) {
+      notify(`${blockedActionMessage} Email demos use only persisted survey content.`, 'warning');
+      return;
+    }
+    setDemoDialogOpen(true);
+  };
+
   const handleDemoSubmit = async (email, language) => {
+    if (actionBlocked) {
+      setDemoDialogOpen(false);
+      notify(`${blockedActionMessage} Email demos use only persisted survey content.`, 'warning');
+      return;
+    }
     setDemoSending(true);
     try {
       const response = await api.post(`/surveys/${id}/demo-email`, { email, language });
@@ -208,7 +223,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         {canClose && <MenuItem onClick={(event) => { closeMenu(event); setTransition('close'); }}><StopCircleIcon fontSize="small" sx={{ mr: 1 }} />Close Survey</MenuItem>}
         {canReopen && <MenuItem onClick={(event) => { closeMenu(event); setTransition('reopen'); }}><ReplayIcon fontSize="small" sx={{ mr: 1 }} />Reopen Survey</MenuItem>}
         {canEdit && <MenuItem onClick={handleCopyClick}><ContentCopyIcon fontSize="small" sx={{ mr: 1 }} />Copy Survey</MenuItem>}
-        {canEdit && <MenuItem onClick={openAction(setDemoDialogOpen)}><EmailIcon fontSize="small" sx={{ mr: 1 }} />Send Email Demo</MenuItem>}
+        {canEdit && <MenuItem onClick={handleDemoClick}><EmailIcon fontSize="small" sx={{ mr: 1 }} />Send Email Demo</MenuItem>}
         {canArchiveSurvey(row) && <MenuItem onClick={handleArchiveClick} sx={{ color: 'error.main' }}><DeleteIcon fontSize="small" sx={{ mr: 1 }} />Archive Survey</MenuItem>}
       </Menu>
 

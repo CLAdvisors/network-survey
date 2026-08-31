@@ -24,6 +24,8 @@ const Dashboard = () => {
   const [questionError, setQuestionError] = React.useState(null);
   const [relatedRefresh, setRelatedRefresh] = React.useState(0);
   const [respondentData, setRespondentData] = React.useState(null);
+  const [respondentLoading, setRespondentLoading] = React.useState(false);
+  const [respondentError, setRespondentError] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
   const [dirtyBySurvey, setDirtyBySurvey] = React.useState({});
@@ -76,9 +78,20 @@ const Dashboard = () => {
         setQuestionLoading(false);
         setQuestionError(null);
         setRespondentData(null);
+        setRespondentLoading(false);
+        setRespondentError(null);
         return;
       }
       const selectedId = surveyId(selectSurvey);
+      const canViewRespondents = canViewSensitiveSurveyData(selectSurvey);
+      if (canViewRespondents) {
+        setRespondentLoading(true);
+        setRespondentError(null);
+      } else {
+        setRespondentData(null);
+        setRespondentLoading(false);
+        setRespondentError(null);
+      }
       const questionGeneration = surveyOperationGeneration('questions', selectedId);
       setQuestionLoading(true);
       setQuestionError(null);
@@ -104,23 +117,28 @@ const Dashboard = () => {
         }
       }
 
-      if (!canViewSensitiveSurveyData(selectSurvey)) {
-        if (request === relatedRequest.current) setRespondentData(null);
-        return;
-      }
+      if (!canViewRespondents) return;
       const respondentGeneration = surveyOperationGeneration('respondents', selectedId);
       try {
         const respondentResponse = await api.get(`/targets?surveyName=${selectedId}`, { signal: controller.signal });
-        if (
-          request === relatedRequest.current &&
-          surveyOperationGeneration('respondents', selectedId) === respondentGeneration
-        ) setRespondentData(respondentResponse.data);
+        if (request === relatedRequest.current) {
+          if (surveyOperationGeneration('respondents', selectedId) !== respondentGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setRespondentData(respondentResponse.data);
+          setRespondentLoading(false);
+        }
       } catch (err) {
-        if (
-          !controller.signal.aborted &&
-          request === relatedRequest.current &&
-          surveyOperationGeneration('respondents', selectedId) === respondentGeneration
-        ) setRespondentData(null);
+        if (!controller.signal.aborted && request === relatedRequest.current) {
+          if (surveyOperationGeneration('respondents', selectedId) !== respondentGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setRespondentData(null);
+          setRespondentError('Unable to load survey respondents. Retry before editing this survey.');
+          setRespondentLoading(false);
+        }
       }
     };
     fetchRelatedData();
@@ -135,6 +153,8 @@ const Dashboard = () => {
       setQuestionLoading(true);
       setQuestionError(null);
       setRespondentData(null);
+      setRespondentLoading(canViewSensitiveSurveyData(childData));
+      setRespondentError(null);
     }
     setSelectSurvey(childData);
   };
@@ -167,6 +187,8 @@ const Dashboard = () => {
     setQuestionLoading(true);
     setQuestionError(null);
     setRespondentData(null);
+    setRespondentLoading(true);
+    setRespondentError(null);
     const surveys = await fetchSurveyData();
     if (!surveys.some((survey) => surveyId(survey) === copiedId)) {
       setSnackbar({ severity: 'info', message: 'The copied survey was created and will be selected when refresh completes.' });
@@ -337,6 +359,9 @@ const Dashboard = () => {
             {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
             <RespondentTable
               rows={selectedCanViewRespondents ? respondentData : null}
+              loading={selectedCanViewRespondents && respondentLoading}
+              loadError={selectedCanViewRespondents ? respondentError : null}
+              onRetry={() => setRelatedRefresh((value) => value + 1)}
               surveyName={selectedCanViewRespondents ? surveyId(selectSurvey) : null}
               onSurveyDataChanged={fetchSurveyData}
               readOnly={selectedReadOnly}

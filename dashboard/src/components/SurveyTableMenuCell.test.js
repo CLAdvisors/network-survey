@@ -133,6 +133,11 @@ test('blocks copy and archive while this survey has drafts or pending updates', 
   expect(await screen.findByText(/Save or undo changes to “Leadership Survey” before continuing.*Copy uses only persisted survey content/)).toBeInTheDocument();
   expect(screen.queryByRole('dialog', { name: 'Copy survey' })).not.toBeInTheDocument();
 
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Send Email Demo'));
+  expect(await screen.findByText(/Save or undo changes to “Leadership Survey” before continuing.*Email demos use only persisted survey content/)).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: /send demo survey email/i })).not.toBeInTheDocument();
+
   view.rerender(<SurveyTableMenuCell
     row={{ id: 'survey-1', name: 'Leadership Survey' }}
     pendingOperations={{ respondents: true }}

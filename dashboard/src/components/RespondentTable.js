@@ -56,6 +56,11 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
   const [authoritativeRevision, setAuthoritativeRevision] = useState(null);
   const [mutationErrors, setMutationErrors] = useState({});
   const draftsRef = useRef(new Map());
+  const acceptedRevisionRef = useRef(new Map());
+  const propRevision = Number(revision);
+  if (surveyName && Number.isSafeInteger(propRevision) && propRevision >= 0) {
+    acceptedRevisionRef.current.set(surveyName, Math.max(acceptedRevisionRef.current.get(surveyName) ?? -1, propRevision));
+  }
   const mutationError = mutationErrors[surveyName] || null;
   const setSurveyMutationError = (targetSurveyId, message) => setMutationErrors((current) => {
     if (!message) {
@@ -212,6 +217,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
       const draftPersisted = editableRespondentDraftMatches(draft, updatedRows);
       if (draftPersisted) {
         draftsRef.current.delete(surveyName);
+        setSurveyMutationError(surveyName, null);
         onDirtyChange?.(surveyName, 'respondents', false);
       }
       if (draft && !draftPersisted) draftsRef.current.set(surveyName, { ...draft, latestRows: original, latestRevision: nextRevision });
@@ -233,6 +239,9 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
       const response = await api.get(`/targets?surveyName=${targetSurveyId}`);
       const refreshedRevision = responseRevision(response);
       if (refreshedRevision === null) throw new Error('Roster revision missing from response');
+      const latestAcceptedRevision = acceptedRevisionRef.current.get(targetSurveyId) ?? -1;
+      if (refreshedRevision < latestAcceptedRevision) return { applied: false, confirmed: false, stale: true };
+      acceptedRevisionRef.current.set(targetSurveyId, refreshedRevision);
       const refreshedRows = response.data.map(row => ({
         ...row,
         language: row.language || 'English',
@@ -241,6 +250,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
       }));
       const draft = draftsRef.current.get(targetSurveyId);
       confirmed = editableRespondentDraftMatches(draft, refreshedRows);
+      if (confirmed || !draft) setSurveyMutationError(targetSurveyId, null);
       if (confirmed && draftsRef.current.get(targetSurveyId) === draft) {
         draftsRef.current.delete(targetSurveyId);
         onDirtyChange?.(targetSurveyId, 'respondents', false);
@@ -267,8 +277,6 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
   const handleProcessRowUpdate = (newRow) => {
     if (readOnly || operationPending || !respondentsReady) return originalRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
-    setTableRows(updatedRows);
-    
     const hasUnsavedChanges = updatedRows.some((row) => {
       const original = originalRows.find(origRow => origRow.id === row.id);
       return !original || 
@@ -278,9 +286,10 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
              original.canRespond !== row.canRespond;
     });
     
+    const existingDraft = draftsRef.current.get(surveyName);
     setHasChanges(hasUnsavedChanges);
     if (hasUnsavedChanges) {
-      const existingDraft = draftsRef.current.get(surveyName);
+      setTableRows(updatedRows);
       draftsRef.current.set(surveyName, {
         rows: updatedRows,
         baseRows: existingDraft?.baseRows || JSON.parse(JSON.stringify(originalRows)),
@@ -288,7 +297,13 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
         latestRows: existingDraft?.latestRows || JSON.parse(JSON.stringify(originalRows)),
         latestRevision: existingDraft?.latestRevision ?? authoritativeRevision,
       });
-    } else draftsRef.current.delete(surveyName);
+    } else {
+      draftsRef.current.delete(surveyName);
+      const restoredRows = existingDraft?.latestRows || updatedRows;
+      setTableRows(JSON.parse(JSON.stringify(restoredRows)));
+      setOriginalRows(JSON.parse(JSON.stringify(restoredRows)));
+      setAuthoritativeRevision(existingDraft?.latestRevision ?? authoritativeRevision);
+    }
     advanceGeneration(surveyName);
     onDirtyChange?.(surveyName, 'respondents', hasUnsavedChanges);
     return newRow;

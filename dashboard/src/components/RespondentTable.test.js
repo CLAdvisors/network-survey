@@ -15,6 +15,7 @@ vi.mock('@mui/x-data-grid', () => ({
     <div>
       <span data-testid="respondent-name">{rows[0]?.name || ''}</span>
       {processRowUpdate && rows[0] && <button onClick={() => processRowUpdate({ ...rows[0], name: `${rows[0].name} Edited` })}>Edit respondent</button>}
+      {processRowUpdate && rows[0] && <button onClick={() => processRowUpdate({ ...rows[0], name: rows[0].name.replace(/ Edited$/, '') })}>Revert respondent</button>}
       {processRowUpdate && rows.slice(1).map((row) => <button key={row.id} onClick={() => processRowUpdate({ ...row, name: `${row.name} Edited` })}>Edit respondent {row.id}</button>)}
       {columns.filter((column) => ['dispatchStatus', 'providerOutcome', 'providerOutcomeAt'].includes(column.field)).map((column) => (
         <section key={column.field} aria-label={column.headerName}>
@@ -137,6 +138,41 @@ test('keeps a draft pinned to its base revision when newer background data arriv
   expect(api.patch.mock.calls[0][1].expectedRevision).toBe(4);
 });
 
+test('ignores an older mutation refresh after a newer authoritative roster arrives', async () => {
+  const oldRefresh = deferred();
+  api.patch.mockResolvedValue({ status: 200, data: { revision: 5 } });
+  api.get.mockReturnValue(oldRefresh.promise);
+  const baseRows = [{ id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' }];
+  const view = render(<RespondentTable revision={4} surveyName="survey-1" rows={baseRows} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(api.get).toHaveBeenCalled());
+
+  view.rerender(<RespondentTable revision={6} surveyName="survey-1" rows={[
+    { id: 1, name: 'Server Newer', email: 'one@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  await act(async () => oldRefresh.resolve({
+    data: [{ id: 1, name: 'One Edited', email: 'one@example.test', canRespond: true, language: 'English' }],
+    headers: { 'x-roster-revision': '5' },
+  }));
+
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Edited');
+  expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+});
+
+test('manual draft reversion restores the latest authoritative roster and revision', async () => {
+  const baseRows = [{ id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' }];
+  const view = render(<RespondentTable revision={4} surveyName="survey-1" rows={baseRows} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
+  view.rerender(<RespondentTable revision={5} surveyName="survey-1" rows={[
+    { id: 1, name: 'Server Newer', email: 'one@example.test', canRespond: true, language: 'English' },
+  ]} />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Revert respondent' }));
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('Server Newer');
+  expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+});
+
 test('aborts a delayed CSV upload if a respondent draft was created while the file was read', async () => {
   render(<RespondentTable revision={0} surveyName="survey-1" rows={[
     { id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' },
@@ -202,6 +238,7 @@ test('reconciles a retained draft after a later roster reload confirms it was pe
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument());
   expect(onDirtyChange).toHaveBeenCalledWith('survey-1', 'respondents', false);
   expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Person Edited');
+  expect(screen.queryByText(/change may have saved/i)).not.toBeInTheDocument();
 });
 
 test('allows an incomplete newly added respondent to be discarded', async () => {

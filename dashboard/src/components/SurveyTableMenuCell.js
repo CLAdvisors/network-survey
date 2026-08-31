@@ -25,6 +25,7 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import api from '../api/axios';
 import SendDemoDialog from './SendDemoDialog';
 import StartSurveyDialog from './StartSurveyDialog';
+import ReminderCampaignDialog from './ReminderCampaignDialog';
 import { capability, errorMessage, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
@@ -38,6 +39,7 @@ const buildDefaultCopiedName = (name) => {
 const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onViewLifecycle, unsavedChanges = {}, pendingOperations = {} }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [startOpen, setStartOpen] = useState(false);
+  const [reminderOpen, setReminderOpen] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [copiedName, setCopiedName] = useState(buildDefaultCopiedName(row.name));
   const [copying, setCopying] = useState(false);
@@ -55,6 +57,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
   const canEdit = canEditSurvey(row);
   const canLaunch = status === 'draft' && capability(row, 'canLaunch', canEdit);
   const canClose = status === 'active' && capability(row, 'canClose', canEdit);
+  const canRemind = status === 'active' && hasSurveyRole(row, 'admin');
   const canReopen = status === 'closed' && capability(row, 'canReopen', hasSurveyRole(row, 'admin'));
   const hasUnsavedChanges = Object.values(unsavedChanges).some(Boolean);
   const hasPendingOperations = Object.values(pendingOperations).some(Boolean);
@@ -159,6 +162,15 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
     if (refreshed) onViewLifecycle?.(refreshed);
   };
 
+  const handleReminderAccepted = async (payload) => {
+    setReminderOpen(false);
+    notify(payload?.message || 'Reminder campaign queued.');
+    onViewLifecycle?.({...row,latestLaunch:payload?.launch});
+    const refreshed=await onLifecycleChange?.(id, payload);
+    const selected=Array.isArray(refreshed)?refreshed.find(item=>surveyId(item)===id):null;
+    if(selected)onViewLifecycle?.(selected);
+  };
+
   const handleTransition = async () => {
     if (!transition || transitioning) return;
     setTransitioning(true);
@@ -219,6 +231,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
       </Snackbar>
       <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={closeMenu} PaperProps={{ sx: { minWidth: 190 } }}>
         {canLaunch && <MenuItem onClick={openAction(setStartOpen)}><PlayCircle fontSize="small" sx={{ mr: 1 }} />Launch Survey</MenuItem>}
+        {canRemind && <MenuItem onClick={openAction(setReminderOpen)}><EmailIcon fontSize="small" sx={{ mr: 1 }} />Send Bulk Reminder</MenuItem>}
         {status !== 'draft' && <MenuItem onClick={(event) => { closeMenu(event); onViewLifecycle?.(row); }}><HistoryIcon fontSize="small" sx={{ mr: 1 }} />{status === 'closed' ? 'View History' : 'View Delivery Status'}</MenuItem>}
         {canClose && <MenuItem onClick={(event) => { closeMenu(event); setTransition('close'); }}><StopCircleIcon fontSize="small" sx={{ mr: 1 }} />Close Survey</MenuItem>}
         {canReopen && <MenuItem onClick={(event) => { closeMenu(event); setTransition('reopen'); }}><ReplayIcon fontSize="small" sx={{ mr: 1 }} />Reopen Survey</MenuItem>}
@@ -228,6 +241,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
       </Menu>
 
       <StartSurveyDialog open={startOpen} survey={row} onClose={() => setStartOpen(false)} onAccepted={handleLaunchAccepted} unsavedChanges={unsavedChanges} pendingOperations={pendingOperations} />
+      <ReminderCampaignDialog open={reminderOpen} survey={row} onClose={() => setReminderOpen(false)} onAccepted={handleReminderAccepted} unsavedChanges={unsavedChanges} pendingOperations={pendingOperations} />
 
       <Dialog open={copyDialogOpen} onClose={handleCopyClose} onClick={stop} fullWidth maxWidth="sm">
         <DialogTitle>Copy survey</DialogTitle>

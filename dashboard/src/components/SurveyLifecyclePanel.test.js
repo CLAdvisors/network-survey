@@ -172,6 +172,6 @@ test('ignores launch history that resolves after the selected survey changes', a
     await first.promise;
   });
   expect(screen.queryByLabelText('99 not confirmed sent')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('Invitation launch history')).toBeInTheDocument();
+  expect(screen.getByLabelText('Email campaign history')).toBeInTheDocument();
   expect(screen.getByLabelText('2 submitted for sending')).toBeInTheDocument();
 });

@@ -1,0 +1,10 @@
+import React from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, expect, test, vi } from 'vitest';
+import api from '../api/axios';
+import ReminderTemplateEditor from './ReminderTemplateEditor';
+vi.mock('../api/axios',()=>({default:{get:vi.fn(),put:vi.fn()}}));
+beforeEach(()=>vi.clearAllMocks());
+test('saves a localized template with optimistic version and clear dirty state',async()=>{api.get.mockResolvedValue({data:{templates:[{language:'english',subject:'Reminder',body:'Old body',version:3}]}});api.put.mockResolvedValue({data:{template:{language:'english',subject:'Reminder now',body:'New body',version:4}}});const dirty=vi.fn();render(<ReminderTemplateEditor surveyId="survey-1" editable onDirtyChange={dirty}/>);const subject=await screen.findByLabelText(/Reminder subject/);const body=screen.getByLabelText(/Reminder body/);await waitFor(()=>expect(subject).toBeEnabled());await userEvent.clear(subject);await userEvent.type(subject,'Reminder now');await userEvent.clear(body);await userEvent.type(body,'New body');expect(dirty).toHaveBeenLastCalledWith('survey-1','reminderTemplate',true);await userEvent.click(screen.getByRole('button',{name:'Save reminder template'}));await waitFor(()=>expect(api.put).toHaveBeenCalledWith('/surveys/survey-1/reminder-templates/english',{subject:'Reminder now',body:'New body',expectedVersion:3}));expect(await screen.findByText('Reminder template saved.')).toBeInTheDocument();expect(dirty).toHaveBeenLastCalledWith('survey-1','reminderTemplate',false);});
+test('is read-only outside active admin editing and exposes server conflicts',async()=>{api.get.mockResolvedValue({data:{templates:[]}});const view=render(<ReminderTemplateEditor surveyId="survey-1" editable={false}/>);expect(await screen.findByText(/editable by survey administrators only while the survey is active/i)).toBeInTheDocument();expect(screen.getByLabelText(/Reminder subject/)).toBeDisabled();view.rerender(<ReminderTemplateEditor surveyId="survey-1" editable/>);});

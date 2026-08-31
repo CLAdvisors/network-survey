@@ -202,9 +202,91 @@ function aggregateSelect(whereSql) {
     ${whereSql} GROUP BY l.id ORDER BY l.created_at DESC`;
 }
 
+async function loadReminderData(client, survey, { lockRecipients = false, providerScope = '' } = {}) {
+  const scope=String(providerScope||'').trim();
+  const recipients = await client.query(
+    `SELECT r.respondent_id,r.name,r.contact_info,r.uuid,r.lang
+       FROM respondent r
+      WHERE r.survey_id=$1 AND r.can_respond=true AND r.response IS NULL
+        AND ${displayedRespondentPredicate('r')}
+        ${scope ? `AND NOT EXISTS(SELECT 1 FROM email_suppressions es WHERE es.provider_account_scope=$2 AND es.normalized_address=lower(btrim(r.contact_info)) AND (es.provider_active OR es.locally_overridden_at IS NULL))` : ''}
+      ORDER BY r.respondent_id LIMIT ${MAX_LAUNCH_RECIPIENTS + 1}
+      ${lockRecipients ? 'FOR SHARE OF r' : ''}`,
+    scope ? [survey.id,scope] : [survey.id]
+  );
+  const templates = await client.query(
+    `SELECT language,subject,body_text,configuration_version,updated_at
+       FROM survey_reminder_templates WHERE survey_id=$1 ORDER BY language LIMIT ${MAX_LAUNCH_TEMPLATES + 1}`,
+    [survey.id]
+  );
+  let suppressedExcludedCount=0;
+  if(scope){const suppressed=await client.query(`SELECT count(*)::int AS count FROM respondent r WHERE r.survey_id=$1 AND r.can_respond=true AND r.response IS NULL AND ${displayedRespondentPredicate('r')} AND EXISTS(SELECT 1 FROM email_suppressions es WHERE es.provider_account_scope=$2 AND es.normalized_address=lower(btrim(r.contact_info)) AND (es.provider_active OR es.locally_overridden_at IS NULL))`,[survey.id,scope]);suppressedExcludedCount=Number(suppressed.rows[0]?.count||0);}
+  return { recipients: recipients.rows, templates: templates.rows, suppressedExcludedCount };
+}
+
+function evaluateReminderReadiness(survey, data, config = process.env) {
+  const blockers = [];
+  if (survey.archived_at) blockers.push({ code:'survey_archived', message:'The survey is archived.' });
+  if (survey.lifecycle_status !== 'active') blockers.push({ code:'survey_not_active', message:'Only an active survey can receive reminders.' });
+  if (data.recipients.length === 0) blockers.push({ code:'recipients_missing', message:'No incomplete eligible respondents can be reminded.' });
+  if (data.recipients.length > MAX_LAUNCH_RECIPIENTS) blockers.push({ code:'recipients_limit_exceeded', message:`A reminder campaign may contain at most ${MAX_LAUNCH_RECIPIENTS} respondents.` });
+  if (data.templates.length > MAX_LAUNCH_TEMPLATES) blockers.push({ code:'templates_limit_exceeded', message:`A survey may contain at most ${MAX_LAUNCH_TEMPLATES} reminder templates.` });
+  const templateMap = new Map();
+  const templateSubjectMap = new Map();
+  const templateVersions = new Map();
+  for (const template of data.templates) {
+    const language = normalizeLanguage(template.language);
+    const body = normalizeTemplateText(template.body_text);
+    const subject = String(template.subject || '').trim();
+    if (!language || !SUPPORTED_LANGUAGES.has(language)) blockers.push({ code:'template_language_unsupported', message:'A reminder template uses an unsupported language.' });
+    else if (!body) blockers.push({ code:'template_body_missing', language, message:`The ${language} reminder body is empty.` });
+    else if (!subject || subject.length > 255) blockers.push({ code:'template_subject_invalid', language, message:`The ${language} reminder subject is missing or too long.` });
+    else { templateMap.set(language, body); templateSubjectMap.set(language, subject); templateVersions.set(language, Number(template.configuration_version)); }
+  }
+  const languages = new Set();
+  let invalidEmailCount=0, missingTokenCount=0, unsupportedLanguageCount=0, duplicateAddressCount=0;
+  const addresses=new Set();
+  for (const recipient of data.recipients) {
+    const language=normalizeLanguage(recipient.lang);
+    const address=String(recipient.contact_info || '').trim().toLowerCase();
+    languages.add(language);
+    if (!EMAIL_RE.test(address)) invalidEmailCount += 1;
+    if (addresses.has(address)) duplicateAddressCount += 1;
+    addresses.add(address);
+    if (!recipient.uuid) missingTokenCount += 1;
+    if (!SUPPORTED_LANGUAGES.has(language)) unsupportedLanguageCount += 1;
+  }
+  if (invalidEmailCount) blockers.push({code:'recipient_email_invalid',count:invalidEmailCount,message:`${invalidEmailCount} target respondent${invalidEmailCount===1?' has':'s have'} an invalid email address.`});
+  if (duplicateAddressCount) blockers.push({code:'recipient_email_duplicate',count:duplicateAddressCount,message:`${duplicateAddressCount} target respondent email address${duplicateAddressCount===1?' is':'es are'} duplicated.`});
+  if (missingTokenCount) blockers.push({code:'recipient_token_missing',count:missingTokenCount,message:`${missingTokenCount} target respondent${missingTokenCount===1?' has':'s have'} no existing survey link.`});
+  if (unsupportedLanguageCount) blockers.push({code:'recipient_language_unsupported',count:unsupportedLanguageCount,message:`${unsupportedLanguageCount} target respondent${unsupportedLanguageCount===1?' uses':'s use'} an unsupported language.`});
+  for (const language of languages) if (SUPPORTED_LANGUAGES.has(language) && !templateMap.has(language)) blockers.push({code:'template_missing',language,message:`A complete ${language} reminder template is required.`});
+  if (!config.SURVEY_URL) blockers.push({code:'survey_url_missing',message:'Survey URL is not configured.'});
+  if (!(config.RESEND_API_KEY||config.RESEND_KEY)) blockers.push({code:'provider_key_missing',message:'Email provider is not configured.'});
+  if (!(config.SURVEY_EMAIL_SENDER||DEFAULT_SENDER)) blockers.push({code:'sender_missing',message:'Survey sender is not configured.'});
+  if (!String(config.RESEND_PROVIDER_ACCOUNT_SCOPE||'').trim()) blockers.push({code:'provider_account_scope_missing',message:'Provider account scope is not configured.'});
+  return { lifecycleStatus:survey.lifecycle_status, archived:Boolean(survey.archived_at), eligibleIncompleteCount:data.recipients.length, targetCount:data.recipients.length, languages:[...languages].filter(Boolean).sort(), templateCoverage:[...languages].filter(Boolean).sort().map(language=>({language,covered:templateMap.has(language)})), blockers, blockerCount:blockers.length, warnings:[], canLaunch:blockers.length===0, templateMap, templateSubjectMap, templateVersions };
+}
+
+async function requireFreshWorker(client, config, readiness) {
+  const env=environmentName(config);const maxAge=Math.max(5,Number(config.EMAIL_WORKER_HEARTBEAT_MAX_AGE_SECONDS||45));
+  const worker=await client.query(`SELECT 1 FROM email_worker_control c JOIN email_sending_control s USING(environment) WHERE c.environment=$1 AND c.claiming_enabled=true AND s.sending_enabled=true AND (s.minimum_release='' OR c.minimum_release='' OR s.minimum_release=c.minimum_release) AND EXISTS(SELECT 1 FROM email_worker_heartbeats h WHERE h.environment=c.environment AND h.enabled=true AND h.claiming=true AND h.reminder_capable=true AND h.heartbeat_at>now()-($2::text||' seconds')::interval AND (c.minimum_release='' OR h.release_revision=c.minimum_release) AND (s.minimum_release='' OR h.release_revision=s.minimum_release))`,[env,maxAge]);
+  if(!worker.rowCount) readiness.blockers.push({code:'worker_unavailable',message:'No fresh compatible email worker is available.'});
+  readiness.blockerCount=readiness.blockers.length;readiness.canLaunch=readiness.blockers.length===0;
+}
+
+async function getReminderReadiness(pool,user,surveyId,config=process.env){const client=await pool.connect();try{const survey=await loadAuthorizedSurvey(client,user,surveyId,'admin');const data=await loadReminderData(client,survey,{providerScope:config.RESEND_PROVIDER_ACCOUNT_SCOPE});const suppressedExcludedCount=data.suppressedExcludedCount;const readiness=evaluateReminderReadiness(survey,data,config);readiness.suppressedExcludedCount=suppressedExcludedCount;if(suppressedExcludedCount)readiness.warnings.push({code:'suppressed_excluded',count:suppressedExcludedCount,message:`${suppressedExcludedCount} suppressed respondent${suppressedExcludedCount===1?' was':'s were'} excluded.`});await requireFreshWorker(client,config,readiness);delete readiness.templateMap;delete readiness.templateSubjectMap;delete readiness.templateVersions;return readiness;}finally{client.release();}}
+
+async function listReminderTemplates(pool,user,surveyId){const client=await pool.connect();try{const survey=await loadAuthorizedSurvey(client,user,surveyId,'admin');const result=await client.query(`SELECT language,subject,body_text AS body,configuration_version::int AS version,updated_at FROM survey_reminder_templates WHERE survey_id=$1 ORDER BY language`,[survey.id]);return {surveyId:survey.id,lifecycleStatus:survey.lifecycle_status,editable:!survey.archived_at&&survey.lifecycle_status==='active',templates:result.rows};}finally{client.release();}}
+
+async function saveReminderTemplate(pool,user,surveyId,{language,subject,body,expectedVersion}){language=normalizeLanguage(language);subject=String(subject||'').trim();body=normalizeTemplateText(body);expectedVersion=Number(expectedVersion);if(!SUPPORTED_LANGUAGES.has(language)||!subject||subject.length>255||!body||body.length>2555||!Number.isSafeInteger(expectedVersion)||expectedVersion<0)throw new LifecycleError(400,'reminder_template_invalid','Language, subject, body, and expectedVersion are required and must be valid.');const client=await pool.connect();try{await client.query('BEGIN');await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[`survey-provider-boundary:${String(surveyId).toLowerCase()}`]);const survey=await loadAuthorizedSurvey(client,user,surveyId,'admin','UPDATE');if(survey.archived_at||survey.lifecycle_status!=='active')throw new LifecycleError(409,'survey_not_active','Reminder templates are editable only while the survey is active.');const current=(await client.query(`SELECT configuration_version FROM survey_reminder_templates WHERE survey_id=$1 AND language=$2 FOR UPDATE`,[survey.id,language])).rows[0];const version=Number(current?.configuration_version||0);if(version!==expectedVersion)throw new LifecycleError(409,'template_version_conflict','The reminder template changed. Reload before saving.',{currentVersion:version});const saved=(await client.query(`INSERT INTO survey_reminder_templates(survey_id,language,subject,body_text,configuration_version,updated_by_user_id) VALUES($1,$2,$3,$4,1,$5) ON CONFLICT(survey_id,language) DO UPDATE SET subject=excluded.subject,body_text=excluded.body_text,configuration_version=survey_reminder_templates.configuration_version+1,updated_at=now(),updated_by_user_id=excluded.updated_by_user_id RETURNING language,subject,body_text AS body,configuration_version::int AS version,updated_at`,[survey.id,language,subject,body,user.id])).rows[0];await strictAudit(client,{organizationId:survey.organization_id,actorUserId:user.id,surveyId:survey.id,eventType:'survey.reminder_template_saved',metadata:{language,version:Number(saved.version)}});await client.query('COMMIT');return saved;}catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}}
+
+async function launchReminder(pool,user,surveyId,{idempotencyKey}={},config=process.env){if(!UUID_RE.test(String(idempotencyKey||'')))throw new LifecycleError(400,'idempotency_key_invalid','Idempotency-Key must be a UUID.');const client=await pool.connect();try{await client.query('BEGIN');const env=environmentName(config);const control=(await client.query('SELECT * FROM email_worker_control WHERE environment=$1 FOR SHARE',[env])).rows[0];const sending=(await client.query('SELECT * FROM email_sending_control WHERE environment=$1 FOR SHARE',[env])).rows[0];await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[`survey-provider-boundary:${String(surveyId).toLowerCase()}`]);const survey=await loadAuthorizedSurvey(client,user,surveyId,'admin','UPDATE');const requestFingerprint=fingerprint({organizationId:survey.organization_id,surveyId:survey.id,kind:'reminder'});const replay=await client.query('SELECT id,request_fingerprint FROM survey_launches WHERE organization_id=$1 AND idempotency_key=$2',[survey.organization_id,idempotencyKey]);if(replay.rows[0]){if(replay.rows[0].request_fingerprint!==requestFingerprint)throw new LifecycleError(409,'idempotency_conflict','Idempotency-Key was already used for different launch inputs.');const result=await client.query(aggregateSelect('WHERE l.id=$1'),[replay.rows[0].id]);await client.query('COMMIT');return {...result.rows[0],lifecycleStatus:survey.lifecycle_status,replayed:true};}if(!control||!sending?.sending_enabled)throw new LifecycleError(503,'sending_disabled','Application email sending is disabled.');const activeCampaign=await client.query(`SELECT 1 FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=$1 AND l.kind='reminder' AND d.status IN ('pending','leased','retry_wait') LIMIT 1`,[survey.id]);if(activeCampaign.rowCount)throw new LifecycleError(409,'reminder_in_progress','Wait for the current reminder campaign to finish before starting another.');const data=await loadReminderData(client,survey,{lockRecipients:true,providerScope:config.RESEND_PROVIDER_ACCOUNT_SCOPE});const suppressedExcludedCount=data.suppressedExcludedCount;const readiness=evaluateReminderReadiness(survey,data,config);readiness.suppressedExcludedCount=suppressedExcludedCount;if(suppressedExcludedCount)readiness.warnings.push({code:'suppressed_excluded',count:suppressedExcludedCount,message:`${suppressedExcludedCount} suppressed respondent${suppressedExcludedCount===1?' was':'s were'} excluded.`});await requireFreshWorker(client,config,readiness);if(!readiness.canLaunch)throw new LifecycleError(422,'survey_not_ready','Reminder campaign is not ready to launch.',{...readiness,templateMap:undefined,templateSubjectMap:undefined,templateVersions:undefined});const launch=(await client.query(`INSERT INTO survey_launches(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id) VALUES($1,$2,'reminder',$3,$4,$5) RETURNING id,created_at`,[survey.id,survey.organization_id,idempotencyKey,requestFingerprint,user.id])).rows[0];const sender=config.SURVEY_EMAIL_SENDER||DEFAULT_SENDER;for(const [language,bodyText] of readiness.templateMap){await client.query(`INSERT INTO survey_launch_templates(launch_id,language,subject,body_text,template_hash) VALUES($1,$2,$3,$4,$5)`,[launch.id,language,readiness.templateSubjectMap.get(language),bodyText,fingerprint(bodyText)]);}for(const recipient of data.recipients){const language=normalizeLanguage(recipient.lang);const bodyText=readiness.templateMap.get(language);const subject=readiness.templateSubjectMap.get(language);const deliveryId=crypto.randomUUID();const payload=buildInvitationPayload({to:String(recipient.contact_info).trim().toLowerCase(),sender,subject,bodyText,surveyBaseUrl:config.SURVEY_URL,surveyName:survey.name,token:recipient.uuid,language,deliveryId,environment:env,rendererVersion:RENDERER_VERSION});await client.query(`INSERT INTO survey_email_deliveries(id,launch_id,survey_id,organization_id,respondent_id,to_address,recipient_display_name,language,sender,subject,template_hash,survey_base_url,renderer_version,render_inputs,expected_payload_hash,provider_idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16)`,[deliveryId,launch.id,survey.id,survey.organization_id,recipient.respondent_id,String(recipient.contact_info).trim().toLowerCase(),recipient.name,language,sender,subject,fingerprint(bodyText),config.SURVEY_URL,RENDERER_VERSION,JSON.stringify({surveyName:survey.name}),payloadHash(payload),`survey-delivery-${deliveryId}`]);}await strictAudit(client,{organizationId:survey.organization_id,actorUserId:user.id,surveyId:survey.id,eventType:'survey.reminder_launch_requested',metadata:{launchId:launch.id,targetCount:data.recipients.length}});await client.query('COMMIT');return{id:launch.id,survey_id:survey.id,kind:'reminder',status:'queued',target_count:data.recipients.length,pending_count:data.recipients.length,leased_count:0,retry_wait_count:0,accepted_count:0,failed_count:0,uncertain_count:0,cancelled_count:0,created_at:launch.created_at,lifecycleStatus:'active',replayed:false};}catch(error){await client.query('ROLLBACK').catch(()=>{});if(error.code==='23505')throw new LifecycleError(409,'launch_conflict','Reminder launch conflicted with another request.');throw error;}finally{client.release();}}
+
 async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotencyKey, legacy = false } = {}, config = process.env) {
   if (config.SURVEY_DELIVERY_V2_ENABLED !== 'true') throw new LifecycleError(503, 'launch_disabled', 'Durable survey launch is not enabled.');
-  if (kind !== 'initial') throw new LifecycleError(400, 'launch_kind_invalid', 'Only initial launches are available.');
+  if (kind === 'reminder') return launchReminder(pool, user, surveyId, { idempotencyKey }, config);
+  if (kind !== 'initial') throw new LifecycleError(400, 'launch_kind_invalid', 'Launch kind is invalid.');
   if (!legacy && !UUID_RE.test(String(idempotencyKey || ''))) throw new LifecycleError(400, 'idempotency_key_invalid', 'Idempotency-Key must be a UUID.');
   const client = await pool.connect();
   try {
@@ -214,6 +296,7 @@ async function launchSurvey(pool, user, surveyId, { kind = 'initial', idempotenc
     if (!controlResult.rows[0]) throw new LifecycleError(503, 'worker_unavailable', 'Email worker control is not configured.');
     const sendingResult = await client.query('SELECT * FROM email_sending_control WHERE environment=$1 FOR SHARE', [env]);
     if (!sendingResult.rows[0]?.sending_enabled || (sendingResult.rows[0].minimum_release && controlResult.rows[0].minimum_release && sendingResult.rows[0].minimum_release !== controlResult.rows[0].minimum_release)) throw new LifecycleError(503, 'sending_disabled', 'Application email sending is disabled.');
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[`survey-provider-boundary:${String(surveyId).toLowerCase()}`]);
     const survey = await loadAuthorizedSurvey(client, user, surveyId, 'editor', 'UPDATE');
     const data = await loadReadinessData(client, survey);
     const targetIds = data.recipients.map((row) => Number(row.respondent_id)).sort((a,b) => a-b);
@@ -280,7 +363,7 @@ async function listDeliveries(pool,user,surveyId,{status,cursor,limit=50}={}) {
 
 async function transitionSurvey(pool,user,surveyId,action) {
   const minimum=action==='reopen'?'admin':action==='archive'?'admin':'editor'; const client=await pool.connect();
-  try { await client.query('BEGIN'); await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[`survey-provider-boundary:${surveyId}`]); const survey=await loadAuthorizedSurvey(client,user,surveyId,minimum,'UPDATE');
+  try { await client.query('BEGIN'); await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[`survey-provider-boundary:${String(surveyId).toLowerCase()}`]); const survey=await loadAuthorizedSurvey(client,user,surveyId,minimum,'UPDATE');
     if(action!=='archive'&&survey.archived_at) throw new LifecycleError(404,'survey_not_found','Survey not found.');
     if(action==='close'&&survey.lifecycle_status!=='active') throw new LifecycleError(409,'lifecycle_conflict','Only an active survey can be closed.');
     if(action==='reopen'&&survey.lifecycle_status!=='closed') throw new LifecycleError(409,'lifecycle_conflict','Only a closed survey can be reopened.');
@@ -303,4 +386,4 @@ async function withEditableSurvey(pool,user,surveyId,mutation) {
   try {await client.query('BEGIN');const survey=await loadAuthorizedSurvey(client,user,surveyId,'editor','UPDATE');if(survey.archived_at||survey.lifecycle_status!=='draft')throw new LifecycleError(409,'survey_not_editable','Survey configuration is locked after launch.');const value=await mutation(client,survey);await client.query('COMMIT');return value;}catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
 }
 
-module.exports={LifecycleError,publicError,environmentName,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,getReadiness,launchSurvey,listLaunches,listDeliveries,transitionSurvey,withEditableSurvey,aggregateSelect,setSurveyDefinitionValidator};
+module.exports={LifecycleError,publicError,environmentName,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,evaluateReminderReadiness,getReadiness,getReminderReadiness,listReminderTemplates,saveReminderTemplate,launchReminder,launchSurvey,listLaunches,listDeliveries,transitionSurvey,withEditableSurvey,aggregateSelect,setSurveyDefinitionValidator};

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
-const { evaluateReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
+const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
 test('invitation rendering escapes templates and emits equivalent accessible HTML/text', () => {
@@ -157,6 +157,48 @@ test('readiness validates the entire audience and exact normalized template cove
   assert.equal(manyInvalid.blockers.at(-1).code, 'blockers_truncated');
 });
 
+test('reminder readiness handles zero, one, 1,000, localization, and privacy-safe blockers', () => {
+  const survey={lifecycle_status:'active',archived_at:null};
+  const config={SURVEY_URL:'https://survey.test',RESEND_API_KEY:'fake',RESEND_PROVIDER_ACCOUNT_SCOPE:'test'};
+  const template={language:'english',subject:'Reminder',body_text:'Please complete the survey.',configuration_version:1};
+  const recipient=index=>({respondent_id:index,contact_info:`person${index}@example.test`,uuid:`existing-token-${index}`,lang:'English'});
+  const zero=evaluateReminderReadiness(survey,{recipients:[],templates:[template]},config);
+  assert.equal(zero.canLaunch,false);assert.ok(zero.blockers.some(item=>item.code==='recipients_missing'));
+  const one=evaluateReminderReadiness(survey,{recipients:[recipient(1)],templates:[template]},config);
+  assert.equal(one.canLaunch,true);assert.equal(one.targetCount,1);
+  const thousand=evaluateReminderReadiness(survey,{recipients:Array.from({length:1000},(_,index)=>recipient(index+1)),templates:[template]},config);
+  assert.equal(thousand.canLaunch,true);assert.equal(thousand.targetCount,1000);
+  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:1001},(_,index)=>recipient(index+1)),templates:[template]},config);
+  assert.ok(over.blockers.some(item=>item.code==='recipients_limit_exceeded'));
+  const localized=evaluateReminderReadiness(survey,{recipients:[{...recipient(2),lang:'French'},{...recipient(3),lang:'Klingon'}],templates:[template]},config);
+  assert.ok(localized.blockers.some(item=>item.code==='template_missing'&&item.language==='french'));
+  assert.ok(localized.blockers.some(item=>item.code==='recipient_language_unsupported'));
+  assert.equal(JSON.stringify(localized.blockers).includes('existing-token'),false);
+  assert.equal(JSON.stringify(localized.blockers).includes('person2@example.test'),false);
+});
+
+test('reminder readiness requires survey-admin tenant access before recipient queries', async () => {
+  for (const surveyRow of [
+    {id:'11111111-1111-4111-8111-111111111111',role:'editor'},
+    undefined,
+  ]) {
+    const calls=[];const client={release(){},async query(sql){calls.push(sql);if(/SELECT s\.\*, om\.role/.test(sql))return{rows:surveyRow?[surveyRow]:[]};throw new Error('recipient query must not run');}};
+    await assert.rejects(()=>getReminderReadiness({connect:async()=>client},{id:5},'11111111-1111-4111-8111-111111111111',{NODE_ENV:'test'}),error=>error.code==='survey_not_found'&&error.status===404);
+    assert.equal(calls.length,1);
+  }
+});
+
+test('reminder implementation selects and rechecks only incomplete eligible respondents', () => {
+  const lifecycleSource=fs.readFileSync(path.join(__dirname,'../lifecycle.js'),'utf8');
+  const workerSource=fs.readFileSync(path.join(__dirname,'../email-worker.js'),'utf8');
+  assert.match(lifecycleSource,/can_respond=true AND r\.response IS NULL/);
+  assert.match(lifecycleSource,/displayedRespondentPredicate\('r'\)/);
+  assert.match(lifecycleSource,/kind:'reminder'/);
+  assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
+  assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
+  assert.match(workerSource,/row\.launch_kind!=='reminder'.*email_sent/s);
+});
+
 test('launch fingerprint is canonical and aggregate SQL derives dispatch and distinct provider summary counts', () => {
   assert.equal(fingerprint({targets:[1,2]}), fingerprint({targets:[1,2]}));
   assert.notEqual(fingerprint({targets:[1,2]}), fingerprint({targets:[2,1]}));
@@ -213,7 +255,10 @@ test('transactional launch locks control then survey, snapshots all work, activa
   }};
   const result=await launchSurvey({connect:async()=>client},{id:9,isPlatformAdmin:false},surveyId,{kind:'initial',idempotencyKey:'33333333-3333-4333-8333-333333333333'},{NODE_ENV:'test',SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key',SURVEY_DELIVERY_V2_ENABLED:'true'});
   assert.equal(result.status,'queued');assert.equal(result.target_count,2);
-  assert.match(calls[1].sql,/FOR SHARE/);assert.match(calls[2].sql,/email_sending_control/);assert.match(calls[3].sql,/FOR UPDATE OF s/);
+  assert.match(calls[1].sql,/FOR SHARE/);assert.match(calls[2].sql,/email_sending_control/);
+  const boundaryIndex=calls.findIndex(({values})=>values.some(value=>String(value).includes('survey-provider-boundary')));
+  const surveyLockIndex=calls.findIndex(({sql})=>/FOR UPDATE OF s/.test(sql));
+  assert.ok(boundaryIndex>2&&surveyLockIndex>boundaryIndex,'survey boundary lock precedes the survey row lock');
   const heartbeatCall=calls.find(({sql})=>/SELECT 1 FROM email_worker_heartbeats/.test(sql));
   assert.equal(heartbeatCall.values[2],'release-pinned-by-sending');
   assert.equal(calls.filter(({sql})=>/INSERT INTO survey_email_deliveries/.test(sql)).length,2);

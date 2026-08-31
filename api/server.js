@@ -2142,10 +2142,11 @@ function sendLifecycleError(res, error) {
 }
 function launchResponse(res, launch) {
   const location = `/api/surveys/${launch.survey_id}/launches/${launch.id}`;
+  const label = launch.kind === 'reminder' ? 'Reminder campaign' : 'Invitation launch';
   return res.status(launch.replayed ? 200 : 202).location(location).json({
     launch,
     lifecycleStatus: launch.lifecycleStatus,
-    message: launch.replayed ? 'Existing invitation launch returned; no new work was queued.' : 'Invitation launch queued.',
+    message: launch.replayed ? `Existing ${label.toLowerCase()} returned; no new work was queued.` : `${label} queued.`,
   });
 }
 
@@ -2160,6 +2161,24 @@ app.get('/api/surveys/:surveyId/launch-readiness', requireAuth, async (req, res)
     res.json(readiness);
   }
   catch (error) { sendLifecycleError(res, error); }
+});
+app.get('/api/surveys/:surveyId/reminder-readiness', requireAuth, async (req, res) => {
+  try {
+    const readiness = await lifecycle.getReminderReadiness(pool, req.user, req.params.surveyId);
+    if (process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true') {
+      readiness.blockers.push({code:'launch_disabled',message:'Durable survey delivery is not enabled.'});
+      readiness.blockerCount += 1; readiness.canLaunch=false;
+    }
+    res.json(readiness);
+  } catch(error) { sendLifecycleError(res,error); }
+});
+app.get('/api/surveys/:surveyId/reminder-templates', requireAuth, async (req,res)=>{
+  try { res.json(await lifecycle.listReminderTemplates(pool,req.user,req.params.surveyId)); }
+  catch(error){ sendLifecycleError(res,error); }
+});
+app.put('/api/surveys/:surveyId/reminder-templates/:language', express.json(), requireAuth, async (req,res)=>{
+  try { res.json({template:await lifecycle.saveReminderTemplate(pool,req.user,req.params.surveyId,{...req.body,language:req.params.language})}); }
+  catch(error){ sendLifecycleError(res,error); }
 });
 app.post('/api/surveys/:surveyId/launches', express.json(), requireAuth, async (req, res) => {
   if (process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true') return res.status(503).json({ error: 'launch_disabled', message: 'Survey launch is temporarily disabled.' });
@@ -2718,6 +2737,10 @@ app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) =>
     }
     client = await pool.connect();
     await client.query('BEGIN');
+    // Serialize response completion with reminder snapshot/provider boundaries.
+    // The survey ID comes only from the server-authoritative preliminary lookup;
+    // token authorization is repeated after taking the boundary lock.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`survey-provider-boundary:${preliminary.respondent.survey_id}`]);
     const validation = await validateRespondentToken(surveyName, userId, client, true);
     if (!validation.ok) return res.status(validation.status).json({ message: validation.message });
 

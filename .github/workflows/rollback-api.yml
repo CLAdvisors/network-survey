@@ -131,7 +131,8 @@ jobs:
               "aws s3 cp s3://\($bucket)/api/\($sha).tar.gz /tmp/ona-deploy/release.tar.gz",
               "tar -xzf /tmp/ona-deploy/release.tar.gz -C /tmp/ona-deploy",
               "test -f /tmp/ona-deploy/api/lifecycle.js && test -f /tmp/ona-deploy/api/email-worker.js && test -f /tmp/ona-deploy/api/webhook-worker.js && test -f /tmp/ona-deploy/deploy/ecosystem.config.js && test -f /tmp/ona-deploy/deploy/set-email-claiming.js && test -f /tmp/ona-deploy/deploy/CAPABILITIES.json && test -f /tmp/ona-deploy/deploy/validate-release-capabilities.js || { echo Refusing rollback to an invalid or capability-incompatible artifact >&2; exit 1; }",
-              "node /tmp/ona-deploy/deploy/validate-release-capabilities.js /tmp/ona-deploy",
+              "node -e \"const c=require('/tmp/ona-deploy/deploy/CAPABILITIES.json');if(c.reminder_provider_boundary!==1)throw new Error('Manual rollback requires reminder provider-boundary capability')\"",
+              "node /opt/service/current/deploy/validate-release-capabilities.js /tmp/ona-deploy --database",
               "bash /tmp/ona-deploy/deploy/remote-deploy.sh /tmp/ona-deploy",
               "rm -rf /tmp/ona-deploy"
             ]

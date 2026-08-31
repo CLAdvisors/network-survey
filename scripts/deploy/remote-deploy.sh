@@ -245,6 +245,11 @@ if [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ]; then
   WEBHOOK_CONTROL_REVISION=$((WEBHOOK_CONTROL_REVISION + 1))
 fi
 
+# Revalidate after all enqueue/claim/projector gates are quiesced. The earlier
+# check gives fast feedback; this check closes the reminder-floor race before
+# replacing any process or symlink.
+node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$RELEASE_DIR" --database
+
 echo "==> Activating release"
 chown -R ubuntu:ubuntu "$RELEASE_DIR"
 ACTIVATED=false

@@ -47,6 +47,19 @@ Use `prod` only on the production instance. Never update the control row manuall
 
 Before Phase 2 activation, the rollback workflow validates the target artifact before disabling claiming. Once webhook registration or suppression is active, only a capability-compatible artifact is allowed: pause projection, keep ingestion and suppression active, verify both worker heartbeats, and follow `resend-webhook-operations.md`. A Phase 1 artifact must never be restored after that floor is raised.
 
+## Bulk reminder rollout and rollback floor
+
+Bulk reminders use the same `SURVEY_DELIVERY_V2_ENABLED`, claiming, sending, rate, suppression, and release-fence controls; this change does not enable any hosted gate. Before allowing an administrator to launch the first reminder:
+
+1. Apply `v1_8_bulk_survey_reminders.sql` and verify a second Liquibase update is a no-op.
+2. Deploy the API and worker from the same release and pin both sending/claiming controls to that exact revision.
+3. Confirm the release marker reports `reminder_provider_boundary: 1` and a fresh compatible worker heartbeat exists.
+4. Exercise readiness with fakes or a provider-disabled environment first. Do not use `/api/testEmail`; it remains gone.
+
+Every reminder snapshots its localized template, sender, renderer, base URL, payload hash, and existing respondent link. Provider-boundary processing takes the survey boundary lock and a respondent row lock, then cancels reminders for completed/ineligible respondents or inactive surveys before provider I/O. Suppressions are enforced for reminders even if general suppression rollout is not activated.
+
+An older artifact may coexist with the additive schema before reminder work exists. Once any reminder is pending, leased, or retrying, `validate-release-capabilities.js --database` rejects an artifact without reminder provider-boundary capability. To roll back, first stop claiming and sending, let no provider call remain in flight, and either retain a compatible worker until all reminder work is terminal or cancel pending work through a reviewed database operation. Never roll back to an invitation-only worker while reminder work is nonterminal.
+
 ## Ambiguous provider calls
 
 A leased attempt recovered inside the configured provider-idempotency window reuses its durable provider key. Once that boundary has expired, the worker marks the delivery `uncertain` rather than risking a duplicate send. Do not manually retry uncertain deliveries in Phase 1.

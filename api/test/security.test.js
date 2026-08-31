@@ -1889,6 +1889,7 @@ test('CLA organization migration preserves survey data and enforces stable child
   const postCutoverMasterIncludes = [
     'v1_6_survey_lifecycle_email_delivery.sql',
     'v1_7_email_webhook_delivery_truth.sql',
+    'v1_8_bulk_survey_reminders.sql',
   ];
   const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
 
@@ -1901,7 +1902,7 @@ test('CLA organization migration preserves survey data and enforces stable child
   assert.deepEqual(
     masterIncludes.slice(sharedPreCutoverIncludes.length),
     postCutoverMasterIncludes,
-    'switching from the recorded cutover root to master must add only the reviewed lifecycle and webhook migrations'
+    'switching from the recorded cutover root to master must add only the reviewed lifecycle, webhook, and reminder migrations'
   );
   assert.equal(new Set(cutoverIncludes).size, cutoverIncludes.length, 'cutover includes must not be duplicated');
   assert.match(migration, /VALUES \('CLA', 'cla'\)/);
@@ -1929,6 +1930,19 @@ test('CLA organization migration preserves survey data and enforces stable child
   assert.match(cleanup, /SET status = 'disabled', is_platform_admin = false/);
   assert.match(cleanup, /DELETE FROM sessions/);
   assert.doesNotMatch(cleanup, /DELETE FROM users/);
+});
+
+test('bulk reminder migration is additive, rerunnable through Liquibase, and follows the CLA cutover floor', () => {
+  const master=fs.readFileSync(path.join(__dirname,'../../db/changelogs/master-changelog.xml'),'utf8');
+  const cutover=fs.readFileSync(path.join(__dirname,'../../db/changelogs/cla-production-cutover.xml'),'utf8');
+  const migration=fs.readFileSync(path.join(__dirname,'../../db/changelogs/v1_8_bulk_survey_reminders.sql'),'utf8');
+  assert.match(master,/v1_7_email_webhook_delivery_truth\.sql[\s\S]+v1_8_bulk_survey_reminders\.sql/);
+  assert.doesNotMatch(cutover,/v1_8_bulk_survey_reminders/,'historical CLA cutover must still precede lifecycle storage');
+  assert.equal((migration.match(/^--changeset /gm)||[]).length,2);
+  assert.match(migration,/CREATE TABLE survey_reminder_templates/);
+  assert.match(migration,/configuration_version BIGINT NOT NULL DEFAULT 1/);
+  assert.match(migration,/DROP INDEX CONCURRENTLY IF EXISTS respondent_reminder_eligibility/);
+  assert.doesNotMatch(migration,/\bTRUNCATE\b|\bDELETE FROM respondent\b|DROP TABLE|DROP COLUMN/i);
 });
 
 test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {

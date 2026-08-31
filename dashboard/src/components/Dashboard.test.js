@@ -27,10 +27,16 @@ vi.mock('./SurveyTable', () => ({
   ))}</div>,
 }));
 vi.mock('./QuestionTable', () => ({
-  default: ({ surveyName, onDirtyChange }) => <button onClick={() => onDirtyChange?.(surveyName, 'questions', true)}>Dirty questions</button>,
+  default: ({ surveyName, onDirtyChange, onSurveyDataChanged }) => <>
+    <button onClick={() => onDirtyChange?.(surveyName, 'questions', true)}>Dirty questions</button>
+    <button onClick={() => onSurveyDataChanged?.()}>Refresh after question change</button>
+  </>,
 }));
 vi.mock('./RespondentTable', () => ({
-  default: ({ surveyName, onDirtyChange }) => <button onClick={() => onDirtyChange?.(surveyName, 'respondents', true)}>Dirty respondents</button>,
+  default: ({ surveyName, onDirtyChange, onSurveyDataChanged }) => <>
+    <button onClick={() => onDirtyChange?.(surveyName, 'respondents', true)}>Dirty respondents</button>
+    <button onClick={() => onSurveyDataChanged?.()}>Refresh after respondent change</button>
+  </>,
 }));
 vi.mock('./SurveyLifecyclePanel', () => ({ default: () => null }));
 vi.mock('./CreateSurveyDialog', () => ({ default: () => null }));
@@ -48,6 +54,12 @@ vi.mock('./EmailNotificationEditor', () => ({
     return <div data-testid="body-editor" data-survey={surveyId} data-readonly={String(readOnly)} data-mount={`body-${mount.current}`}>Invitation Email Body<button onClick={() => onDirtyChange?.(surveyId, 'invitationBody', true)}>Dirty body</button></div>;
   },
 }));
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((yes) => { resolve = yes; });
+  return { promise, resolve };
+};
 
 const surveys = [
   { id: 'survey-a', name: 'Alpha', role: 'editor', lifecycleStatus: 'draft' },
@@ -112,6 +124,38 @@ test('selects a successful copy by returned stable ID and loads its related data
   expect(api.get).toHaveBeenCalledWith('/listQuestions?surveyName=survey-copy', expect.any(Object));
   expect(api.get).toHaveBeenCalledWith('/targets?surveyName=survey-copy', expect.any(Object));
   expect(screen.getByTestId('respondent-count-survey-copy')).toHaveTextContent('0');
+});
+
+test('child mutations cannot replace a newer lifecycle lock with a delayed survey response', async () => {
+  const delayedDraftRefresh = deferred();
+  const activeSurveys = surveys.map((survey) => survey.id === 'survey-a'
+    ? { ...survey, lifecycleStatus: 'active' }
+    : survey);
+  let surveyFetch = 0;
+  api.get.mockImplementation((url) => {
+    if (url === '/surveys') {
+      surveyFetch += 1;
+      if (surveyFetch === 1) return Promise.resolve({ data: { surveys } });
+      if (surveyFetch === 2) return delayedDraftRefresh.promise;
+      return Promise.resolve({ data: { surveys: activeSurveys } });
+    }
+    if (url.startsWith('/listQuestions')) return Promise.resolve({ data: { questions: [] } });
+    return Promise.resolve({ data: [] });
+  });
+
+  const theme = createTheme();
+  render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
+  expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-readonly', 'false');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh after question change' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh after respondent change' }));
+  await waitFor(() => expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-readonly', 'true'));
+  delayedDraftRefresh.resolve({ data: { surveys } });
+  await waitFor(() => expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-readonly', 'true'));
+
+  expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-readonly', 'true');
+  expect(api.get.mock.calls.filter(([url]) => url === '/surveys')).toHaveLength(3);
 });
 
 test('repeated survey and lifecycle switches never accumulate or alias email editors', async () => {

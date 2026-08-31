@@ -130,6 +130,28 @@ test('ignores stale loads and stale saves after switching surveys', async () => 
   expect(screen.queryByText('Notification text saved successfully.')).not.toBeInTheDocument();
 });
 
+test('clears the owning survey dirty state when a body save succeeds after switching away', async () => {
+  const pendingSave = deferred();
+  const onDirtyChange = vi.fn();
+  api.get.mockImplementation((url) => Promise.resolve(
+    url.endsWith('survey-1') ? response('Body one') : response('Body two')
+  ));
+  api.post.mockReturnValue(pendingSave.promise);
+
+  const view = render(<EmailNotificationEditor surveyId="survey-1" onDirtyChange={onDirtyChange} />);
+  const body = await screen.findByLabelText('Invitation email body');
+  await waitFor(() => expect(body).toHaveValue('Body one'));
+  await userEvent.type(body, ' saved');
+  await userEvent.click(screen.getByRole('button', { name: 'Save body' }));
+  view.rerender(<EmailNotificationEditor surveyId="survey-2" onDirtyChange={onDirtyChange} />);
+  await waitFor(() => expect(body).toHaveValue('Body two'));
+
+  onDirtyChange.mockClear();
+  await act(async () => pendingSave.resolve({ data: { message: 'saved' } }));
+  expect(onDirtyChange).toHaveBeenCalledWith('survey-1', 'invitationBody', false);
+  expect(body).toHaveValue('Body two');
+});
+
 test('preserves dirty content while disabling editing when lifecycle becomes read-only', async () => {
   api.get.mockResolvedValue(response('Locked body'));
   const view = render(<EmailNotificationEditor surveyId="survey-1" />);

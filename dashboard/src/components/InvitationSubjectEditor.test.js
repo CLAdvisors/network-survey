@@ -82,6 +82,31 @@ test('ignores an old subject save after switching away and back to the same surv
   expect(screen.queryByText('Invitation email subject saved.')).not.toBeInTheDocument();
 });
 
+test('clears the owning survey dirty state when a save succeeds after switching away', async () => {
+  const pendingSave = deferred();
+  const onDirtyChange = vi.fn();
+  api.get.mockImplementation(async (url) => ({
+    data: url.includes('survey-1')
+      ? { notifications: { English: 'Body 1' }, notificationSubjects: { English: 'Subject 1' } }
+      : { notifications: { English: 'Body 2' }, notificationSubjects: { English: 'Subject 2' } },
+  }));
+  api.put.mockReturnValue(pendingSave.promise);
+
+  const view = render(<InvitationSubjectEditor surveyId="survey-1" onDirtyChange={onDirtyChange} />);
+  const subject = await screen.findByLabelText(/Invitation email subject/);
+  await waitFor(() => expect(subject).toHaveValue('Subject 1'));
+  await userEvent.clear(subject);
+  await userEvent.type(subject, 'Saved in background');
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  view.rerender(<InvitationSubjectEditor surveyId="survey-2" onDirtyChange={onDirtyChange} />);
+  await waitFor(() => expect(subject).toHaveValue('Subject 2'));
+
+  onDirtyChange.mockClear();
+  await act(async () => pendingSave.resolve({ data: { message: 'saved' } }));
+  expect(onDirtyChange).toHaveBeenCalledWith('survey-1', 'invitationSubject', false);
+  expect(subject).toHaveValue('Subject 2');
+});
+
 test('preserves an unsaved subject draft across survey switches and allows reverting it', async () => {
   api.get.mockImplementation(async (url) => ({
     data: url.includes('survey-1')

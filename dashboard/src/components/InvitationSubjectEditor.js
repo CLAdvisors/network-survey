@@ -69,15 +69,19 @@ const InvitationSubjectEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
     const targetSurveyId = surveyId;
     const targetLanguage = language.label;
     const version = operationVersion.current;
+    const savedDraft = draftsRef.current.get(targetSurveyId);
     setSaving(true);
     try {
       await api.put(`/survey-notifications/${targetSurveyId}/subject`, {
         language: targetLanguage,
         subject: trimmedSubject,
       });
-      if (surveyIdRef.current !== targetSurveyId || version !== operationVersion.current) return;
-      draftsRef.current.delete(targetSurveyId);
-      onDirtyChange?.(targetSurveyId, 'invitationSubject', false);
+      const draftUnchanged = Boolean(savedDraft) && draftsRef.current.get(targetSurveyId) === savedDraft;
+      if (draftUnchanged) {
+        draftsRef.current.delete(targetSurveyId);
+        onDirtyChange?.(targetSurveyId, 'invitationSubject', false);
+      }
+      if (surveyIdRef.current !== targetSurveyId || !draftUnchanged) return;
       setSubjects(previous => ({ ...previous, [targetLanguage]: trimmedSubject }));
       setSubject(trimmedSubject);
       setOriginalSubject(trimmedSubject);

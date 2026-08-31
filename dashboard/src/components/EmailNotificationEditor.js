@@ -95,15 +95,19 @@ const EmailNotificationEditor = ({ surveyId, readOnly = false, onDirtyChange }) 
     const targetSurveyId = surveyId;
     const targetLanguage = selectedLanguage.label;
     const targetText = notificationText;
+    const savedDraft = draftsRef.current.get(targetSurveyId);
     setSaving(true);
     try {
       await api.post("/updateEmails", {
         surveyName: targetSurveyId,
         templates: [{ language: targetLanguage, text: targetText }],
       });
-      if (version !== requestVersion.current || targetSurveyId !== surveyIdRef.current) return;
-      draftsRef.current.delete(targetSurveyId);
-      onDirtyChange?.(targetSurveyId, 'invitationBody', false);
+      const draftUnchanged = Boolean(savedDraft) && draftsRef.current.get(targetSurveyId) === savedDraft;
+      if (draftUnchanged) {
+        draftsRef.current.delete(targetSurveyId);
+        onDirtyChange?.(targetSurveyId, 'invitationBody', false);
+      }
+      if (targetSurveyId !== surveyIdRef.current || !draftUnchanged) return;
       setNotifications((current) => ({ ...current, [targetLanguage]: targetText }));
       setOriginalText(targetText);
       setHasChanges(false);

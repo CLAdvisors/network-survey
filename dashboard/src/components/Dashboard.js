@@ -145,11 +145,6 @@ const Dashboard = () => {
     }
   };
 
-  const replaceSurveys = (updatedSurveys) => {
-    setSurveyData(updatedSurveys);
-    setSelectSurvey((current) => current && updatedSurveys.find((survey) => surveyId(survey) === surveyId(current)) || null);
-  };
-
   const handlePanelSurveyRefresh = React.useCallback(async (selectedId) => {
     const surveys = await fetchSurveyData();
     return surveys.find((survey) => surveyId(survey) === selectedId);
@@ -249,7 +244,7 @@ const Dashboard = () => {
         <QuestionTable
           rows={questionData} 
           surveyName={surveyId(selectSurvey)}
-          onQuestionsUpdate={replaceSurveys}
+          onSurveyDataChanged={fetchSurveyData}
           readOnly={selectedReadOnly}
           onDirtyChange={handleDirtyChange}
         />
@@ -281,7 +276,7 @@ const Dashboard = () => {
             <RespondentTable
               rows={selectedCanViewRespondents ? respondentData : null}
               surveyName={selectedCanViewRespondents ? surveyId(selectSurvey) : null}
-              onRespondentsUpdate={replaceSurveys}
+              onSurveyDataChanged={fetchSurveyData}
               readOnly={selectedReadOnly}
               onDirtyChange={handleDirtyChange}
             />

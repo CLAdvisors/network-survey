@@ -11,7 +11,7 @@ import TableMenuCell from './TableMenuCell';
 import { parseQuestionsCsv } from '../utils/questionsCsv';
 import { buildQuestionTableSchema } from '../utils/questionTableSchema';
 
-const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, onDirtyChange }) => {
+const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false, onDirtyChange }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
@@ -58,6 +58,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
   const handleDeleteQuestion = async (row) => {
     const targetSurveyId = surveyName;
     const version = operationVersion.current;
+    const operationDraft = draftsRef.current.get(targetSurveyId);
     try {
       const response = await api.delete('/question', {
         data: {
@@ -66,8 +67,13 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
         }
       });
 
-      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
       if (response.status === 200) {
+        await onSurveyDataChanged?.();
+        if (
+          version !== operationVersion.current ||
+          targetSurveyId !== surveyIdentity.current ||
+          draftsRef.current.get(targetSurveyId) !== operationDraft
+        ) return;
         // Remove the question from the local state
         const updatedRows = tableRows
           .filter(tableRow => tableRow.id !== row.id)
@@ -79,15 +85,6 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
         setTableRows(updatedRows);
         setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
         setHasChanges(false);
-        draftsRef.current.delete(surveyName);
-        onDirtyChange?.(surveyName, 'questions', false);
-
-        // Update survey counts if callback provided
-        if (onQuestionsUpdate) {
-          const surveysResponse = await api.get('/surveys');
-          if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
-          onQuestionsUpdate(surveysResponse.data.surveys);
-        }
 
         setSnackbar({
           open: true,
@@ -168,15 +165,22 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
 
   const handleSave = async () => {
     const targetSurveyId = surveyName;
-    const version = operationVersion.current;
+    const savedDraft = draftsRef.current.get(targetSurveyId);
     try {
       const response = await saveRows(tableRows, targetSurveyId);
-      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
 
       if (response.status === 200) {
-        // Refresh questions data
+        const draftUnchanged = Boolean(savedDraft) && draftsRef.current.get(targetSurveyId) === savedDraft;
+        if (draftUnchanged) {
+          draftsRef.current.delete(targetSurveyId);
+          onDirtyChange?.(targetSurveyId, 'questions', false);
+        }
+        await onSurveyDataChanged?.();
+        if (targetSurveyId !== surveyIdentity.current || !draftUnchanged || draftsRef.current.has(targetSurveyId)) return;
+
+        // Refresh questions data without allowing a newer draft to be overwritten.
         const questionResponse = await api.get(`/listQuestions?surveyName=${targetSurveyId}`);
-        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
+        if (targetSurveyId !== surveyIdentity.current || draftsRef.current.has(targetSurveyId)) return;
         const refreshedRows = questionResponse.data.questions;
         const updatedRows = refreshedRows.map((row, index) => ({
           ...row,
@@ -185,15 +189,6 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
         setTableRows(updatedRows);
         setOriginalRows(JSON.parse(JSON.stringify(updatedRows)));
         setHasChanges(false);
-        draftsRef.current.delete(surveyName);
-        onDirtyChange?.(surveyName, 'questions', false);
-        
-        // Update survey counts
-        const surveysResponse = await api.get('/surveys');
-        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
-        if (onQuestionsUpdate) {
-          onQuestionsUpdate(surveysResponse.data.surveys);
-        }
 
         setSnackbar({
           open: true,
@@ -214,6 +209,7 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
   const handleUpload = async (csvContent) => {
     const targetSurveyId = surveyName;
     const version = operationVersion.current;
+    const operationDraft = draftsRef.current.get(targetSurveyId);
     try {
       // Parse the new CSV content
       const newQuestions = parseQuestionsCsv(csvContent);
@@ -230,11 +226,20 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
       // Persist a patched SurveyJS schema. Imported duplicate names receive fresh
       // identities, while the API remains responsible for final positional names.
       const response = await saveRows(combinedQuestions, targetSurveyId);
-      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
 
       if (response.status === 200) {
+        await onSurveyDataChanged?.();
+        if (
+          version !== operationVersion.current ||
+          targetSurveyId !== surveyIdentity.current ||
+          draftsRef.current.get(targetSurveyId) !== operationDraft
+        ) return;
         const questionResponse = await api.get(`/listQuestions?surveyName=${targetSurveyId}`);
-        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
+        if (
+          version !== operationVersion.current ||
+          targetSurveyId !== surveyIdentity.current ||
+          draftsRef.current.get(targetSurveyId) !== operationDraft
+        ) return;
         const refreshedRows = questionResponse.data.questions.map((row, index) => ({
           ...row,
           id: index + 1
@@ -244,14 +249,6 @@ const QuestionTable = ({ rows, surveyName, onQuestionsUpdate, readOnly = false, 
         setTableRows(refreshedRows);
         setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
         setHasChanges(false);
-        draftsRef.current.delete(surveyName);
-        onDirtyChange?.(surveyName, 'questions', false);
-        
-        const surveysResponse = await api.get('/surveys');
-        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
-        if (onQuestionsUpdate) {
-          onQuestionsUpdate(surveysResponse.data.surveys);
-        }
 
         setSnackbar({
           open: true,

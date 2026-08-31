@@ -37,18 +37,14 @@ const formatRowsToCSV = (rows) => {
   return `${CSV_HEADER}\n${dataRows.join('\n')}`;
 };
 
-const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = false, onDirtyChange }) => {
+const RespondentTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false, onDirtyChange }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
   const draftsRef = useRef(new Map());
-  const operationVersion = useRef(0);
   const surveyIdentity = useRef(surveyName);
-  if (surveyIdentity.current !== surveyName) {
-    surveyIdentity.current = surveyName;
-    operationVersion.current += 1;
-  }
+  surveyIdentity.current = surveyName;
   const [sortModel, setSortModel] = useState([
     {
       field: 'id',
@@ -184,32 +180,26 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
     }
   }, [rows, surveyName]);
 
-  const fetchRespondentData = async () => {
-    const targetSurveyId = surveyName;
-    const version = operationVersion.current;
-    try {
-      const response = await api.get(`/targets?surveyName=${targetSurveyId}`);
-      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
-      const refreshedRows = response.data.map(row => ({
-        ...row,
-        language: row.language || 'English',
-        canRespond: row.canRespond === undefined ? true : row.canRespond,
-        onRespondentDeleted: fetchRespondentData
-      }));
-      setTableRows(refreshedRows);
-      setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
-      setHasChanges(false);
-      draftsRef.current.delete(surveyName);
-      onDirtyChange?.(surveyName, 'respondents', false);
-      
-      const surveysResponse = await api.get('/surveys');
-      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
-      if (onRespondentsUpdate) {
-        onRespondentsUpdate(surveysResponse.data.surveys);
+  const fetchRespondentData = async (targetSurveyId = surveyName) => {
+    if (targetSurveyId === surveyIdentity.current) {
+      try {
+        const response = await api.get(`/targets?surveyName=${targetSurveyId}`);
+        if (targetSurveyId === surveyIdentity.current && !draftsRef.current.has(targetSurveyId)) {
+          const refreshedRows = response.data.map(row => ({
+            ...row,
+            language: row.language || 'English',
+            canRespond: row.canRespond === undefined ? true : row.canRespond,
+            onRespondentDeleted: fetchRespondentData
+          }));
+          setTableRows(refreshedRows);
+          setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+          setHasChanges(false);
+        }
+      } catch (error) {
+        console.error('Error fetching respondents:', error);
       }
-    } catch (error) {
-      console.error('Error fetching respondents:', error);
     }
+    await onSurveyDataChanged?.();
   };
 
   const handleProcessRowUpdate = (newRow) => {
@@ -235,7 +225,7 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
 
   const handleSave = async () => {
     const targetSurveyId = surveyName;
-    const version = operationVersion.current;
+    const savedDraft = draftsRef.current.get(targetSurveyId);
     try {
       const changedRows = tableRows.filter(row => {
         const original = originalRows.find(origRow => origRow.id === row.id);
@@ -260,12 +250,14 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
             surveyName: targetSurveyId,
             deleteRow
           });
-          if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
         }
-  
-        await fetchRespondentData();
-        if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
-        setHasChanges(false);
+
+        const draftUnchanged = Boolean(savedDraft) && draftsRef.current.get(targetSurveyId) === savedDraft;
+        if (draftUnchanged) {
+          draftsRef.current.delete(targetSurveyId);
+          onDirtyChange?.(targetSurveyId, 'respondents', false);
+        }
+        await fetchRespondentData(targetSurveyId);
       }
     } catch (error) {
       console.error('Failed to save changes:', error);
@@ -274,16 +266,14 @@ const RespondentTable = ({ rows, surveyName, onRespondentsUpdate, readOnly = fal
 
   const handleUpload = async (csvContent) => {
     const targetSurveyId = surveyName;
-    const version = operationVersion.current;
     try {
       const response = await api.post('/updateTargets', {
         csvData: csvContent,
         surveyName: targetSurveyId
       });
-      if (version !== operationVersion.current || targetSurveyId !== surveyIdentity.current) return;
 
       if (response.status === 200) {
-        await fetchRespondentData();
+        await fetchRespondentData(targetSurveyId);
       }
     } catch (err) {
       console.error('Error updating respondents:', err);

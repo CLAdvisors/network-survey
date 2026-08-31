@@ -18,46 +18,57 @@ const TEMPLATE_DATA = [
   'Andrea,Terrell,AndreaTerrell@test.com,TRUE,Medical Towers,6,Female,White,Alicia Smith,Brian Reed,HR,System,Talent Acquisition,English',
 ];
 
-const CSV_HEADER = 'First,Last,Email,Language,Can Respond';
+const apiErrorMessage = (error, fallback) => error?.response?.data?.message || error?.response?.data?.error || fallback;
 
-const formatRowsToCSV = (rows) => {
-  const dataRows = rows.map(row => {
-    const nameParts = row.name.trim().split(/\s+/);
-    const firstName = nameParts[0] || '';
-    const lastName = nameParts.slice(1).join(' ') || '';
-    
-    return [
-      firstName,
-      lastName,
-      row.email,
-      row.language || 'English',
-      row.canRespond === undefined ? true : row.canRespond
-    ].join(',');
-  });
-
-  return `${CSV_HEADER}\n${dataRows.join('\n')}`;
+const responseRevision = (response) => {
+  const value = Number(response?.headers?.['x-roster-revision'] ?? response?.data?.revision);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
 };
 
-const editableRespondentRowsMatch = (left = [], right = []) => {
-  const comparable = (row) => [
-    row.name || '',
-    row.email || row.contact_info || '',
-    row.language || row.lang || 'English',
-    row.canRespond ?? row.can_respond ?? true,
-  ];
-  const normalized = (items) => items.map(comparable).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+const editableRespondentValue = (row) => [
+  row.name || '',
+  row.email || row.contact_info || '',
+  row.language || row.lang || 'English',
+  row.canRespond ?? row.can_respond ?? true,
+];
+
+const editableRespondentDraftMatches = (draft, authoritativeRows = []) => {
+  if (!draft || !Array.isArray(draft.rows) || !Array.isArray(draft.baseRows)) return false;
+  const baseIds = new Set(draft.baseRows.map((row) => row.id));
+  const authoritativeById = new Map(authoritativeRows.map((row) => [row.id, row]));
+  const existingDraftRows = draft.rows.filter((row) => baseIds.has(row.id));
+  if (existingDraftRows.length !== draft.baseRows.length) return false;
+  for (const row of existingDraftRows) {
+    const authoritative = authoritativeById.get(row.id);
+    if (!authoritative || JSON.stringify(editableRespondentValue(row)) !== JSON.stringify(editableRespondentValue(authoritative))) return false;
+  }
+  const additions = draft.rows.filter((row) => !baseIds.has(row.id)).map(editableRespondentValue);
+  const authoritativeAdditions = authoritativeRows.filter((row) => !baseIds.has(row.id)).map(editableRespondentValue);
+  const sorted = (items) => items.map(JSON.stringify).sort();
+  return JSON.stringify(sorted(additions)) === JSON.stringify(sorted(authoritativeAdditions));
 };
 
-const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, onRetry, onSurveyDataChanged, readOnly = false, onDirtyChange, onOperationChange }) => {
+const RespondentTable = ({ rows, revision, surveyName, loading = false, loadError = null, onRetry, onSurveyDataChanged, readOnly = false, onDirtyChange, onOperationChange }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalRows, setOriginalRows] = useState([]);
+  const [authoritativeRevision, setAuthoritativeRevision] = useState(null);
+  const [mutationErrors, setMutationErrors] = useState({});
   const draftsRef = useRef(new Map());
-  const { begin, end, isPending, generation, advanceGeneration } = useSurveyOperationState('respondents', onOperationChange);
+  const mutationError = mutationErrors[surveyName] || null;
+  const setSurveyMutationError = (targetSurveyId, message) => setMutationErrors((current) => {
+    if (!message) {
+      if (!current[targetSurveyId]) return current;
+      const next = { ...current };
+      delete next[targetSurveyId];
+      return next;
+    }
+    return { ...current, [targetSurveyId]: message };
+  });
+  const { begin, end, isPending, advanceGeneration } = useSurveyOperationState('respondents', onOperationChange);
   const operationPending = isPending(surveyName);
-  const respondentsReady = Array.isArray(rows) && !loading && !loadError;
+  const respondentsReady = Array.isArray(rows) && Number.isSafeInteger(authoritativeRevision) && !loading && !loadError;
   const hasIncompleteRows = tableRows.some((row) => !String(row.name || '').trim() || !String(row.email || '').trim());
   const surveyIdentity = useRef(surveyName);
   surveyIdentity.current = surveyName;
@@ -159,16 +170,20 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
                 const targetSurveyId = surveyName;
                 if (!begin(targetSurveyId)) return;
                 try {
-                  await api.delete('/user', {
+                  setSurveyMutationError(targetSurveyId, null);
+                  const response = await api.delete('/user', {
                     data: {
-                      userName: row.name,
-                      surveyName: targetSurveyId
+                      respondentId: row.id,
+                      surveyName: targetSurveyId,
+                      expectedRevision: authoritativeRevision,
                     }
                   });
+                  const nextRevision = responseRevision(response);
+                  if (nextRevision !== null && targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
                   advanceGeneration(targetSurveyId);
-                  await params.row.onRespondentDeleted(targetSurveyId);
+                  await params.row.onRespondentDeleted(targetSurveyId, { replaceDraft: true });
                 } catch (error) {
-                  console.error('Error deleting respondent:', error);
+                  setSurveyMutationError(targetSurveyId, apiErrorMessage(error, 'Failed to delete the respondent. Refresh the roster and try again.'));
                 } finally {
                   end(targetSurveyId);
                 }
@@ -183,6 +198,8 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
 
 
   useEffect(() => {
+    const parsedRevision = Number(revision);
+    const nextRevision = Number.isSafeInteger(parsedRevision) && parsedRevision >= 0 ? parsedRevision : null;
     if (Array.isArray(rows)) {
       const updatedRows = rows.map(row => ({
         ...row,
@@ -192,47 +209,59 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
       }));
       const original = JSON.parse(JSON.stringify(updatedRows));
       const draft = draftsRef.current.get(surveyName);
-      const draftPersisted = Boolean(draft) && editableRespondentRowsMatch(draft.rows, updatedRows);
+      const draftPersisted = editableRespondentDraftMatches(draft, updatedRows);
       if (draftPersisted) {
         draftsRef.current.delete(surveyName);
         onDirtyChange?.(surveyName, 'respondents', false);
       }
+      if (draft && !draftPersisted) draftsRef.current.set(surveyName, { ...draft, latestRows: original, latestRevision: nextRevision });
       setTableRows(draft && !draftPersisted ? draft.rows : updatedRows);
-      setOriginalRows(original);
+      setOriginalRows(draft && !draftPersisted ? draft.baseRows : original);
+      setAuthoritativeRevision(draft && !draftPersisted ? draft.revision : nextRevision);
       setHasChanges(Boolean(draft) && !draftPersisted);
     } else {
       setTableRows([]);
       setOriginalRows([]);
       setHasChanges(false);
     }
-  }, [rows, surveyName]);
+  }, [rows, surveyName, revision]);
 
   const fetchRespondentData = async (targetSurveyId = surveyName, { replaceDraft = false } = {}) => {
     let applied = false;
-    if (targetSurveyId === surveyIdentity.current) {
-      try {
-        const response = await api.get(`/targets?surveyName=${targetSurveyId}`);
-        if (
-          targetSurveyId === surveyIdentity.current &&
-          (replaceDraft || !draftsRef.current.has(targetSurveyId))
-        ) {
-          const refreshedRows = response.data.map(row => ({
-            ...row,
-            language: row.language || 'English',
-            canRespond: row.canRespond === undefined ? true : row.canRespond,
-            onRespondentDeleted: fetchRespondentData
-          }));
-          setTableRows(refreshedRows);
-          setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
-          setHasChanges(false);
-          applied = true;
-        }
-      } catch (error) {
-        console.error('Error fetching respondents:', error);
+    let confirmed = false;
+    try {
+      const response = await api.get(`/targets?surveyName=${targetSurveyId}`);
+      const refreshedRevision = responseRevision(response);
+      if (refreshedRevision === null) throw new Error('Roster revision missing from response');
+      const refreshedRows = response.data.map(row => ({
+        ...row,
+        language: row.language || 'English',
+        canRespond: row.canRespond === undefined ? true : row.canRespond,
+        onRespondentDeleted: fetchRespondentData
+      }));
+      const draft = draftsRef.current.get(targetSurveyId);
+      confirmed = editableRespondentDraftMatches(draft, refreshedRows);
+      if (confirmed && draftsRef.current.get(targetSurveyId) === draft) {
+        draftsRef.current.delete(targetSurveyId);
+        onDirtyChange?.(targetSurveyId, 'respondents', false);
+      } else if (draft && draftsRef.current.get(targetSurveyId) === draft) {
+        draftsRef.current.set(targetSurveyId, { ...draft, latestRows: JSON.parse(JSON.stringify(refreshedRows)), latestRevision: refreshedRevision });
       }
+      if (
+        targetSurveyId === surveyIdentity.current &&
+        (replaceDraft || confirmed || !draftsRef.current.has(targetSurveyId))
+      ) {
+        setTableRows(confirmed || replaceDraft || !draft ? refreshedRows : draft.rows);
+        setOriginalRows(JSON.parse(JSON.stringify(refreshedRows)));
+        setHasChanges(Boolean(draft) && !confirmed && !replaceDraft);
+        setAuthoritativeRevision(refreshedRevision);
+        applied = true;
+      }
+    } catch (error) {
+      setSurveyMutationError(targetSurveyId, mutationErrors[targetSurveyId] || 'The change may have saved, but the authoritative roster could not be refreshed. Your draft was retained; retry after refreshing.');
     }
     await onSurveyDataChanged?.();
-    return applied;
+    return { applied, confirmed };
   };
 
   const handleProcessRowUpdate = (newRow) => {
@@ -250,8 +279,16 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
     });
     
     setHasChanges(hasUnsavedChanges);
-    if (hasUnsavedChanges) draftsRef.current.set(surveyName, { rows: updatedRows });
-    else draftsRef.current.delete(surveyName);
+    if (hasUnsavedChanges) {
+      const existingDraft = draftsRef.current.get(surveyName);
+      draftsRef.current.set(surveyName, {
+        rows: updatedRows,
+        baseRows: existingDraft?.baseRows || JSON.parse(JSON.stringify(originalRows)),
+        revision: existingDraft?.revision ?? authoritativeRevision,
+        latestRows: existingDraft?.latestRows || JSON.parse(JSON.stringify(originalRows)),
+        latestRevision: existingDraft?.latestRevision ?? authoritativeRevision,
+      });
+    } else draftsRef.current.delete(surveyName);
     advanceGeneration(surveyName);
     onDirtyChange?.(surveyName, 'respondents', hasUnsavedChanges);
     return newRow;
@@ -262,50 +299,34 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
     const targetSurveyId = surveyName;
     if (!begin(targetSurveyId)) return;
     const savedDraft = draftsRef.current.get(targetSurveyId);
-    let persistedGeneration = generation(targetSurveyId);
     try {
-      const changedRows = tableRows.filter(row => {
-        const original = originalRows.find(origRow => origRow.id === row.id);
-        return (!original || 
-                original.name !== row.name || 
-                original.email !== row.email ||
-                original.language !== row.language ||
-                original.canRespond !== row.canRespond) && 
-                row.name && row.email;
-      });
-  
-      if (changedRows.length > 0) {
-        for (const changedRow of changedRows) {
-          const original = originalRows.find(origRow => origRow.id === changedRow.id);
-          const csvData = formatRowsToCSV([changedRow]);
-  
-          const deleteRow = original && original.name !== changedRow.name ? 
-            { name: original.name, surveyName } : null;
-  
-          await api.post('/updateTarget', {
-            csvData,
-            surveyName: targetSurveyId,
-            deleteRow
-          });
-          persistedGeneration = advanceGeneration(targetSurveyId);
-        }
-
-        const draftUnchanged = Boolean(savedDraft) &&
-          draftsRef.current.get(targetSurveyId) === savedDraft &&
-          generation(targetSurveyId) === persistedGeneration;
-        const reloadApplied = await fetchRespondentData(targetSurveyId, { replaceDraft: draftUnchanged });
-        if (
-          draftUnchanged &&
-          (reloadApplied || targetSurveyId !== surveyIdentity.current) &&
-          draftsRef.current.get(targetSurveyId) === savedDraft &&
-          generation(targetSurveyId) === persistedGeneration
-        ) {
-          draftsRef.current.delete(targetSurveyId);
-          onDirtyChange?.(targetSurveyId, 'respondents', false);
+      setSurveyMutationError(targetSurveyId, null);
+      const updates = [];
+      const additions = [];
+      for (const row of tableRows) {
+        const original = originalRows.find((candidate) => candidate.id === row.id);
+        const fields = { name: row.name, email: row.email, language: row.language, canRespond: row.canRespond };
+        if (!original) additions.push(fields);
+        else if (
+          original.name !== row.name || original.email !== row.email ||
+          original.language !== row.language || original.canRespond !== row.canRespond
+        ) updates.push({ respondentId: row.id, ...fields });
+      }
+      if (updates.length || additions.length) {
+        const response = await api.patch(`/surveys/${targetSurveyId}/respondents`, {
+          expectedRevision: savedDraft?.revision ?? authoritativeRevision,
+          updates,
+          additions,
+        });
+        const nextRevision = responseRevision(response);
+        if (nextRevision !== null && targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+        advanceGeneration(targetSurveyId);
+        if (draftsRef.current.get(targetSurveyId) === savedDraft) {
+          await fetchRespondentData(targetSurveyId, { replaceDraft: false });
         }
       }
     } catch (error) {
-      console.error('Failed to save changes:', error);
+      setSurveyMutationError(targetSurveyId, apiErrorMessage(error, 'Failed to save the respondent roster. Your draft was retained.'));
     } finally {
       end(targetSurveyId);
     }
@@ -314,19 +335,27 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
   const handleUpload = async (csvContent) => {
     if (!respondentsReady) return;
     const targetSurveyId = surveyName;
+    if (draftsRef.current.has(targetSurveyId)) {
+      setSurveyMutationError(targetSurveyId, 'Finish or discard the current respondent draft before importing a CSV file.');
+      return;
+    }
     if (!begin(targetSurveyId)) return;
     try {
+      setSurveyMutationError(targetSurveyId, null);
       const response = await api.post('/updateTargets', {
         csvData: csvContent,
-        surveyName: targetSurveyId
+        surveyName: targetSurveyId,
+        expectedRevision: authoritativeRevision,
       });
 
       if (response.status === 200) {
+        const nextRevision = responseRevision(response);
+        if (nextRevision !== null && targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
         advanceGeneration(targetSurveyId);
-        await fetchRespondentData(targetSurveyId);
+        await fetchRespondentData(targetSurveyId, { replaceDraft: true });
       }
     } catch (err) {
-      console.error('Error updating respondents:', err);
+      setSurveyMutationError(targetSurveyId, apiErrorMessage(err, 'Failed to import respondents. No rows were added.'));
       throw err;
     } finally {
       end(targetSurveyId);
@@ -335,8 +364,12 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
 
   const handleDiscard = () => {
     if (operationPending || !respondentsReady) return;
+    const draft = draftsRef.current.get(surveyName);
     draftsRef.current.delete(surveyName);
-    setTableRows(JSON.parse(JSON.stringify(originalRows)));
+    const restoredRows = draft?.latestRows || originalRows;
+    setTableRows(JSON.parse(JSON.stringify(restoredRows)));
+    setOriginalRows(JSON.parse(JSON.stringify(restoredRows)));
+    setAuthoritativeRevision(draft?.latestRevision ?? authoritativeRevision);
     setHasChanges(false);
     advanceGeneration(surveyName);
     onDirtyChange?.(surveyName, 'respondents', false);
@@ -358,7 +391,13 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
     const updatedRows = [newRow, ...tableRows];
     setTableRows(updatedRows);
     setHasChanges(true);
-    draftsRef.current.set(surveyName, { rows: updatedRows });
+    draftsRef.current.set(surveyName, {
+      rows: updatedRows,
+      baseRows: JSON.parse(JSON.stringify(originalRows)),
+      revision: authoritativeRevision,
+      latestRows: JSON.parse(JSON.stringify(originalRows)),
+      latestRevision: authoritativeRevision,
+    });
     advanceGeneration(surveyName);
     onDirtyChange?.(surveyName, 'respondents', true);
   };
@@ -405,6 +444,16 @@ const RespondentTable = ({ rows, surveyName, loading = false, loadError = null, 
         )}
       </Box>
 
+      {mutationError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {mutationError}
+        </Alert>
+      )}
+      {Array.isArray(rows) && authoritativeRevision === null && !loading && !loadError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          The roster revision is unavailable. Refresh before editing respondents.
+        </Alert>
+      )}
       {hasChanges && hasIncompleteRows && respondentsReady && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           Complete each respondent’s name and email, or discard changes, before saving.

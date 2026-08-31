@@ -7,7 +7,7 @@ import api from '../api/axios';
 import { formatDateTime } from './surveyLifecycle';
 
 vi.mock('@network-survey/frontend-shared', () => ({ LANGUAGES: [{ label: 'English' }] }));
-vi.mock('../api/axios', () => ({ default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }));
+vi.mock('../api/axios', () => ({ default: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }));
 
 vi.mock('@mui/x-data-grid', () => ({
   GridToolbar: () => null,
@@ -15,6 +15,7 @@ vi.mock('@mui/x-data-grid', () => ({
     <div>
       <span data-testid="respondent-name">{rows[0]?.name || ''}</span>
       {processRowUpdate && rows[0] && <button onClick={() => processRowUpdate({ ...rows[0], name: `${rows[0].name} Edited` })}>Edit respondent</button>}
+      {processRowUpdate && rows.slice(1).map((row) => <button key={row.id} onClick={() => processRowUpdate({ ...row, name: `${row.name} Edited` })}>Edit respondent {row.id}</button>)}
       {columns.filter((column) => ['dispatchStatus', 'providerOutcome', 'providerOutcomeAt'].includes(column.field)).map((column) => (
         <section key={column.field} aria-label={column.headerName}>
           {rows.map((row) => {
@@ -27,7 +28,10 @@ vi.mock('@mui/x-data-grid', () => ({
   ),
 }));
 
-vi.mock('./TableUploadButton', () => ({ default: ({ disabled }) => <button disabled={disabled}>Upload respondents</button> }));
+vi.mock('./TableUploadButton', () => ({ default: ({ disabled, onUpload }) => {
+  const initialUpload = React.useRef(onUpload);
+  return <><button disabled={disabled}>Upload respondents</button><button onClick={() => initialUpload.current('csv')}>Complete delayed upload</button></>;
+} }));
 vi.mock('./AddRowButton', () => ({ default: ({ disabled, onClick }) => <button disabled={disabled} onClick={onClick}>Add respondent</button> }));
 vi.mock('./TableMenuCell', () => ({ default: () => null }));
 
@@ -41,7 +45,7 @@ beforeEach(() => vi.clearAllMocks());
 
 test('presents dispatch and provider outcomes as separate respondent fields', async () => {
   const deliveredAt = '2026-01-02T03:04:05Z';
-  render(<RespondentTable readOnly surveyName="Survey" rows={[
+  render(<RespondentTable revision={0} readOnly surveyName="Survey" rows={[
     {
       id: 1, name: 'One', email: 'one@example.test', dispatch_status: 'accepted',
       provider_outcome: 'delivered', provider_delivered_at: deliveredAt,
@@ -59,28 +63,101 @@ test('presents dispatch and provider outcomes as separate respondent fields', as
 
 test('keeps respondent mutations unavailable until the roster loads successfully', async () => {
   const retry = vi.fn();
-  const view = render(<RespondentTable rows={null} surveyName="survey-1" loading onRetry={retry} />);
+  const view = render(<RespondentTable revision={0} rows={null} surveyName="survey-1" loading onRetry={retry} />);
 
   expect(screen.getByText('Loading survey respondents…')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Add respondent' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Upload respondents' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Edit respondent' })).not.toBeInTheDocument();
 
-  view.rerender(<RespondentTable rows={null} surveyName="survey-1" loadError="Unable to load survey respondents." onRetry={retry} />);
+  view.rerender(<RespondentTable revision={0} rows={null} surveyName="survey-1" loadError="Unable to load survey respondents." onRetry={retry} />);
   expect(screen.getByText('Unable to load survey respondents.')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Add respondent' })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(retry).toHaveBeenCalledTimes(1);
 });
 
+test('submits every changed existing row in one stable-ID batch request', async () => {
+  api.patch.mockResolvedValue({ status: 200, data: { revision: 1 } });
+  api.get.mockResolvedValue({
+    data: [
+      { id: 1, name: 'One Edited', email: 'one@example.test', canRespond: true, language: 'English' },
+      { id: 2, name: 'Two Edited', email: 'two@example.test', canRespond: true, language: 'English' },
+    ],
+    headers: { 'x-roster-revision': '1' },
+  });
+  render(<RespondentTable revision={0} surveyName="survey-1" rows={[
+    { id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' },
+    { id: 2, name: 'Two', email: 'two@example.test', canRespond: true, language: 'English' },
+  ]} />);
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Edit respondent 2' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => expect(api.patch).toHaveBeenCalledTimes(1));
+  expect(api.patch).toHaveBeenCalledWith('/surveys/survey-1/respondents', {
+    expectedRevision: 0,
+    updates: [
+      { respondentId: 1, name: 'One Edited', email: 'one@example.test', language: 'English', canRespond: true },
+      { respondentId: 2, name: 'Two Edited', email: 'two@example.test', language: 'English', canRespond: true },
+    ],
+    additions: [],
+  });
+  expect(api.post).not.toHaveBeenCalled();
+});
+
+test('shows actionable API errors and retains the dirty draft', async () => {
+  api.patch.mockRejectedValue({ response: { data: { error: 'roster_stale', message: 'Roster changed elsewhere. Refresh and reapply.' } } });
+  const onDirtyChange = vi.fn();
+  render(<RespondentTable revision={4} surveyName="survey-1" rows={[
+    { id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' },
+  ]} onDirtyChange={onDirtyChange} />);
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  expect(await screen.findByText('Roster changed elsewhere. Refresh and reapply.')).toBeInTheDocument();
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Edited');
+  expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  expect(onDirtyChange).not.toHaveBeenCalledWith('survey-1', 'respondents', false);
+});
+
+test('keeps a draft pinned to its base revision when newer background data arrives', async () => {
+  api.patch.mockRejectedValue({ response: { data: { message: 'stale' } } });
+  const baseRows = [{ id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' }];
+  const view = render(<RespondentTable revision={4} surveyName="survey-1" rows={baseRows} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
+
+  view.rerender(<RespondentTable revision={5} surveyName="survey-1" rows={baseRows} />);
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Edited');
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => expect(api.patch).toHaveBeenCalled());
+  expect(api.patch.mock.calls[0][1].expectedRevision).toBe(4);
+});
+
+test('aborts a delayed CSV upload if a respondent draft was created while the file was read', async () => {
+  render(<RespondentTable revision={0} surveyName="survey-1" rows={[
+    { id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Complete delayed upload' }));
+
+  expect(api.post).not.toHaveBeenCalled();
+  expect(await screen.findByText('Finish or discard the current respondent draft before importing a CSV file.')).toBeInTheDocument();
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Edited');
+});
+
 test('retains the respondent draft when persistence succeeds but target reload fails', async () => {
   const onSurveyDataChanged = vi.fn().mockResolvedValue([]);
   const onDirtyChange = vi.fn();
-  api.post.mockResolvedValue({ status: 200 });
+  api.patch.mockResolvedValue({ status: 200, data: { revision: 1 } });
   api.get.mockRejectedValue(new Error('target reload failed'));
 
   render(
     <RespondentTable
+      revision={0}
       surveyName="survey-1"
       rows={[{ id: 1, name: 'One Person', email: 'one@example.test', canRespond: true }]}
       onSurveyDataChanged={onSurveyDataChanged}
@@ -99,9 +176,10 @@ test('retains the respondent draft when persistence succeeds but target reload f
 test('reconciles a retained draft after a later roster reload confirms it was persisted', async () => {
   const onDirtyChange = vi.fn();
   const onSurveyDataChanged = vi.fn().mockResolvedValue([]);
-  api.post.mockResolvedValue({ status: 200 });
+  api.patch.mockResolvedValue({ status: 200, data: { revision: 1 } });
   api.get.mockRejectedValueOnce(new Error('target reload failed'));
   const view = render(<RespondentTable
+    revision={0}
     surveyName="survey-1"
     rows={[{ id: 1, name: 'One Person', email: 'one@example.test', canRespond: true }]}
     onDirtyChange={onDirtyChange}
@@ -114,8 +192,9 @@ test('reconciles a retained draft after a later roster reload confirms it was pe
   onDirtyChange.mockClear();
 
   view.rerender(<RespondentTable
+    revision={1}
     surveyName="survey-1"
-    rows={[{ id: 99, name: 'One Person Edited', email: 'one@example.test', canRespond: true }]}
+    rows={[{ id: 1, name: 'One Person Edited', email: 'one@example.test', canRespond: true }]}
     onDirtyChange={onDirtyChange}
     onSurveyDataChanged={onSurveyDataChanged}
   />);
@@ -127,7 +206,7 @@ test('reconciles a retained draft after a later roster reload confirms it was pe
 
 test('allows an incomplete newly added respondent to be discarded', async () => {
   const onDirtyChange = vi.fn();
-  render(<RespondentTable surveyName="survey-1" rows={[]} onDirtyChange={onDirtyChange} />);
+  render(<RespondentTable revision={0} surveyName="survey-1" rows={[]} onDirtyChange={onDirtyChange} />);
 
   await userEvent.click(screen.getByRole('button', { name: 'Add respondent' }));
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
@@ -144,10 +223,15 @@ test('clears the owning survey respondent draft when its save succeeds after swi
   const pendingSave = deferred();
   const onDirtyChange = vi.fn();
   const onSurveyDataChanged = vi.fn().mockResolvedValue([]);
-  api.post.mockReturnValue(pendingSave.promise);
+  api.patch.mockReturnValue(pendingSave.promise);
+  api.get.mockResolvedValue({
+    data: [{ id: 1, name: 'One Person Edited', email: 'one@example.test', canRespond: true }],
+    headers: { 'x-roster-revision': '1' },
+  });
 
   const view = render(
     <RespondentTable
+      revision={0}
       surveyName="survey-1"
       rows={[{ id: 1, name: 'One Person', email: 'one@example.test', canRespond: true }]}
       onDirtyChange={onDirtyChange}
@@ -156,12 +240,13 @@ test('clears the owning survey respondent draft when its save succeeds after swi
   );
   await userEvent.click(await screen.findByRole('button', { name: 'Edit respondent' }));
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(api.post).toHaveBeenCalled());
+  await waitFor(() => expect(api.patch).toHaveBeenCalled());
   expect(screen.queryByRole('button', { name: 'Edit respondent' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 
   view.rerender(
     <RespondentTable
+      revision={0}
       surveyName="survey-2"
       rows={[{ id: 2, name: 'Two Person', email: 'two@example.test', canRespond: true }]}
       onDirtyChange={onDirtyChange}
@@ -171,7 +256,7 @@ test('clears the owning survey respondent draft when its save succeeds after swi
   await waitFor(() => expect(screen.getByTestId('respondent-name')).toHaveTextContent('Two Person'));
   onDirtyChange.mockClear();
 
-  await act(async () => pendingSave.resolve({ status: 200 }));
+  await act(async () => pendingSave.resolve({ status: 200, data: { revision: 1 } }));
   expect(onDirtyChange).toHaveBeenCalledWith('survey-1', 'respondents', false);
   expect(onSurveyDataChanged).toHaveBeenCalledTimes(1);
   expect(screen.getByTestId('respondent-name')).toHaveTextContent('Two Person');

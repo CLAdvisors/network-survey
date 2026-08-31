@@ -49,6 +49,7 @@ const {
   isLegacyPlaceholderRespondent,
   surveySummaryRespondentCount,
 } = require('../server');
+const { displayedRespondentPredicate } = require('../respondent-utils');
 
 test('survey respondent summaries count displayed roster rows and only exclude the exact legacy placeholder', () => {
   const displayedRows = (rows) => rows.filter((row) => !isLegacyPlaceholderRespondent(row));
@@ -69,9 +70,13 @@ test('survey respondent summaries count displayed roster rows and only exclude t
   assert.match(expression, /contact_info IS DISTINCT FROM 'N\/A'/);
   assert.match(expression, /can_respond IS DISTINCT FROM FALSE/);
   assert.equal(surveySummaryRespondentCount(2), '2');
+  assert.match(displayedRespondentPredicate('r'), /r\.name IS DISTINCT FROM 'None'/);
   const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
   assert.match(serverSource, /const query = \(isPlatformAdmin\(req\.user\) \? `[\s\S]+` : `[\s\S]+`\)\.replace\('COUNT\(r\.respondent_id\) AS number_of_respondents', `\$\{displayedRespondentCountExpression\('r'\)\}/);
   assert.doesNotMatch(serverSource, /number_of_respondents \|\| 0\) - 1/);
+  assert.match(serverSource, /SELECT \$\{displayedRespondentCountExpression\('r'\)\} AS number_of_respondents[\s\S]+userDataStatus: Number\(number_of_respondents\) > 0/);
+  const lifecycleSource = fs.readFileSync(path.join(__dirname, '../lifecycle.js'), 'utf8');
+  assert.match(lifecycleSource, /can_respond IS NOT TRUE AND \$\{displayedRespondentPredicate\('r'\)\}/);
 });
 
 test('new survey links use the canonical HTTPS origin while CORS retains legacy origins', () => {
@@ -2097,7 +2102,7 @@ test('dashboard read-only tables hide edit controls and demo email avoids public
   assert.match(questionTable, /editable: !readOnly/);
   assert.match(questionTable, /!readOnly &&/);
   assert.match(respondentTable, /readOnly = false/);
-  assert.match(respondentTable, /disabled=\{readOnly\}/);
+  assert.match(respondentTable, /disabled=\{readOnly \|\| operationPending\}/);
   assert.match(respondentTable, /!readOnly &&/);
   assert.match(respondentTable, /surveyName,/);
   assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);

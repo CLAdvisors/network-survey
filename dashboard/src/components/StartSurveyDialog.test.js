@@ -65,6 +65,21 @@ test('blocks launch with an accessible survey-specific warning for all unsaved s
   await waitFor(() => expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeEnabled());
 });
 
+test('blocks launch while this survey has a pending mutation', async () => {
+  api.get.mockResolvedValue({ data: readiness });
+  render(<StartSurveyDialog
+    open
+    survey={{ id: 'survey-1', name: 'Team Survey' }}
+    onClose={() => {}}
+    onAccepted={() => {}}
+    pendingOperations={{ questions: true }}
+  />);
+
+  expect(await screen.findByText(/Wait for the current update to survey questions to finish before launching “Team Survey”/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
+  expect(api.post).not.toHaveBeenCalled();
+});
+
 test('ignores readiness that resolves after switching to another survey', async () => {
   const first = deferred();
   api.get

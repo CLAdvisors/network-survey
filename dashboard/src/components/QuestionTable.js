@@ -3,7 +3,7 @@ import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import TableUploadButton from './TableUploadButton';
 import AddRowButton from './AddRowButton';
 import api from '../api/axios';
-import { Box, Paper, Typography, Button, Snackbar, Alert } from '@mui/material';
+import { Box, Paper, Typography, Button, Snackbar, Alert, CircularProgress } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import SaveIcon from '@mui/icons-material/Save';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -12,7 +12,7 @@ import { parseQuestionsCsv } from '../utils/questionsCsv';
 import { buildQuestionTableSchema } from '../utils/questionTableSchema';
 import useSurveyOperationState from './useSurveyOperationState';
 
-const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false, onDirtyChange, onOperationChange }) => {
+const QuestionTable = ({ rows, surveyName, loading = false, loadError = null, onRetry, onSurveyDataChanged, readOnly = false, onDirtyChange, onOperationChange }) => {
   const theme = useTheme();
   const [tableRows, setTableRows] = useState([]);
   const [hasChanges, setHasChanges] = useState(false);
@@ -20,6 +20,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
   const draftsRef = useRef(new Map());
   const { begin, end, isPending, generation, advanceGeneration } = useSurveyOperationState('questions', onOperationChange);
   const operationPending = isPending(surveyName);
+  const questionsReady = Array.isArray(rows) && !loading && !loadError;
   const operationVersion = useRef(0);
   const surveyIdentity = useRef(surveyName);
   if (surveyIdentity.current !== surveyName) {
@@ -59,6 +60,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
   }, [rows, surveyName]);
 
   const handleDeleteQuestion = async (row) => {
+    if (!questionsReady) return;
     const targetSurveyId = surveyName;
     if (!begin(targetSurveyId)) return;
     const version = operationVersion.current;
@@ -111,10 +113,10 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
 
   const columns = [
     { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly && !operationPending },
+    { field: 'text', headerName: 'Question text', width: 500, editable: !readOnly && !operationPending && questionsReady },
     { field: 'type', headerName: 'Question type', width: 150, editable: false },
-    { field: 'required', headerName: 'Required', width: 100, type: 'boolean', editable: !readOnly && !operationPending },
-    { field: 'max', headerName: 'Max answers', width: 150, editable: !readOnly && !operationPending },
+    { field: 'required', headerName: 'Required', width: 100, type: 'boolean', editable: !readOnly && !operationPending && questionsReady },
+    { field: 'max', headerName: 'Max answers', width: 150, editable: !readOnly && !operationPending && questionsReady },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -135,7 +137,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         />
       ),
     }
-  ].filter(column => (!readOnly && !hasChanges && !operationPending) || column.field !== 'actions');
+  ].filter(column => (!readOnly && !hasChanges && !operationPending && questionsReady) || column.field !== 'actions');
 
   const TEMPLATE_DATA = [
     'Title,Question name,Question title,Question type,Max answers,Required',
@@ -146,7 +148,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
 
 
   const handleProcessRowUpdate = (newRow) => {
-    if (readOnly || operationPending) return originalRows.find(row => row.id === newRow.id) || newRow;
+    if (readOnly || operationPending || !questionsReady) return originalRows.find(row => row.id === newRow.id) || newRow;
     const updatedRows = tableRows.map((row) => (row.id === newRow.id ? newRow : row));
     setTableRows(updatedRows);
     
@@ -172,6 +174,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
   };
 
   const handleSave = async () => {
+    if (!questionsReady) return;
     const targetSurveyId = surveyName;
     if (!begin(targetSurveyId)) return;
     const savedDraft = draftsRef.current.get(targetSurveyId);
@@ -222,6 +225,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
   };
 
   const handleUpload = async (csvContent) => {
+    if (!questionsReady) return;
     const targetSurveyId = surveyName;
     if (!begin(targetSurveyId)) return;
     const version = operationVersion.current;
@@ -287,7 +291,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
   };
 
   const handleAddRow = () => {
-    if (operationPending) return;
+    if (operationPending || !questionsReady) return;
     const newId = Math.max(0, ...tableRows.map(row => row.id)) + 1;
     const newRow = {
       id: newId,
@@ -328,7 +332,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         <Typography variant="h7" color="primary" sx={{ fontWeight: 'bold' }}>
           Question Table
         </Typography>
-        {!readOnly && (
+        {!readOnly && questionsReady && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <AddRowButton onClick={handleAddRow} disabled={operationPending} />
             <TableUploadButton
@@ -352,6 +356,17 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         )}
       </Box>
 
+      {loading && (
+        <Alert severity="info" icon={<CircularProgress size={18} />} sx={{ mb: 2 }}>
+          Loading survey questions…
+        </Alert>
+      )}
+      {loadError && (
+        <Alert severity="error" sx={{ mb: 2 }} action={onRetry ? <Button color="inherit" size="small" onClick={onRetry}>Retry</Button> : undefined}>
+          {loadError}
+        </Alert>
+      )}
+
       <DataGrid
         rows={tableRows}
         columns={columns}
@@ -360,7 +375,7 @@ const QuestionTable = ({ rows, surveyName, onSurveyDataChanged, readOnly = false
         }}
         pageSizeOptions={[10, 25, 50, { value: -1, label: 'All' }]}
         disableSelectionOnClick
-        processRowUpdate={readOnly || operationPending ? undefined : handleProcessRowUpdate}
+        processRowUpdate={readOnly || operationPending || !questionsReady ? undefined : handleProcessRowUpdate}
         components={{
           Toolbar: GridToolbar,
         }}

@@ -49,6 +49,7 @@ test('presents dispatch and provider outcomes as separate respondent fields', as
     { id: 2, name: 'Legacy', email: 'legacy@example.test', emailStatus: 'legacy_assumed_accepted' },
   ]} />);
 
+  expect(screen.queryByRole('button', { name: 'Edit respondent' })).not.toBeInTheDocument();
   expect(await screen.findByRole('region', { name: 'Dispatch status' })).toHaveTextContent('accepted');
   const outcomes = screen.getByRole('region', { name: 'Provider outcome' });
   expect(outcomes).toHaveTextContent('Delivered');

@@ -26,7 +26,7 @@ const DIRTY_LABELS = {
   respondents: 'survey respondents',
 };
 
-const StartSurveyDialog = ({ open, survey, onClose, onAccepted, unsavedChanges = {} }) => {
+const StartSurveyDialog = ({ open, survey, onClose, onAccepted, unsavedChanges = {}, pendingOperations = {} }) => {
   const [readiness, setReadiness] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
@@ -72,7 +72,11 @@ const StartSurveyDialog = ({ open, survey, onClose, onAccepted, unsavedChanges =
     .filter(([, dirty]) => Boolean(dirty))
     .map(([section]) => DIRTY_LABELS[section] || section);
   const hasUnsavedChanges = dirtySections.length > 0;
-  const canLaunch = attemptSurveyId === id && Boolean(readiness?.canLaunch) && blockers.length === 0 && !hasUnsavedChanges;
+  const pendingSections = Object.entries(pendingOperations)
+    .filter(([, pending]) => Boolean(pending))
+    .map(([section]) => DIRTY_LABELS[section] || section);
+  const hasPendingOperations = pendingSections.length > 0;
+  const canLaunch = attemptSurveyId === id && Boolean(readiness?.canLaunch) && blockers.length === 0 && !hasUnsavedChanges && !hasPendingOperations;
 
   const submit = async () => {
     if (!canLaunch || submitting || requestInFlight.current || !intentKey) return;
@@ -120,6 +124,11 @@ const StartSurveyDialog = ({ open, survey, onClose, onAccepted, unsavedChanges =
         {hasUnsavedChanges && (
           <Alert severity="warning" sx={{ mb: 2 }}>
             “{survey?.name || 'This survey'}” has unsaved changes in {dirtySections.join(', ')}. Save or undo those changes before launching so invitations use the persisted survey.
+          </Alert>
+        )}
+        {hasPendingOperations && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            Wait for the current update to {pendingSections.join(', ')} to finish before launching “{survey?.name || 'this survey'}”.
           </Alert>
         )}
         {loading && <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}><CircularProgress size={20} /> Checking readiness…</Box>}

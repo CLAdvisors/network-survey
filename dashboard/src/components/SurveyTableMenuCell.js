@@ -35,7 +35,7 @@ const buildDefaultCopiedName = (name) => {
   return candidate === sourceName ? `${sourceName.slice(0, 250)}Copy2` : candidate;
 };
 
-const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onViewLifecycle, unsavedChanges = {} }) => {
+const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onViewLifecycle, unsavedChanges = {}, pendingOperations = {} }) => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [startOpen, setStartOpen] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
@@ -56,6 +56,12 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
   const canLaunch = status === 'draft' && capability(row, 'canLaunch', canEdit);
   const canClose = status === 'active' && capability(row, 'canClose', canEdit);
   const canReopen = status === 'closed' && capability(row, 'canReopen', hasSurveyRole(row, 'admin'));
+  const hasUnsavedChanges = Object.values(unsavedChanges).some(Boolean);
+  const hasPendingOperations = Object.values(pendingOperations).some(Boolean);
+  const actionBlocked = hasUnsavedChanges || hasPendingOperations;
+  const blockedActionMessage = hasPendingOperations
+    ? `Wait for the current update to “${row.name}” to finish.`
+    : `Save or undo changes to “${row.name}” before continuing.`;
 
   const notify = (message, severity = 'success') => setSnackbar({ open: true, message, severity });
   const handleCloseSnackbar = (_, reason) => reason !== 'clickaway' && setSnackbar((value) => ({ ...value, open: false }));
@@ -65,6 +71,11 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
 
   const handleCopyClick = (event) => {
     stop(event);
+    if (actionBlocked) {
+      setAnchorEl(null);
+      notify(`${blockedActionMessage} Copy uses only persisted survey content.`, 'warning');
+      return;
+    }
     setCopiedName(buildDefaultCopiedName(row.name));
     setCopyError('');
     setCopyDialogOpen(true);
@@ -78,6 +89,10 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
   };
 
   const handleCopyConfirm = async () => {
+    if (actionBlocked) {
+      setCopyError(`${blockedActionMessage} Copy uses only persisted survey content.`);
+      return;
+    }
     const name = copiedName;
     if (!name.trim()) {
       setCopyError('Enter a name for the copied survey.');
@@ -146,8 +161,23 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
     }
   };
 
+  const handleArchiveClick = (event) => {
+    stop(event);
+    setAnchorEl(null);
+    if (actionBlocked) {
+      notify(`${blockedActionMessage} Archive is unavailable until then.`, 'warning');
+      return;
+    }
+    setDeleteConfirmOpen(true);
+  };
+
   const handleDeleteConfirm = async () => {
     if (archiving) return;
+    if (actionBlocked) {
+      setDeleteConfirmOpen(false);
+      notify(`${blockedActionMessage} Archive is unavailable until then.`, 'warning');
+      return;
+    }
     setArchiving(true);
     try {
       const response = await api.delete(`/survey/${id}`);
@@ -179,10 +209,10 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         {canReopen && <MenuItem onClick={(event) => { closeMenu(event); setTransition('reopen'); }}><ReplayIcon fontSize="small" sx={{ mr: 1 }} />Reopen Survey</MenuItem>}
         {canEdit && <MenuItem onClick={handleCopyClick}><ContentCopyIcon fontSize="small" sx={{ mr: 1 }} />Copy Survey</MenuItem>}
         {canEdit && <MenuItem onClick={openAction(setDemoDialogOpen)}><EmailIcon fontSize="small" sx={{ mr: 1 }} />Send Email Demo</MenuItem>}
-        {canArchiveSurvey(row) && <MenuItem onClick={openAction(setDeleteConfirmOpen)} sx={{ color: 'error.main' }}><DeleteIcon fontSize="small" sx={{ mr: 1 }} />Archive Survey</MenuItem>}
+        {canArchiveSurvey(row) && <MenuItem onClick={handleArchiveClick} sx={{ color: 'error.main' }}><DeleteIcon fontSize="small" sx={{ mr: 1 }} />Archive Survey</MenuItem>}
       </Menu>
 
-      <StartSurveyDialog open={startOpen} survey={row} onClose={() => setStartOpen(false)} onAccepted={handleLaunchAccepted} unsavedChanges={unsavedChanges} />
+      <StartSurveyDialog open={startOpen} survey={row} onClose={() => setStartOpen(false)} onAccepted={handleLaunchAccepted} unsavedChanges={unsavedChanges} pendingOperations={pendingOperations} />
 
       <Dialog open={copyDialogOpen} onClose={handleCopyClose} onClick={stop} fullWidth maxWidth="sm">
         <DialogTitle>Copy survey</DialogTitle>

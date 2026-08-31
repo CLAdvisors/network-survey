@@ -140,11 +140,17 @@ test('selects a successful copy by returned stable ID and loads its related data
   expect(screen.getByTestId('respondent-count-survey-copy')).toHaveTextContent('0');
 });
 
-test('ignores related question data loaded before a successful mutation generation', async () => {
+test('retries related question data loaded before a successful mutation generation', async () => {
   const staleQuestions = deferred();
+  let questionLoads = 0;
   api.get.mockImplementation((url) => {
     if (url === '/surveys') return Promise.resolve({ data: { surveys } });
-    if (url.startsWith('/listQuestions')) return staleQuestions.promise;
+    if (url.startsWith('/listQuestions')) {
+      questionLoads += 1;
+      return questionLoads === 1
+        ? staleQuestions.promise
+        : Promise.resolve({ data: { questions: [{ text: 'Fresh question' }] } });
+    }
     return Promise.resolve({ data: [] });
   });
 
@@ -155,8 +161,9 @@ test('ignores related question data loaded before a successful mutation generati
   advanceSurveyOperationGeneration('questions', 'survey-a');
   staleQuestions.resolve({ data: { questions: [{ text: 'Stale question' }] } });
 
-  await waitFor(() => expect(screen.getByTestId('question-data')).toHaveTextContent('none'));
+  await waitFor(() => expect(screen.getByTestId('question-data')).toHaveTextContent('Fresh question'));
   expect(screen.getByTestId('question-data')).not.toHaveTextContent('Stale question');
+  expect(questionLoads).toBeGreaterThanOrEqual(2);
 });
 
 test('child mutations cannot replace a newer lifecycle lock with a delayed survey response', async () => {

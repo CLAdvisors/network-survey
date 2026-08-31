@@ -13,6 +13,7 @@ const SurveyTable = ({
   selectedSurvey,
   onLifecycleChange,
   dirtyBySurvey = {},
+  operationsBySurvey = {},
 }) => {
   const tableRows = useMemo(() => (rows || []).map((row) => ({
     ...row,
@@ -94,10 +95,11 @@ const SurveyTable = ({
           onLifecycleChange={onLifecycleChange}
           onViewLifecycle={selectRow}
           unsavedChanges={dirtyBySurvey[row.id || row.name] || {}}
+          pendingOperations={operationsBySurvey[row.id || row.name] || {}}
         />
       ),
     },
-  ], [onSurveyDeleted, onSurveyCopied, onLifecycleChange, selectRow, dirtyBySurvey]);
+  ], [onSurveyDeleted, onSurveyCopied, onLifecycleChange, selectRow, dirtyBySurvey, operationsBySurvey]);
 
   return (
     <div style={{ height: '100%', width: '100%' }}>

@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { DEFAULT_SENDER, RENDERER_VERSION, normalizeTemplateText, buildInvitationPayload, payloadHash } = require('./email');
+const { displayedRespondentPredicate } = require('./respondent-utils');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -57,7 +58,7 @@ async function loadReadinessData(client, survey) {
     [survey.id]
   );
   const excludedResult = await client.query(
-    `SELECT count(*)::int AS count FROM respondent WHERE survey_id=$1 AND can_respond IS NOT TRUE`,
+    `SELECT count(*)::int AS count FROM respondent r WHERE survey_id=$1 AND can_respond IS NOT TRUE AND ${displayedRespondentPredicate('r')}`,
     [survey.id]
   );
   return { recipients: recipientResult.rows, templates: templateResult.rows, excludedCount: Number(excludedResult.rows[0]?.count || 0) };

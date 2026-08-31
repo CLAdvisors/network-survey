@@ -31,6 +31,20 @@ const deferred = () => {
   return { promise, resolve };
 };
 
+test('keeps question mutation controls unavailable until questions load successfully', async () => {
+  const retry = vi.fn();
+  const view = render(<QuestionTable rows={null} surveyName="survey-1" loading onRetry={retry} />);
+  expect(screen.getByText('Loading survey questions…')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Edit question' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Upload questions' })).not.toBeInTheDocument();
+
+  view.rerender(<QuestionTable rows={null} surveyName="survey-1" loadError="Unable to load survey questions." onRetry={retry} />);
+  expect(screen.getByText('Unable to load survey questions.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Upload questions' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(retry).toHaveBeenCalledTimes(1);
+});
+
 test('locks question mutations while an upload is pending', async () => {
   const pendingUpload = deferred();
   const onDirtyChange = vi.fn();

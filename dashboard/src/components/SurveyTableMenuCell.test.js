@@ -6,6 +6,7 @@ import SurveyTableMenuCell from './SurveyTableMenuCell';
 import api from '../api/axios';
 
 let canEdit = true;
+let canArchive = false;
 
 vi.mock('../api/axios', () => ({
   default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
@@ -14,7 +15,7 @@ vi.mock('../api/axios', () => ({
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
     canEditSurvey: () => canEdit,
-    canArchiveSurvey: () => false,
+    canArchiveSurvey: () => canArchive,
     hasSurveyRole: () => false,
   }),
 }));
@@ -27,6 +28,7 @@ const deferred = () => {
 
 beforeEach(() => {
   canEdit = true;
+  canArchive = false;
   vi.clearAllMocks();
 });
 
@@ -117,6 +119,30 @@ test('copy default remains unique and valid at the survey-name length boundary',
   expect(defaultName).toHaveLength(255);
   expect(defaultName).not.toBe(sourceName);
   expect(defaultName).toMatch(/^[A-Za-z0-9]+$/);
+});
+
+test('blocks copy and archive while this survey has drafts or pending updates', async () => {
+  canArchive = true;
+  const view = render(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey' }}
+    unsavedChanges={{ questions: true }}
+  />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Copy Survey'));
+  expect(await screen.findByText(/Save or undo changes to “Leadership Survey” before continuing.*Copy uses only persisted survey content/)).toBeInTheDocument();
+  expect(screen.queryByRole('dialog', { name: 'Copy survey' })).not.toBeInTheDocument();
+
+  view.rerender(<SurveyTableMenuCell
+    row={{ id: 'survey-1', name: 'Leadership Survey' }}
+    pendingOperations={{ respondents: true }}
+  />);
+  await userEvent.click(screen.getByRole('button', { name: 'Survey actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Archive Survey'));
+  expect(await screen.findByText(/Wait for the current update to “Leadership Survey” to finish.*Archive is unavailable/)).toBeInTheDocument();
+  expect(screen.queryByText(/Archive “Leadership Survey”/)).not.toBeInTheDocument();
+  expect(api.post).not.toHaveBeenCalled();
+  expect(api.delete).not.toHaveBeenCalled();
 });
 
 test('users without edit access do not see copy or email demo actions', async () => {

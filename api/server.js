@@ -18,6 +18,7 @@ dotenvFlow.config();
 const { ResendProvider, reserveProviderRateOnClient } = require('./email');
 const lifecycle = require('./lifecycle');
 const { createResendWebhookHandler } = require('./webhooks');
+const { displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -405,16 +406,6 @@ function isPlatformAdmin(user) {
 function legacySurveyPredicate(alias = '') {
   const prefix = alias ? `${alias}.` : '';
   return `(${prefix}survey_id = $1 OR (${prefix}survey_id IS NULL AND ${prefix}survey_name = $2))`;
-}
-
-function displayedRespondentCountExpression(alias = 'r') {
-  return `COUNT(${alias}.respondent_id) FILTER (WHERE ${alias}.name IS DISTINCT FROM 'None' OR ${alias}.contact_info IS DISTINCT FROM 'N/A' OR ${alias}.can_respond IS DISTINCT FROM FALSE)`;
-}
-
-function isLegacyPlaceholderRespondent(row = {}) {
-  const contactInfo = row.contact_info ?? row.email;
-  const canRespond = row.can_respond ?? row.canRespond;
-  return row.name === 'None' && contactInfo === 'N/A' && canRespond === false;
 }
 
 function surveySummaryRespondentCount(value) {
@@ -3201,7 +3192,7 @@ app.get('/api/surveyStatus', requireAuth, async (req, res) => {
 
   // NEW DB CODE
   const query = `
-  SELECT COUNT(r.respondent_id) AS number_of_respondents
+  SELECT ${displayedRespondentCountExpression('r')} AS number_of_respondents
   FROM Respondent r
   WHERE ${legacySurveyPredicate('r')};
   `;
@@ -3215,7 +3206,7 @@ app.get('/api/surveyStatus', requireAuth, async (req, res) => {
       const is_questions_null = survey.questions === null;
       // Process the returned values
       res.status(200).json( {
-        userDataStatus: number_of_respondents >  1 ? true : false,
+        userDataStatus: Number(number_of_respondents) > 0,
         questionDataStatus: !is_questions_null
       });
     })

@@ -20,6 +20,9 @@ const Dashboard = () => {
   const [surveyData, setSurveyData] = React.useState(null);
   const [selectSurvey, setSelectSurvey] = React.useState(null);
   const [questionData, setQuestionData] = React.useState(null);
+  const [questionLoading, setQuestionLoading] = React.useState(false);
+  const [questionError, setQuestionError] = React.useState(null);
+  const [relatedRefresh, setRelatedRefresh] = React.useState(0);
   const [respondentData, setRespondentData] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
@@ -70,23 +73,35 @@ const Dashboard = () => {
     const fetchRelatedData = async () => {
       if (!selectSurvey) {
         setQuestionData(null);
+        setQuestionLoading(false);
+        setQuestionError(null);
         setRespondentData(null);
         return;
       }
       const selectedId = surveyId(selectSurvey);
       const questionGeneration = surveyOperationGeneration('questions', selectedId);
+      setQuestionLoading(true);
+      setQuestionError(null);
       try {
         const questionResponse = await api.get(`/listQuestions?surveyName=${selectedId}`, { signal: controller.signal });
-        if (
-          request === relatedRequest.current &&
-          surveyOperationGeneration('questions', selectedId) === questionGeneration
-        ) setQuestionData(questionResponse.data.questions);
+        if (request === relatedRequest.current) {
+          if (surveyOperationGeneration('questions', selectedId) !== questionGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setQuestionData(questionResponse.data.questions);
+          setQuestionLoading(false);
+        }
       } catch (err) {
-        if (
-          !controller.signal.aborted &&
-          request === relatedRequest.current &&
-          surveyOperationGeneration('questions', selectedId) === questionGeneration
-        ) setQuestionData(null);
+        if (!controller.signal.aborted && request === relatedRequest.current) {
+          if (surveyOperationGeneration('questions', selectedId) !== questionGeneration) {
+            setRelatedRefresh((value) => value + 1);
+            return;
+          }
+          setQuestionData(null);
+          setQuestionError('Unable to load survey questions. Retry before editing this survey.');
+          setQuestionLoading(false);
+        }
       }
 
       if (!canViewSensitiveSurveyData(selectSurvey)) {
@@ -110,13 +125,15 @@ const Dashboard = () => {
     };
     fetchRelatedData();
     return () => controller.abort();
-  }, [selectSurvey, canViewSensitiveSurveyData]);
+  }, [selectSurvey, canViewSensitiveSurveyData, relatedRefresh]);
 
   const handleSelectRow = (childData) => {
     pendingSelectionId.current = null;
     if (surveyId(childData) !== surveyId(selectSurvey)) {
       relatedRequest.current += 1;
       setQuestionData(null);
+      setQuestionLoading(true);
+      setQuestionError(null);
       setRespondentData(null);
     }
     setSelectSurvey(childData);
@@ -147,6 +164,8 @@ const Dashboard = () => {
     pendingSelectionId.current = copiedId;
     relatedRequest.current += 1;
     setQuestionData(null);
+    setQuestionLoading(true);
+    setQuestionError(null);
     setRespondentData(null);
     const surveys = await fetchSurveyData();
     if (!surveys.some((survey) => surveyId(survey) === copiedId)) {
@@ -263,6 +282,7 @@ const Dashboard = () => {
           selectedSurvey={selectSurvey}
           onLifecycleChange={fetchSurveyData}
           dirtyBySurvey={dirtyBySurvey}
+          operationsBySurvey={operationsBySurvey}
         />
       </CollapsibleSection>
 
@@ -278,7 +298,10 @@ const Dashboard = () => {
       <CollapsibleSection title="Survey Questions">
         {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
         <QuestionTable
-          rows={questionData} 
+          rows={questionData}
+          loading={questionLoading}
+          loadError={questionError}
+          onRetry={() => setRelatedRefresh((value) => value + 1)}
           surveyName={surveyId(selectSurvey)}
           onSurveyDataChanged={fetchSurveyData}
           readOnly={selectedReadOnly}

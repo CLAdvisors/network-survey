@@ -31,7 +31,7 @@ vi.mock('@mui/x-data-grid', () => ({
 
 vi.mock('./TableUploadButton', () => ({ default: ({ disabled, onUpload }) => {
   const initialUpload = React.useRef(onUpload);
-  return <><button disabled={disabled}>Upload respondents</button><button onClick={() => initialUpload.current('csv')}>Complete delayed upload</button></>;
+  return <><button disabled={disabled}>Upload respondents</button><button onClick={() => initialUpload.current('csv')?.catch(() => {})}>Complete delayed upload</button></>;
 } }));
 vi.mock('./AddRowButton', () => ({ default: ({ disabled, onClick }) => <button disabled={disabled} onClick={onClick}>Add respondent</button> }));
 vi.mock('./TableMenuCell', () => ({ default: () => null }));
@@ -183,6 +183,20 @@ test('aborts a delayed CSV upload if a respondent draft was created while the fi
   expect(api.post).not.toHaveBeenCalled();
   expect(await screen.findByText('Finish or discard the current respondent draft before importing a CSV file.')).toBeInTheDocument();
   expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Edited');
+});
+
+test('clears an obsolete refresh error when a later parent load is authoritative', async () => {
+  api.post.mockResolvedValue({ status: 200, data: { revision: 1 } });
+  api.get.mockRejectedValue(new Error('reload failed'));
+  const view = render(<RespondentTable revision={0} surveyName="survey-1" rows={[]} />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Complete delayed upload' }));
+  expect(await screen.findByText(/authoritative roster could not be refreshed/i)).toBeInTheDocument();
+
+  view.rerender(<RespondentTable revision={1} surveyName="survey-1" rows={[
+    { id: 1, name: 'Imported', email: 'imported@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  await waitFor(() => expect(screen.queryByText(/authoritative roster could not be refreshed/i)).not.toBeInTheDocument());
 });
 
 test('retains the respondent draft when persistence succeeds but target reload fails', async () => {

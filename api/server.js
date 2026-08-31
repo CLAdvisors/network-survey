@@ -2381,7 +2381,9 @@ app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => 
     const { surveyName, csvData, expectedRevision } = req.body || {};
     if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });
     const additions = respondentRoster.parseRespondentCsv(csvData);
-    const result = await respondentRoster.mutateRoster(pool, req.user, surveyName, { expectedRevision, additions });
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+    const result = await respondentRoster.mutateRoster(pool, req.user, survey.id, { expectedRevision, additions });
     res.set('X-Roster-Revision', String(result.revision));
     res.status(200).json({ message: 'Respondents imported successfully.', ...result, processedCount: additions.length });
   } catch (error) {
@@ -3141,7 +3143,9 @@ app.delete('/api/user', requireAuth, async (req, res) => {
   try {
     const { respondentId, surveyName, expectedRevision } = req.body || {};
     if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });
-    const result = await respondentRoster.mutateRoster(pool, req.user, surveyName, {
+    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
+    if (!survey) return;
+    const result = await respondentRoster.mutateRoster(pool, req.user, survey.id, {
       expectedRevision,
       deletions: [respondentId],
     });

@@ -219,6 +219,8 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
         draftsRef.current.delete(surveyName);
         setSurveyMutationError(surveyName, null);
         onDirtyChange?.(surveyName, 'respondents', false);
+      } else if (!draft) {
+        setSurveyMutationError(surveyName, null);
       }
       if (draft && !draftPersisted) draftsRef.current.set(surveyName, { ...draft, latestRows: original, latestRevision: nextRevision });
       setTableRows(draft && !draftPersisted ? draft.rows : updatedRows);

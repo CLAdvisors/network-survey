@@ -4,6 +4,7 @@ import { Chip, Stack, Tooltip, Typography } from '@mui/material';
 import MenuCell from './SurveyTableMenuCell';
 import { LifecycleChip } from './SurveyLifecyclePanel';
 import { launchCounts, lifecycleStatus, providerCounts } from './surveyLifecycle';
+import { responseRateDescription, responseRateLabel, responseRateSortValue, responseRateSummary } from './surveyResponseRate';
 
 const SurveyTable = ({
   rows,
@@ -15,10 +16,15 @@ const SurveyTable = ({
   dirtyBySurvey = {},
   operationsBySurvey = {},
 }) => {
-  const tableRows = useMemo(() => (rows || []).map((row) => ({
-    ...row,
-    questions: row.questions === 'null' ? '0' : row.questions,
-  })), [rows]);
+  const tableRows = useMemo(() => (rows || []).map((row) => {
+    const responseRate = responseRateSummary(row);
+    return {
+      ...row,
+      questions: row.questions === 'null' ? '0' : row.questions,
+      responseRate,
+      responseRateSortValue: responseRateSortValue(responseRate),
+    };
+  }), [rows]);
 
   const columns = useMemo(() => [
     { field: 'id', headerName: 'ID', width: 90 },
@@ -31,6 +37,25 @@ const SurveyTable = ({
       renderCell: ({ row }) => <LifecycleChip status={lifecycleStatus(row)} />,
     },
     { field: 'respondents', headerName: 'Respondents', width: 125 },
+    {
+      field: 'responseRateSortValue',
+      headerName: 'Response Rate',
+      width: 185,
+      valueFormatter: (_value, row) => responseRateLabel(row.responseRate),
+      renderCell: ({ row, hasFocus }) => {
+        const details = responseRateDescription(row.responseRate);
+        return <Tooltip title={details} arrow>
+          <Typography
+            variant="body2"
+            aria-label={details}
+            tabIndex={hasFocus ? 0 : -1}
+            noWrap
+          >
+            {responseRateLabel(row.responseRate)}
+          </Typography>
+        </Tooltip>;
+      },
+    },
     { field: 'questions', headerName: 'Questions', width: 110 },
     {
       field: 'invitationSummary',

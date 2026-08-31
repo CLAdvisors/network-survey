@@ -48,6 +48,7 @@ const {
   displayedRespondentCountExpression,
   isLegacyPlaceholderRespondent,
   surveySummaryRespondentCount,
+  surveyResponseSummary,
 } = require('../server');
 const { displayedRespondentPredicate } = require('../respondent-utils');
 
@@ -78,6 +79,82 @@ test('survey respondent summaries count displayed roster rows and only exclude t
   assert.equal((serverSource.match(/displayedRespondentPredicate\('r'\)/g) || []).length, 3, 'all respondent-backed choice paths exclude the exact placeholder');
   const lifecycleSource = fs.readFileSync(path.join(__dirname, '../lifecycle.js'), 'utf8');
   assert.match(lifecycleSource, /can_respond IS NOT TRUE AND \$\{displayedRespondentPredicate\('r'\)\}/);
+});
+
+test('survey response summaries use current eligibility, SQL non-NULL completion, and exact integer rounding', () => {
+  const rows = [
+    { name:'None', contact_info:'N/A', can_respond:false, response:{ legacy:true } },
+    { name:'Eligible incomplete', can_respond:true, response:null },
+    { name:'Eligible empty response', can_respond:true, response:{} },
+    { name:'Completed then ineligible', can_respond:false, response:{ q1:'yes' } },
+  ];
+  const eligible = rows.filter((row) => row.can_respond === true);
+  const completed = eligible.filter((row) => row.response !== null);
+  assert.deepEqual(surveyResponseSummary(eligible.length, completed.length), {
+    eligibleCount: 2,
+    completedCount: 1,
+    responseRatePercent: 50,
+  });
+  assert.deepEqual(surveyResponseSummary('0', '0'), { eligibleCount:0, completedCount:0, responseRatePercent:null });
+  assert.deepEqual(surveyResponseSummary('4', '0'), { eligibleCount:4, completedCount:0, responseRatePercent:0 });
+  assert.deepEqual(surveyResponseSummary(3, 1), { eligibleCount:3, completedCount:1, responseRatePercent:33 });
+  assert.deepEqual(surveyResponseSummary(8, 1), { eligibleCount:8, completedCount:1, responseRatePercent:13 }, 'exact halves round up');
+  assert.deepEqual(surveyResponseSummary(6, 4), { eligibleCount:6, completedCount:4, responseRatePercent:67 });
+  assert.deepEqual(surveyResponseSummary(4, 4), { eligibleCount:4, completedCount:4, responseRatePercent:100 });
+  assert.deepEqual(surveyResponseSummary('invalid', Infinity), { eligibleCount:0, completedCount:0, responseRatePercent:null });
+
+  const thousandRows = Array.from({ length: 1000 }, (_, index) => ({
+    can_respond: index < 800,
+    response: index < 637 ? {} : null,
+  }));
+  assert.deepEqual(surveyResponseSummary(
+    thousandRows.filter((row) => row.can_respond).length,
+    thousandRows.filter((row) => row.can_respond && row.response !== null).length,
+  ), { eligibleCount:800, completedCount:637, responseRatePercent:80 });
+});
+
+test('survey list API returns the same numeric response-rate contract for admin and member query variants', async (t) => {
+  const originalConnect = pool.connect;
+  t.after(() => { pool.connect = originalConnect; });
+  const calls = [];
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      calls.push({ sql, values });
+      return { rows: [{
+        id:'survey-id', name:'Aggregate only', organization_id:'org-id', role:'viewer',
+        number_of_respondents:'5', eligible_respondent_count:'3', completed_response_count:'2',
+        number_of_questions:1, latest_launch:null,
+      }] };
+    },
+    release() {},
+  });
+  const route = app._router.stack.find((layer) => layer.route?.path === '/api/surveys').route;
+  const handler = route.stack[route.stack.length - 1].handle;
+  const invoke = (user) => new Promise((resolve, reject) => {
+    const res = {
+      headersSent: false,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.headersSent = true; resolve({ status: this.statusCode || 200, body }); },
+    };
+    Promise.resolve(handler({ user }, res)).catch(reject);
+  });
+
+  const member = await invoke({ id:42, isPlatformAdmin:false });
+  const admin = await invoke({ id:99, isPlatformAdmin:true });
+  for (const response of [member, admin]) {
+    assert.equal(response.status, 200);
+    assert.deepEqual({
+      eligibleRespondents: response.body.surveys[0].eligibleRespondents,
+      completedResponses: response.body.surveys[0].completedResponses,
+      responseRatePercent: response.body.surveys[0].responseRatePercent,
+    }, { eligibleRespondents:3, completedResponses:2, responseRatePercent:67 });
+  }
+  assert.deepEqual(calls.map(({ values }) => values), [[42], []]);
+  for (const { sql } of calls) {
+    assert.match(sql, /FILTER \(WHERE r\.can_respond IS TRUE\) AS eligible_respondent_count/);
+    assert.match(sql, /FILTER \(WHERE r\.can_respond IS TRUE AND r\.response IS NOT NULL\) AS completed_response_count/);
+    assert.doesNotMatch(sql, /jsonb_agg\([^)]*r\.|array_agg\([^)]*r\./);
+  }
 });
 
 test('new survey links use the canonical HTTPS origin while CORS retains legacy origins', () => {

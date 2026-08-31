@@ -412,6 +412,21 @@ function surveySummaryRespondentCount(value) {
   return String(Number(value || 0));
 }
 
+// Response-rate contract: current eligibility governs both counts. A completed
+// response is any non-NULL response belonging to a currently eligible row.
+function surveyResponseSummary(eligibleValue, completedValue) {
+  const count = (value) => {
+    const numeric = Number(value);
+    return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : 0;
+  };
+  const eligibleCount = count(eligibleValue);
+  const completedCount = Math.min(count(completedValue), eligibleCount);
+  const responseRatePercent = eligibleCount === 0
+    ? null
+    : Math.floor(((completedCount * 100) + Math.floor(eligibleCount / 2)) / eligibleCount);
+  return { eligibleCount, completedCount, responseRatePercent };
+}
+
 async function columnExists(tableName, columnName) {
   const cacheKey = `column:${tableName}.${columnName}`;
   if (schemaCapabilityCache.has(cacheKey)) {
@@ -3108,6 +3123,8 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
            'acceptedUnverifiedCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)
          ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,
+         COUNT(r.respondent_id) FILTER (WHERE r.can_respond IS TRUE) AS eligible_respondent_count,
+         COUNT(r.respondent_id) FILTER (WHERE r.can_respond IS TRUE AND r.response IS NOT NULL) AS completed_response_count,
          COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions
   FROM Survey s
   LEFT JOIN organizations o ON o.id = s.organization_id
@@ -3142,6 +3159,8 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
            'acceptedUnverifiedCount', count(*) FILTER (WHERE d.status='accepted' AND d.provider_sent_at IS NULL AND d.provider_delivered_at IS NULL AND d.provider_delayed_at IS NULL AND d.provider_bounced_at IS NULL AND d.provider_complained_at IS NULL AND d.provider_suppressed_at IS NULL AND d.provider_failed_at IS NULL)
          ) FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.survey_id=s.id GROUP BY l.id,l.created_at ORDER BY l.created_at DESC LIMIT 1) AS latest_launch,
          COUNT(r.respondent_id) AS number_of_respondents,
+         COUNT(r.respondent_id) FILTER (WHERE r.can_respond IS TRUE) AS eligible_respondent_count,
+         COUNT(r.respondent_id) FILTER (WHERE r.can_respond IS TRUE AND r.response IS NOT NULL) AS completed_response_count,
          COALESCE(jsonb_array_length(s.questions->'elements'), 0) AS number_of_questions
   FROM Survey s
   JOIN organization_memberships om ON om.organization_id = s.organization_id AND om.user_id = $1
@@ -3155,21 +3174,27 @@ app.get('/api/surveys', requireAuth, async (req, res) => {
 
   client.query(query, isPlatformAdmin(req.user) ? [] : [req.user.id])
     .then(result => {
-      const surveys = result.rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        organizationId: row.organization_id,
-        organizationName: row.organization_name,
-        role: row.role,
-        respondents: surveySummaryRespondentCount(row.number_of_respondents),
-        questions: row.number_of_questions + "",
-        date: row.creation_date,
-        lifecycleStatus: row.lifecycle_status,
-        startedAt: row.started_at,
-        startedByName: row.started_by_name,
-        closedAt: row.closed_at,
-        latestLaunch: row.latest_launch,
-      }));
+      const surveys = result.rows.map((row) => {
+        const responseSummary = surveyResponseSummary(row.eligible_respondent_count, row.completed_response_count);
+        return {
+          id: row.id,
+          name: row.name,
+          organizationId: row.organization_id,
+          organizationName: row.organization_name,
+          role: row.role,
+          respondents: surveySummaryRespondentCount(row.number_of_respondents),
+          eligibleRespondents: responseSummary.eligibleCount,
+          completedResponses: responseSummary.completedCount,
+          responseRatePercent: responseSummary.responseRatePercent,
+          questions: row.number_of_questions + "",
+          date: row.creation_date,
+          lifecycleStatus: row.lifecycle_status,
+          startedAt: row.started_at,
+          startedByName: row.started_by_name,
+          closedAt: row.closed_at,
+          latestLaunch: row.latest_launch,
+        };
+      });
       // Process the returned JSON data
       res.status(200).json({ surveys });
     })
@@ -3398,4 +3423,5 @@ module.exports = {
   displayedRespondentCountExpression,
   isLegacyPlaceholderRespondent,
   surveySummaryRespondentCount,
+  surveyResponseSummary,
 };

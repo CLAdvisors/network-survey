@@ -31,7 +31,7 @@ vi.mock('@mui/x-data-grid', () => ({
 
 vi.mock('./TableUploadButton', () => ({ default: ({ disabled, onUpload }) => {
   const initialUpload = React.useRef(onUpload);
-  return <><button disabled={disabled}>Upload respondents</button><button onClick={() => initialUpload.current('csv')?.catch(() => {})}>Complete delayed upload</button></>;
+  return <><button disabled={disabled} onClick={() => onUpload('csv')?.catch(() => {})}>Upload respondents</button><button onClick={() => initialUpload.current('csv')?.catch(() => {})}>Complete delayed upload</button></>;
 } }));
 vi.mock('./AddRowButton', () => ({ default: ({ disabled, onClick }) => <button disabled={disabled} onClick={onClick}>Add respondent</button> }));
 vi.mock('./TableMenuCell', () => ({ default: () => null }));
@@ -195,6 +195,22 @@ test('aborts a delayed CSV upload if a respondent draft was created while the fi
   expect(api.post).not.toHaveBeenCalled();
   expect(await screen.findByText('Finish or discard the current respondent draft before importing a CSV file.')).toBeInTheDocument();
   expect(screen.getByTestId('respondent-name')).toHaveTextContent('One Edited');
+});
+
+test('a delayed lower mutation response cannot regress the accepted revision', async () => {
+  const mutation = deferred();
+  api.post.mockReturnValueOnce(mutation.promise).mockRejectedValueOnce(new Error('stop second upload'));
+  api.get.mockRejectedValue(new Error('reload failed'));
+  const view = render(<RespondentTable revision={1} surveyName="survey-1" rows={[]} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Complete delayed upload' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+
+  view.rerender(<RespondentTable revision={3} surveyName="survey-1" rows={[]} />);
+  await act(async () => mutation.resolve({ status: 200, data: { revision: 2 } }));
+  await waitFor(() => expect(screen.getByText(/authoritative roster could not be refreshed/i)).toBeInTheDocument());
+  await userEvent.click(screen.getByRole('button', { name: 'Upload respondents' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
+  expect(api.post.mock.calls[1][1].expectedRevision).toBe(3);
 });
 
 test('clears an obsolete refresh error when a later parent load is authoritative', async () => {

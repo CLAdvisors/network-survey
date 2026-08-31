@@ -186,7 +186,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
                   const nextRevision = responseRevision(response);
                   if (nextRevision !== null) {
                     acceptedRevisionRef.current.set(targetSurveyId, Math.max(acceptedRevisionRef.current.get(targetSurveyId) ?? -1, nextRevision));
-                    if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+                    if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision((current) => current === null ? nextRevision : Math.max(current, nextRevision));
                   }
                   advanceGeneration(targetSurveyId);
                   await params.row.onRespondentDeleted(targetSurveyId, { replaceDraft: true });
@@ -342,7 +342,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
         const nextRevision = responseRevision(response);
         if (nextRevision !== null) {
           acceptedRevisionRef.current.set(targetSurveyId, Math.max(acceptedRevisionRef.current.get(targetSurveyId) ?? -1, nextRevision));
-          if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+          if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision((current) => current === null ? nextRevision : Math.max(current, nextRevision));
         }
         advanceGeneration(targetSurveyId);
         if (draftsRef.current.get(targetSurveyId) === savedDraft) {
@@ -376,7 +376,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
         const nextRevision = responseRevision(response);
         if (nextRevision !== null) {
           acceptedRevisionRef.current.set(targetSurveyId, Math.max(acceptedRevisionRef.current.get(targetSurveyId) ?? -1, nextRevision));
-          if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision(nextRevision);
+          if (targetSurveyId === surveyIdentity.current) setAuthoritativeRevision((current) => current === null ? nextRevision : Math.max(current, nextRevision));
         }
         advanceGeneration(targetSurveyId);
         await fetchRespondentData(targetSurveyId, { replaceDraft: true });

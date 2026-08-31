@@ -205,6 +205,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
   useEffect(() => {
     const parsedRevision = Number(revision);
     const nextRevision = Number.isSafeInteger(parsedRevision) && parsedRevision >= 0 ? parsedRevision : null;
+    if (nextRevision !== null && nextRevision < (acceptedRevisionRef.current.get(surveyName) ?? -1)) return;
     if (Array.isArray(rows)) {
       const updatedRows = rows.map(row => ({
         ...row,

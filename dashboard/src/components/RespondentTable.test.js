@@ -138,6 +138,18 @@ test('keeps a draft pinned to its base revision when newer background data arriv
   expect(api.patch.mock.calls[0][1].expectedRevision).toBe(4);
 });
 
+test('ignores a lower-revision parent roster after accepting newer authoritative props', async () => {
+  const view = render(<RespondentTable revision={2} surveyName="survey-1" rows={[
+    { id: 1, name: 'Newer', email: 'one@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  await screen.findByText('Newer');
+
+  view.rerender(<RespondentTable revision={1} surveyName="survey-1" rows={[
+    { id: 1, name: 'Older', email: 'one@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  expect(screen.getByTestId('respondent-name')).toHaveTextContent('Newer');
+});
+
 test('ignores an older mutation refresh after a newer authoritative roster arrives', async () => {
   const oldRefresh = deferred();
   api.patch.mockResolvedValue({ status: 200, data: { revision: 5 } });

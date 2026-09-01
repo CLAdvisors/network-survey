@@ -45,6 +45,7 @@ locals {
     "DB_USER=${var.db_master_username}",
     "DB_MANAGED_SECRET_ARN=${aws_db_instance.postgres.master_user_secret[0].secret_arn}",
     "DB_SSL=true",
+    "DB_SSL_CA=/opt/service/certs/rds-global-bundle.pem",
     "SESSION_SECRET_PARAMETER=/network-survey/prod-secondary/api/session-secret",
     "SESSION_COOKIE_NAME=prodSecondarySessionId",
     "ALLOW_PUBLIC_SIGNUP=false",

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
 import api from '../api/axios';
 import SurveyInstructionsEditor from './SurveyInstructionsEditor';
+import { advanceSurveyOperationGeneration } from './useSurveyOperationState';
 
 vi.mock('../api/axios', () => ({ default: { get: vi.fn(), put: vi.fn() } }));
 const response = (instructions, effectiveInstructions = 'Derived default') => ({ data: { instructions, effectiveInstructions, limits: { characters: 5000, bytes: 16000 } } });
@@ -77,9 +78,35 @@ test('retains drafts on save errors and ignores stale save completion after a su
   expect(screen.getByDisplayValue('Draft A retained after error')).toBeInTheDocument();
 });
 
-test('shows lifecycle read-only messaging and disables updates', async () => {
-  render(<SurveyInstructionsEditor surveyId="survey-a" readOnly />);
-  expect(await screen.findByText(/read-only after a survey has been launched/i)).toBeInTheDocument();
+test('shows read-only messaging and disables updates', async () => {
+  render(<SurveyInstructionsEditor surveyId="survey-a" readOnly readOnlyMessage="Instructions are read-only while this survey is active." />);
+  expect(await screen.findByText(/read-only while this survey is active/i)).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: /use the derived default/i })).toBeDisabled();
   expect(screen.getByRole('button', { name: /save instructions/i })).toBeDisabled();
+});
+
+test('automatically reloads when an in-flight response becomes stale by generation', async () => {
+  const stale = deferred();
+  api.get
+    .mockReturnValueOnce(stale.promise)
+    .mockResolvedValueOnce(response('Authoritative after save'));
+  render(<SurveyInstructionsEditor surveyId="survey-generation-retry" />);
+  advanceSurveyOperationGeneration('instructions', 'survey-generation-retry');
+  stale.resolve(response('Stale value'));
+  expect(await screen.findByDisplayValue('Authoritative after save')).toBeInTheDocument();
+  expect(screen.queryByDisplayValue('Stale value')).not.toBeInTheDocument();
+  expect(api.get).toHaveBeenCalledTimes(2);
+});
+
+test('keeps editing disabled after a load error and enables it only after retry', async () => {
+  api.get
+    .mockRejectedValueOnce(new Error('load failed'))
+    .mockResolvedValueOnce(response('Persisted'));
+  render(<SurveyInstructionsEditor surveyId="survey-load-error" />);
+  expect(await screen.findByText(/Unable to load survey instructions/)).toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: /use custom instructions/i })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /save instructions/i })).toBeDisabled();
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByDisplayValue('Persisted')).toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: /use custom instructions/i })).toBeEnabled();
 });

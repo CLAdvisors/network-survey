@@ -330,6 +330,9 @@ const Dashboard = () => {
           <SurveyInstructionsEditor
             surveyId={surveyId(selectSurvey)}
             readOnly={selectedReadOnly}
+            readOnlyMessage={selectedIsLifecycleLocked
+              ? `Instructions are read-only while this survey is ${lifecycleStatus(selectSurvey)}.`
+              : 'You do not have permission to update these instructions.'}
             onDirtyChange={handleDirtyChange}
             onOperationChange={handleOperationChange}
           />

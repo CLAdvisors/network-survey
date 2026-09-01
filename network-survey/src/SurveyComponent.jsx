@@ -45,6 +45,7 @@ function SurveyComponent({setTitle, setInstructions}) {
     const [submissionError, setSubmissionError] = React.useState(null);
     const submissionInProgressRef = React.useRef(false);
     const submissionAcceptedRef = React.useRef(false);
+    const runtimeGenerationRef = React.useRef(0);
     const searchParams = new URLSearchParams(window.location.search);
     const userId = searchParams.get("userId");
     const demoToken = searchParams.get("demoToken");
@@ -52,17 +53,28 @@ function SurveyComponent({setTitle, setInstructions}) {
     const isDemo = Boolean(demoToken);
 
     React.useEffect(() => {
-      if (!userId || !surveyName || isDemo) return;
+      setHasResponse(false);
+      if (!userId || !surveyName || isDemo) return undefined;
+      let active = true;
       const statusUrl = buildApiUrl('/user/status', { userId, surveyName });
-      sendRequest(statusUrl, data => setHasResponse(data.hasResponse));
+      const request = sendRequest(statusUrl, data => active && setHasResponse(data.hasResponse));
+      return () => {
+        active = false;
+        request?.abort?.();
+      };
     }, [userId, surveyName, isDemo]);
 
     React.useEffect(() => {
+      runtimeGenerationRef.current += 1;
       setJson(null);
       setSurvey(null);
       setTitle('');
       setInstructions?.(undefined);
+      setHasResponse(false);
       setLoadError(null);
+      setSubmissionError(null);
+      submissionInProgressRef.current = false;
+      submissionAcceptedRef.current = false;
       if ((!userId && !demoToken) || !surveyName) return undefined;
 
       let active = true;
@@ -84,6 +96,7 @@ function SurveyComponent({setTitle, setInstructions}) {
 
       const newSurvey = new Model(json);
       const roots = new Set();
+      const runtimeGeneration = runtimeGenerationRef.current;
       applyProductionSurveyTheme(newSurvey);
 
       // Configure survey settings
@@ -109,15 +122,17 @@ function SurveyComponent({setTitle, setInstructions}) {
         const url = buildApiUrl('/user');
         postRequest(url, { userId, surveyName, answers: data })
           .then(() => {
+            if (runtimeGenerationRef.current !== runtimeGeneration) return;
             setHasResponse(false);
             submissionAcceptedRef.current = true;
             sender.doComplete();
           })
           .catch((error) => {
+            if (runtimeGenerationRef.current !== runtimeGeneration) return;
             setSubmissionError(error.message || 'Your response could not be submitted. Please try again.');
           })
           .finally(() => {
-            submissionInProgressRef.current = false;
+            if (runtimeGenerationRef.current === runtimeGeneration) submissionInProgressRef.current = false;
           });
       });
 

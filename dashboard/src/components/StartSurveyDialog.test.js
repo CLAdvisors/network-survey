@@ -52,11 +52,11 @@ test('blocks launch with an accessible survey-specific warning for all unsaved s
     survey={{ id: 'survey-1', name: 'Team Survey' }}
     onClose={() => {}}
     onAccepted={() => {}}
-    unsavedChanges={{ invitationSubject: true, invitationBody: true, questions: true, respondents: true }}
+    unsavedChanges={{ instructions: true, invitationSubject: true, invitationBody: true, questions: true, respondents: true }}
   />);
 
   const warning = await screen.findByText(/“Team Survey” has unsaved changes/i);
-  expect(warning).toHaveTextContent('invitation subject, invitation body, survey questions, survey respondents');
+  expect(warning).toHaveTextContent('survey instructions, invitation subject, invitation body, survey questions, survey respondents');
   expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
   expect(api.post).not.toHaveBeenCalled();
 

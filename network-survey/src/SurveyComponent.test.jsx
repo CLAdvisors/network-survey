@@ -117,4 +117,38 @@ describe('SurveyComponent demo mode', () => {
     expect(completionOptions.allowComplete).toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it('ignores an older token/survey response after the runtime switches surveys', async () => {
+    class DeferredXMLHttpRequest {
+      static requests = [];
+      open(_method, url) { this.url = url; }
+      setRequestHeader() {}
+      send() { DeferredXMLHttpRequest.requests.push(this); }
+      abort() { this.aborted = true; }
+      respond(payload) {
+        this.status = 200;
+        this.response = JSON.stringify(payload);
+        this.onload();
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', DeferredXMLHttpRequest);
+    const setTitle = vi.fn();
+    const setInstructions = vi.fn();
+    window.history.replaceState({}, '', '/?surveyName=SurveyA&demoToken=token-a');
+    const view = render(<SurveyComponent setTitle={setTitle} setInstructions={setInstructions} />);
+    await waitFor(() => expect(DeferredXMLHttpRequest.requests).toHaveLength(1));
+    const first = DeferredXMLHttpRequest.requests[0];
+
+    window.history.replaceState({}, '', '/?surveyName=SurveyB&demoToken=token-b');
+    view.rerender(<SurveyComponent setTitle={setTitle} setInstructions={setInstructions} />);
+    await waitFor(() => expect(DeferredXMLHttpRequest.requests).toHaveLength(2));
+    const second = DeferredXMLHttpRequest.requests[1];
+    act(() => second.respond({ title: 'B', instructions: 'Instructions B', questions: { elements: [] } }));
+    await waitFor(() => expect(setInstructions).toHaveBeenLastCalledWith('Instructions B'));
+
+    act(() => first.respond({ title: 'A', instructions: 'Stale instructions A', questions: { elements: [] } }));
+    expect(first.aborted).toBe(true);
+    expect(setInstructions).toHaveBeenLastCalledWith('Instructions B');
+    expect(setTitle).toHaveBeenLastCalledWith('B');
+  });
 });

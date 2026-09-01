@@ -9,6 +9,7 @@ import QuestionTable from "./QuestionTable";
 import CreateSurveyDialog from "./CreateSurveyDialog";
 import EmailNotificationEditor from "./EmailNotificationEditor";
 import InvitationSubjectEditor from "./InvitationSubjectEditor";
+import SurveyInstructionsEditor from "./SurveyInstructionsEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
@@ -323,6 +324,17 @@ const Dashboard = () => {
       />
 
       {selectSurvey && <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} />}
+
+      {selectSurvey && (
+        <CollapsibleSection title="Survey Instructions">
+          <SurveyInstructionsEditor
+            surveyId={surveyId(selectSurvey)}
+            readOnly={selectedReadOnly}
+            onDirtyChange={handleDirtyChange}
+            onOperationChange={handleOperationChange}
+          />
+        </CollapsibleSection>
+      )}
 
       <CollapsibleSection title="Survey Questions">
         {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}

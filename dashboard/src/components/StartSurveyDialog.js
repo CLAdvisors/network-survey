@@ -24,6 +24,7 @@ const DIRTY_LABELS = {
   invitationBody: 'invitation body',
   questions: 'survey questions',
   respondents: 'survey respondents',
+  instructions: 'survey instructions',
 };
 
 const StartSurveyDialog = ({ open, survey, onClose, onAccepted, unsavedChanges = {}, pendingOperations = {} }) => {

@@ -36,7 +36,7 @@ Serializer.addClass(
   "question"
 );
 
-function SurveyComponent({setTitle}) {
+function SurveyComponent({setTitle, setInstructions}) {
     const theme = useTheme();
     const [json, setJson] = React.useState(null);
     const [survey, setSurvey] = React.useState(null);
@@ -58,15 +58,26 @@ function SurveyComponent({setTitle}) {
     }, [userId, surveyName, isDemo]);
 
     React.useEffect(() => {
-      if ((!userId && !demoToken) || !surveyName) return;
-
-      const url = buildApiUrl('/questions', { surveyName, userId, demoToken });
+      setJson(null);
+      setSurvey(null);
+      setTitle('');
+      setInstructions?.(undefined);
       setLoadError(null);
-      sendRequest(url, (data) => {
+      if ((!userId && !demoToken) || !surveyName) return undefined;
+
+      let active = true;
+      const url = buildApiUrl('/questions', { surveyName, userId, demoToken });
+      const request = sendRequest(url, (data) => {
+        if (!active) return;
         setJson(data.questions);
         setTitle(data.title);
-      }, setLoadError);
-    }, [surveyName, setTitle, userId, demoToken]);
+        setInstructions?.(data.instructions);
+      }, (message) => active && setLoadError(message));
+      return () => {
+        active = false;
+        request?.abort?.();
+      };
+    }, [surveyName, setTitle, setInstructions, userId, demoToken]);
 
     React.useEffect(() => {
       if (!json) return;
@@ -207,6 +218,7 @@ function SurveyComponent({setTitle}) {
       };
       xhr.onerror = () => onError?.('Unable to load this survey.');
       xhr.send();
+      return xhr;
     }
 
     async function postRequest(url, data) {

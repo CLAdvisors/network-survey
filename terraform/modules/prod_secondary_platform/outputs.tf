@@ -64,6 +64,15 @@ output "frontend_bucket_names" {
   value       = { for name, bucket in aws_s3_bucket.frontend : name => bucket.bucket }
 }
 
+output "api_cloudfront_endpoint" {
+  description = "HTTPS API endpoint on the CloudFront default domain."
+  value = {
+    id          = aws_cloudfront_distribution.api.id
+    domain_name = aws_cloudfront_distribution.api.domain_name
+    enabled     = aws_cloudfront_distribution.api.enabled
+  }
+}
+
 output "frontend_distributions" {
   description = "Disabled CloudFront endpoints retained for later separately approved activation."
   value = {

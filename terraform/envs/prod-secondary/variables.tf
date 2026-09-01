@@ -62,6 +62,12 @@ variable "alb_certificate_arn" {
   default     = null
 }
 
+variable "enable_public_aws_endpoints" {
+  description = "Publish the approved AWS default CloudFront endpoints without custom DNS."
+  type        = bool
+  default     = true
+}
+
 variable "enable_owner_bootstrap" {
   description = "One-time target-only CLA owner bootstrap gate. Return to false immediately after successful verification."
   type        = bool

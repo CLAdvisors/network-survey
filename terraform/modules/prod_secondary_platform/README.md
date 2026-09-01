@@ -8,12 +8,12 @@ It creates:
 - public ALB, private application, and isolated database subnet tiers
 - S3 and interface endpoints plus one NAT gateway per AZ for controlled package/provider egress
 - a private ASG fixed at `min=desired=max=2`, without public IPs or SSH
-- a CIDR-fenced ALB (no ingress by default)
+- a direct-CIDR-fenced ALB whose HTTP origin accepts only the AWS-managed CloudFront origin-facing prefix when public AWS endpoints are enabled
 - a fresh, deletion-protected Multi-AZ PostgreSQL database
 - target-owned workload and RDS CMKs
 - an RDS-managed master credential in Secrets Manager
 - private/versioned config, artifact, dashboard, and survey buckets
-- disabled CloudFront distributions for the frontend AWS endpoints
+- CloudFront default-domain HTTPS distributions for the API, dashboard, and survey, with no custom aliases
 - exact `prod-secondary` runtime configuration with sending, claiming, webhook, bootstrap, cutover, and traffic gates off
 - target-scoped deploy IAM, runtime log groups, SNS routing, and baseline ALB/ASG/RDS alarms
 

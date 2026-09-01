@@ -1,6 +1,6 @@
 # prod-secondary buildout record
 
-**Status:** target foundation deployed and verified; public edge remains dark/fenced
+**Status:** target foundation and AWS default-domain public endpoints deployed and verified; custom DNS deferred
 **Target:** AWS account `710054969994`, `us-east-1`
 **Source isolation:** accounts `438465164125` staging/production are not Terraform providers, backends, or resource targets for this root
 
@@ -56,13 +56,21 @@ No DNS, ACM certificate, Resend API key, webhook endpoint, source snapshot, sour
 - the approved CLA owner exists exactly once as an active organization owner and is not a platform administrator
 - bootstrap was returned to false, instance access to bootstrap parameters was removed, and historical release directories containing resolved bootstrap material were removed
 - Terraform reports no drift after the final apply
-- ALB ingress remains empty and both CloudFront distributions remain disabled with no aliases
+- direct ALB CIDR ingress remains empty; the ALB origin allows only the AWS-managed CloudFront origin-facing prefix
+- API, dashboard, and survey CloudFront default-domain HTTPS endpoints are enabled with no custom aliases and return HTTP 200
+- dashboard-to-API CORS preflight returns the exact dashboard origin with credentials enabled
+
+Current AWS validation endpoints:
+
+- API: `https://d2owhx1glow77j.cloudfront.net`
+- dashboard: `https://d3tvm2yhgzair6.cloudfront.net`
+- survey: `https://d1i5psy3vi3gee.cloudfront.net`
 
 The target-only bootstrap password remains in its operator-managed SecureString for approved handoff; it is not available to the application role and was never printed or committed.
 
 Post-build read-only verification in source account `438465164125` confirmed the existing production and staging instances remain running, both RDS instances remain available, and both public API health endpoints return healthy. No source-account mutation command or source Terraform provider/backend was used.
 
-## Remaining blocker
+## Remaining blockers
 
 The authenticated `gh` identity lacks repository administration permission. Creation/protection of the `prod-secondary` GitHub environment returned HTTP 403. A repository administrator must create it with the current production reviewer and configure:
 
@@ -76,3 +84,5 @@ The authenticated `gh` identity lacks repository administration permission. Crea
 - `AWS_DEPLOY_ROLE_ARN=arn:aws:iam::710054969994:role/network-survey-prod-secondary-deploy`
 
 Do not configure source-account role ARNs or `TF_ENV=prod` in this environment.
+
+Custom production hostnames/ACM remain deferred by decision. The current CloudFront default domains are suitable for endpoint validation, but custom same-site domains should be established before relying on browser session behavior for real users. The root dependency install also reports existing package vulnerabilities, including two critical findings; triage is required before declaring the environment ready for live production traffic.

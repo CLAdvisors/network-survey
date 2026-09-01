@@ -27,6 +27,10 @@ data "aws_prefix_list" "s3" {
   name = "com.amazonaws.${var.aws_region}.s3"
 }
 
+data "aws_ec2_managed_prefix_list" "cloudfront_origin" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
 locals {
   selected_ami_id = coalesce(var.ami_id, try(data.aws_ami.ubuntu[0].id, null))
 
@@ -73,7 +77,7 @@ locals {
     "BOOTSTRAP_PLATFORM_ADMIN=false",
     "BOOTSTRAP_ACCOUNT_MODE=create-or-verify",
     "CLA_PRODUCTION_CUTOVER=false",
-    "PUBLIC_TRAFFIC_ENABLED=false",
+    "PUBLIC_TRAFFIC_ENABLED=${var.enable_public_aws_endpoints}",
     "",
   ])
 
@@ -437,6 +441,17 @@ resource "aws_security_group" "alb" {
   tags = merge(var.common_tags, { Name = "${var.name_prefix}-alb-sg" })
 }
 
+resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
+  count = var.enable_public_aws_endpoints ? 1 : 0
+
+  security_group_id = aws_security_group.alb.id
+  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin.id
+  description       = "HTTP origin traffic only from CloudFront managed edge addresses"
+  ip_protocol       = "tcp"
+  from_port         = 80
+  to_port           = 80
+}
+
 resource "aws_vpc_security_group_ingress_rule" "alb_http" {
   for_each = var.alb_certificate_arn == null ? toset(var.alb_allowed_ipv4_cidrs) : toset([])
 
@@ -558,6 +573,57 @@ resource "aws_lb_listener" "https" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
   }
+}
+
+resource "aws_cloudfront_distribution" "api" {
+  enabled         = var.enable_public_aws_endpoints
+  is_ipv6_enabled = true
+  comment         = "prod-secondary API AWS endpoint; custom DNS is deferred"
+
+  origin {
+    domain_name = aws_lb.api.dns_name
+    origin_id   = "prod-secondary-api-alb"
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
+  default_cache_behavior {
+    allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "prod-secondary-api-alb"
+    viewer_protocol_policy = "redirect-to-https"
+    compress               = true
+
+    forwarded_values {
+      query_string = true
+      headers      = ["*"]
+
+      cookies {
+        forward = "all"
+      }
+    }
+
+    min_ttl     = 0
+    default_ttl = 0
+    max_ttl     = 0
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  tags = merge(var.common_tags, { Name = "${var.name_prefix}-api-edge", App = "ona-api-edge" })
 }
 
 resource "aws_db_subnet_group" "this" {
@@ -1143,7 +1209,7 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
 resource "aws_cloudfront_distribution" "frontend" {
   for_each = aws_s3_bucket.frontend
 
-  enabled             = false
+  enabled             = var.enable_public_aws_endpoints
   is_ipv6_enabled     = true
   default_root_object = "index.html"
   comment             = "Dark prod-secondary ${each.key}; activation requires a separate review"

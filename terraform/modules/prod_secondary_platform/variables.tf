@@ -133,6 +133,12 @@ variable "allowed_instance_type_prefixes" {
   default     = ["t3.", "t3a."]
 }
 
+variable "enable_public_aws_endpoints" {
+  description = "Enable CloudFront default-domain endpoints and restrict ALB origin ingress to CloudFront."
+  type        = bool
+  default     = false
+}
+
 variable "enable_owner_bootstrap" {
   description = "Temporarily expose the approved CLA owner bootstrap configuration."
   type        = bool

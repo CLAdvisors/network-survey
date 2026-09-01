@@ -158,8 +158,9 @@ jobs:
               --query 'length(AutoScalingGroups[0].TargetGroupARNs)' --output text)
             test "$TARGET_GROUP_COUNT" -gt 0 || { echo "ASG $ASG_NAME has no target group" >&2; exit 1; }
             ALB_ARN=$(by_tag_exact ona-api elasticloadbalancing:loadbalancer "$AWS_REGION")
-            API_HOST=$(aws elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" \
-              --query 'LoadBalancers[0].DNSName' --output text)
+            API_EDGE_DIST=$(by_tag_exact ona-api-edge cloudfront:distribution | sed 's|.*/||')
+            API_HOST=$(aws cloudfront get-distribution --id "$API_EDGE_DIST" \
+              --query 'Distribution.DomainName' --output text)
             DASHBOARD_HOST=$(aws cloudfront get-distribution --id "$DASHBOARD_DIST" \
               --query 'Distribution.DomainName' --output text)
             SURVEY_HOST=$(aws cloudfront get-distribution --id "$SURVEY_DIST" \
@@ -388,6 +389,7 @@ jobs:
                 --query 'length(TargetHealthDescriptions[?TargetHealth.State!=`healthy`])' --output text)
               test "$UNHEALTHY" = 0
             done
+            curl -fsS "https://${{ steps.env.outputs.API_HOST }}/health" | grep -q '"database":"ok"'
           else
             curl -fsS "https://${{ steps.env.outputs.API_HOST }}/health" | grep -q '"database":"ok"'
           fi

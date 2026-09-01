@@ -49,8 +49,13 @@ output "frontend_bucket_names" {
   value = module.platform.frontend_bucket_names
 }
 
+output "api_cloudfront_endpoint" {
+  description = "Public AWS default HTTPS API endpoint; custom DNS remains deferred."
+  value       = module.platform.api_cloudfront_endpoint
+}
+
 output "frontend_distributions" {
-  description = "CloudFront distributions are created disabled and have no aliases."
+  description = "CloudFront default-domain endpoints have no custom aliases."
   value       = module.platform.frontend_distributions
 }
 

@@ -18,6 +18,7 @@ dotenvFlow.config();
 const { ResendProvider, reserveProviderRateOnClient } = require('./email');
 const lifecycle = require('./lifecycle');
 const respondentRoster = require('./respondent-roster');
+const { effectiveInstructions } = require('./survey-instructions');
 const { createResendWebhookHandler } = require('./webhooks');
 const { displayedRespondentPredicate, displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
@@ -1173,7 +1174,7 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
     const platformAdmin = isPlatformAdmin(actor);
     const sourceResult = await client.query(
       platformAdmin
-        ? `SELECT s.id, s.name, s.title, s.questions, s.organization_id, s.display_name,
+        ? `SELECT s.id, s.name, s.title, s.questions, s.instructions, s.organization_id, s.display_name,
                   'owner'::text AS role
            FROM Survey s
            WHERE (s.id::text = $1 OR s.name = $1)
@@ -1181,7 +1182,7 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
            ORDER BY (s.id::text = $1) DESC
            LIMIT 1
            FOR SHARE OF s`
-        : `SELECT s.id, s.name, s.title, s.questions, s.organization_id,
+        : `SELECT s.id, s.name, s.title, s.questions, s.instructions, s.organization_id,
                   s.display_name, om.role
            FROM Survey s
            JOIN organization_memberships om
@@ -1219,10 +1220,10 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
 
     const inserted = await client.query(
       `INSERT INTO Survey
-         (name, title, creation_date, questions, organization_id, created_by_user_id, display_name, slug)
-       VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7)
+         (name, title, creation_date, questions, instructions, organization_id, created_by_user_id, display_name, slug)
+       VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8)
        RETURNING id, name, title, organization_id`,
-      [copiedName, source.title, source.questions, source.organization_id, actor.id, copiedName, surveySlug(copiedName)]
+      [copiedName, source.title, source.questions, source.instructions, source.organization_id, actor.id, copiedName, surveySlug(copiedName)]
     );
     const copied = inserted.rows[0];
 
@@ -2158,6 +2159,25 @@ function launchResponse(res, launch) {
   });
 }
 
+app.get('/api/surveys/:surveyId/instructions', requireAuth, async (req, res) => {
+  try {
+    res.json(await lifecycle.getSurveyInstructions(pool, req.user, req.params.surveyId));
+  } catch (error) {
+    sendLifecycleError(res, error);
+  }
+});
+app.put('/api/surveys/:surveyId/instructions', express.json(), requireAuth, async (req, res) => {
+  if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'instructions')) {
+    return res.status(400).json({ error: 'instructions_required', message: 'Instructions must be provided explicitly as a string or null.' });
+  }
+  try {
+    res.json(await lifecycle.updateSurveyInstructions(pool, req.user, req.params.surveyId, req.body.instructions));
+  } catch (error) {
+    if (error instanceof TypeError && error.code) return res.status(400).json({ error: error.code, message: error.message });
+    sendLifecycleError(res, error);
+  }
+});
+
 app.get('/api/surveys/:surveyId/launch-readiness', requireAuth, async (req, res) => {
   try {
     const readiness = await lifecycle.getReadiness(pool, req.user, req.params.surveyId);
@@ -2856,7 +2876,7 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
   try {
     client = await pool.connect();
     const query = `
-      SELECT questions, title
+      SELECT questions, title, name, instructions
       FROM Survey
       WHERE (id = $1 OR ($1::uuid IS NULL AND name = $2))
         AND archived_at IS NULL;
@@ -2867,8 +2887,10 @@ app.get('/api/questions', respondentRateLimiter, async (req, res) => {
       return res.status(404).json({ message: 'Survey not found.' });
     }
 
+    res.set('Cache-Control', 'no-store');
     res.status(200).json({
       title: result.rows[0].title,
+      instructions: effectiveInstructions(result.rows[0].instructions, result.rows[0].name, result.rows[0].title),
       questions: demoClaims
         ? prepareSurveyForDemo(result.rows[0].questions)
         : result.rows[0].questions,

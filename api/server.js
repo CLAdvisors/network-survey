@@ -56,7 +56,7 @@ async function reserveSynchronousEmailRate(client) {
 
 async function invokeSynchronousProvider(toAddress, factory) {
   const environment = lifecycle.environmentName(process.env);
-  const hosted=['staging','prod'].includes(environment);
+  const hosted = lifecycle.isHostedEnvironment(environment);
   const scope = process.env.RESEND_PROVIDER_ACCOUNT_SCOPE || (hosted ? '' : 'local-resend-account');
   if (!scope) { const error=new Error('Provider account suppression scope is not configured.'); error.statusCode=503; throw error; }
   const normalizedAddress = String(toAddress || '').trim().toLowerCase();
@@ -122,7 +122,7 @@ function buildSurveyUrl(baseUrl, query, nodeEnv = process.env.NODE_ENV) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new Error('SURVEY_URL must be an HTTP(S) base URL without credentials, query parameters, or a fragment');
   }
-  if (['prod', 'production'].includes(String(nodeEnv).toLowerCase()) && url.protocol !== 'https:') {
+  if (lifecycle.isHostedEnvironment(lifecycle.environmentName({ NODE_ENV: nodeEnv })) && url.protocol !== 'https:') {
     throw new Error('SURVEY_URL must use HTTPS in production');
   }
   for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
@@ -323,6 +323,15 @@ app.use(cors({
 }));
 
 app.set('trust proxy', 1);
+function isHostedRuntimeEnvironment(env = process.env) {
+  const nodeEnvironment = String(env.NODE_ENV || '').trim().toLowerCase();
+  const workerEnvironment = String(env.EMAIL_WORKER_ENV || '').trim();
+  const allowedWorkerEnvironments = new Set(['local', 'test', 'staging', 'prod', 'prod-secondary']);
+  if (workerEnvironment && !allowedWorkerEnvironments.has(workerEnvironment)) {
+    throw new Error('Unsupported EMAIL_WORKER_ENV');
+  }
+  return ['prod', 'production', 'prod-secondary'].includes(nodeEnvironment) || lifecycle.isHostedEnvironment(workerEnvironment);
+}
 // Session configuration with PostgreSQL
 app.use(session({
   store: new pgSession({
@@ -337,23 +346,23 @@ app.use(session({
   // Host-only v2 cookie: sibling static hosts must never receive API sessions.
   name: process.env.SESSION_COOKIE_NAME || 'ona_session_v2',
   cookie: {
-    secure: process.env.NODE_ENV === 'prod', // Only use secure in production
+    secure: isHostedRuntimeEnvironment(),
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
     sameSite: 'lax',
     path: '/'
   }
 }));
-function isTrustedStateChangingOrigin({ stateChanging, userId, origin, dashboardOrigin, nodeEnv }) {
+function isTrustedStateChangingOrigin({ stateChanging, userId, origin, dashboardOrigin, nodeEnv, workerEnvironment }) {
   if (!stateChanging || !userId) return true;
-  const hosted = ['prod', 'production'].includes(String(nodeEnv || '').toLowerCase());
+  const hosted = isHostedRuntimeEnvironment({ EMAIL_WORKER_ENV: workerEnvironment, NODE_ENV: nodeEnv });
   if (hosted) return Boolean(dashboardOrigin) && origin === dashboardOrigin;
   return !origin || (Boolean(dashboardOrigin) && origin === dashboardOrigin);
 }
 
 // Explicitly retire the old parent-domain cookie during the controlled re-login rollout.
 app.use((req, res, next) => {
-  if (process.env.NODE_ENV === 'prod') {
+  if (isHostedRuntimeEnvironment()) {
     // Expire both legacy parent-domain names during the forced v2 re-login.
     // New Terraform config uses a distinct host-only SESSION_COOKIE_NAME.
     for (const legacyName of ['sessionId', 'sessionId-staging']) {
@@ -366,6 +375,7 @@ app.use((req, res, next) => {
     origin: req.get('Origin')?.replace(/\/$/, ''),
     dashboardOrigin: process.env.FRONTEND_URL?.replace(/\/$/, ''),
     nodeEnv: process.env.NODE_ENV,
+    workerEnvironment: process.env.EMAIL_WORKER_ENV,
   });
   if (!trustedOrigin) {
     return res.status(403).json({ error: 'csrf_origin_invalid', message: 'A trusted dashboard Origin is required.' });
@@ -711,7 +721,7 @@ app.post('/api/logout', (req, res) => {
       return res.status(500).json({ error: 'Error during logout' });
     }
     res.clearCookie(process.env.SESSION_COOKIE_NAME || 'ona_session_v2', {
-      secure: process.env.NODE_ENV === 'prod',
+      secure: isHostedRuntimeEnvironment(),
       httpOnly: true,
       sameSite: 'lax',
       path: '/',

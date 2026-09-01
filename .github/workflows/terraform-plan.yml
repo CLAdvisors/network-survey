@@ -11,7 +11,7 @@ on:
         description: Environment to plan
         required: true
         type: choice
-        options: [staging, prod]
+        options: [staging, prod, prod-secondary]
         default: staging
 
 permissions:
@@ -38,8 +38,25 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          role-to-assume: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'prod-secondary' && vars.AWS_TERRAFORM_PLAN_ROLE_ARN || vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Assert target AWS account
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'prod-secondary' }}
+        env:
+          EXPECTED_ACCOUNT_ID: '710054969994'
+          ROLE_ARN: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          case "$ROLE_ARN" in
+            arn:aws:iam::${EXPECTED_ACCOUNT_ID}:role/*) ;;
+            *) echo "prod-secondary AWS_TERRAFORM_ROLE_ARN must belong to account $EXPECTED_ACCOUNT_ID" >&2; exit 1 ;;
+          esac
+          ACTUAL_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          test "$ACTUAL_ACCOUNT_ID" = "$EXPECTED_ACCOUNT_ID" || {
+            echo "Refusing prod-secondary plan in AWS account $ACTUAL_ACCOUNT_ID" >&2
+            exit 1
+          }
 
       - name: Resolve Terraform environment
         id: env
@@ -57,6 +74,11 @@ jobs:
               WORKSPACE=
               VAR_FILE=
               ;;
+            prod-secondary)
+              WORKING_DIR=terraform/envs/prod-secondary
+              WORKSPACE=
+              VAR_FILE=prod-secondary.tfvars
+              ;;
             production)
               echo "The old root production workspace is blocked; use prod-v2/prod (terraform/envs/prod)." >&2
               exit 1
@@ -70,8 +92,9 @@ jobs:
       - name: Terraform fmt
         run: terraform fmt -check -recursive
 
-      - name: Check sensitive variables
-        id: secrets
+      - name: Check source-environment sensitive variables
+        id: source-secrets
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.environment != 'prod-secondary' }}
         env:
           TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
         run: |
@@ -96,8 +119,8 @@ jobs:
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform validate
 
-      - name: Terraform plan
-        if: ${{ steps.secrets.outputs.can_plan == 'true' }}
+      - name: Terraform plan (source environments)
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.environment != 'prod-secondary') && steps.source-secrets.outputs.can_plan == 'true' }}
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         env:
           TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
@@ -108,3 +131,8 @@ jobs:
             args+=("-var-file=${{ steps.env.outputs.VAR_FILE }}")
           fi
           terraform plan "${args[@]}"
+
+      - name: Terraform plan (prod-secondary, no source secrets)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'prod-secondary' }}
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
+        run: terraform plan -input=false -var-file=prod-secondary.tfvars

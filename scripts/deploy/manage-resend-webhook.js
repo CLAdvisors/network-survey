@@ -3,12 +3,13 @@
 const path=require('path'),fs=require('fs'),crypto=require('crypto'),{spawnSync}=require('child_process');
 require(path.join(process.cwd(),'node_modules/dotenv')).config({path:path.join(process.cwd(),'.env.prod')});
 const{Pool}=require(path.join(process.cwd(),'node_modules/pg'));
+const{isHostedEnvironment}=require('./hosted-environments');
 const EVENTS=['email.sent','email.delivered','email.delivery_delayed','email.bounced','email.complained','email.failed','email.suppressed','suppression.added','suppression.removed'];
 const EVENT_HASH=crypto.createHash('sha256').update(EVENTS.slice().sort().join('\n')).digest('hex');
 const command=process.argv[2];const options={};for(let i=3;i<process.argv.length;i+=2){if(!process.argv[i].startsWith('--')||process.argv[i+1]===undefined)throw new Error('options must be --name value pairs');options[process.argv[i].slice(2)]=process.argv[i+1];}
-if(command==='event-hash'){console.log(EVENT_HASH);process.exit(0);}if(!['bootstrap','rotate','retire-previous','status','enable','disable','delete'].includes(command))throw new Error('usage: manage-resend-webhook.js <bootstrap|rotate|retire-previous|status|enable|disable|delete|event-hash> --environment <staging|prod> --url <https-url> --account-scope <scope> --event-set-hash <sha256> --actor <actor> [--confirm <endpoint-id>]');
+if(command==='event-hash'){console.log(EVENT_HASH);process.exit(0);}if(!['bootstrap','rotate','retire-previous','status','enable','disable','delete'].includes(command))throw new Error('usage: manage-resend-webhook.js <bootstrap|rotate|retire-previous|status|enable|disable|delete|event-hash> --environment <staging|prod|prod-secondary> --url <https-url> --account-scope <scope> --event-set-hash <sha256> --actor <actor> [--confirm <endpoint-id>]');
 const environment=options.environment,actor=(options.actor||'').slice(0,255),scope=options['account-scope'],expectedHash=options['event-set-hash'],url=options.url;
-if(!['staging','prod'].includes(environment)||!actor||!scope||!/^[-A-Za-z0-9_]{1,128}$/.test(scope)||expectedHash!==EVENT_HASH)throw new Error('environment, actor, stable account scope, and exact selected event-set hash are required');
+if(!isHostedEnvironment(environment)||!actor||!scope||!/^[-A-Za-z0-9_]{1,128}$/.test(scope)||expectedHash!==EVENT_HASH)throw new Error('environment, actor, stable account scope, and exact selected event-set hash are required');
 if(process.env.EMAIL_WORKER_ENV!==environment)throw new Error('requested environment must exactly match EMAIL_WORKER_ENV loaded on this host');
 let parsedUrl;try{parsedUrl=new URL(url);}catch(_){throw new Error('a valid expected public URL is required');}if(parsedUrl.protocol!=='https:'||parsedUrl.toString()!==url)throw new Error('expected public URL must be canonical HTTPS');
 const apiKey=process.env.RESEND_API_KEY;if(!apiKey)throw new Error('RESEND_API_KEY must be loaded in process memory');

@@ -45,7 +45,8 @@ echo "==> Installing production dependencies"
 (cd "$RELEASE_DIR/api" && npm ci --omit=dev --workspaces=false)
 
 echo "==> Fetching runtime config"
-aws s3 cp "s3://$CONFIG_BUCKET/configs/.env.prod" "$RELEASE_DIR/api/.env.prod"
+CONFIG_KEY=${CONFIG_KEY:-configs/.env.prod}
+aws s3 cp "s3://$CONFIG_BUCKET/$CONFIG_KEY" "$RELEASE_DIR/api/.env.prod"
 chmod 600 "$RELEASE_DIR/api/.env.prod"
 
 get_env_value() {
@@ -69,12 +70,10 @@ get_secret_from_ssm() {
     --output text
 }
 
-append_secret_from_ssm() {
+append_secret_value() {
   local env_key="$1"
-  local parameter_env_key="$2"
-  local value
+  local value="$2"
 
-  value=$(get_secret_from_ssm "$parameter_env_key")
   ENV_KEY="$env_key" SECRET_VALUE="$value" node - <<'NODE' >> "$RELEASE_DIR/api/.env.prod"
 const key = process.env.ENV_KEY;
 const value = process.env.SECRET_VALUE || '';
@@ -82,10 +81,33 @@ process.stdout.write(`${key}=${JSON.stringify(value)}\n`);
 NODE
 }
 
-echo "==> Resolving runtime secrets from SSM Parameter Store"
-append_secret_from_ssm DB_PASSWORD DB_PASSWORD_PARAMETER
+append_secret_from_ssm() {
+  local env_key="$1"
+  local parameter_env_key="$2"
+  local value
+
+  value=$(get_secret_from_ssm "$parameter_env_key")
+  append_secret_value "$env_key" "$value"
+}
+
+echo "==> Resolving runtime secrets"
+DB_MANAGED_SECRET_ARN=$(get_env_value DB_MANAGED_SECRET_ARN || true)
+if [ -n "$DB_MANAGED_SECRET_ARN" ]; then
+  DB_MANAGED_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_MANAGED_SECRET_ARN" --query SecretString --output text)
+  DB_MANAGED_PASSWORD=$(SECRET_JSON="$DB_MANAGED_SECRET_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.password!=="string"||!value.password)process.exit(1);process.stdout.write(value.password)')
+  append_secret_value DB_PASSWORD "$DB_MANAGED_PASSWORD"
+  unset DB_MANAGED_SECRET_JSON DB_MANAGED_PASSWORD
+else
+  append_secret_from_ssm DB_PASSWORD DB_PASSWORD_PARAMETER
+fi
 append_secret_from_ssm SESSION_SECRET SESSION_SECRET_PARAMETER
-append_secret_from_ssm RESEND_API_KEY RESEND_API_KEY_PARAMETER
+RESEND_API_KEY_PARAMETER=$(get_env_value RESEND_API_KEY_PARAMETER || true)
+if [ -n "$RESEND_API_KEY_PARAMETER" ]; then
+  append_secret_from_ssm RESEND_API_KEY RESEND_API_KEY_PARAMETER
+elif [ "$(get_env_value EMAIL_WORKER_ENV || true)" != "prod-secondary" ]; then
+  echo "Missing RESEND_API_KEY_PARAMETER in runtime config" >&2
+  exit 1
+fi
 if [ "$(get_env_value RESEND_WEBHOOK_INGEST_ENABLED)" = "true" ]; then
   append_secret_from_ssm RESEND_WEBHOOK_SECRET RESEND_WEBHOOK_SECRET_PARAMETER
   PREVIOUS_WEBHOOK_PARAMETER=$(get_env_value RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER)
@@ -116,8 +138,8 @@ NODE
 fi
 WORKER_ENV=$(get_env_value EMAIL_WORKER_ENV)
 case "$WORKER_ENV" in
-  staging|prod) ;;
-  *) echo "EMAIL_WORKER_ENV must be explicitly configured as staging or prod" >&2; exit 1 ;;
+  staging|prod|prod-secondary) ;;
+  *) echo "EMAIL_WORKER_ENV must be explicitly configured as staging, prod, or prod-secondary" >&2; exit 1 ;;
 esac
 
 # Resolve migration connection details before the handoff. The migration itself
@@ -160,8 +182,17 @@ ensure_bootstrap_administrator() {
 if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
   echo "==> Ensuring bootstrap dashboard administrator"
   BOOTSTRAP_ADMIN_PASSWORD=$(get_secret_from_ssm BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)
-  BOOTSTRAP_ADMIN_USERNAME=$(get_env_value BOOTSTRAP_ADMIN_USERNAME) \
-    BOOTSTRAP_ADMIN_EMAIL=$(get_env_value BOOTSTRAP_ADMIN_EMAIL) \
+  BOOTSTRAP_ADMIN_USERNAME=$(get_env_value BOOTSTRAP_ADMIN_USERNAME)
+  BOOTSTRAP_ADMIN_EMAIL=$(get_env_value BOOTSTRAP_ADMIN_EMAIL)
+  BOOTSTRAP_ADMIN_IDENTITY_PARAMETER=$(get_env_value BOOTSTRAP_ADMIN_IDENTITY_PARAMETER || true)
+  if [ -n "$BOOTSTRAP_ADMIN_IDENTITY_PARAMETER" ]; then
+    BOOTSTRAP_ADMIN_IDENTITY_JSON=$(get_secret_from_ssm BOOTSTRAP_ADMIN_IDENTITY_PARAMETER)
+    BOOTSTRAP_ADMIN_USERNAME=$(SECRET_JSON="$BOOTSTRAP_ADMIN_IDENTITY_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.username!=="string"||!value.username)process.exit(1);process.stdout.write(value.username)')
+    BOOTSTRAP_ADMIN_EMAIL=$(SECRET_JSON="$BOOTSTRAP_ADMIN_IDENTITY_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.email!=="string"||!value.email)process.exit(1);process.stdout.write(value.email)')
+    unset BOOTSTRAP_ADMIN_IDENTITY_JSON
+  fi
+  BOOTSTRAP_ADMIN_USERNAME="$BOOTSTRAP_ADMIN_USERNAME" \
+    BOOTSTRAP_ADMIN_EMAIL="$BOOTSTRAP_ADMIN_EMAIL" \
     BOOTSTRAP_ORGANIZATION_NAME=$(get_env_value BOOTSTRAP_ORGANIZATION_NAME) \
     BOOTSTRAP_ORGANIZATION_SLUG=$(get_env_value BOOTSTRAP_ORGANIZATION_SLUG) \
     BOOTSTRAP_PLATFORM_ADMIN=$(get_env_value BOOTSTRAP_PLATFORM_ADMIN) \
@@ -170,7 +201,7 @@ if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
     DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" \
     DB_SSL=true DB_SSL_CA="$SERVICE_DIR/certs/rds-global-bundle.pem" \
     node "$RELEASE_DIR/deploy/bootstrap-admin.js"
-  unset BOOTSTRAP_ADMIN_PASSWORD
+  unset BOOTSTRAP_ADMIN_PASSWORD BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_EMAIL
 fi
 }
 

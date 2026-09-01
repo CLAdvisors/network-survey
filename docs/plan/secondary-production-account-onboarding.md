@@ -1,6 +1,6 @@
 # Secondary production account: onboarding and decision record
 
-**Status:** discovery and design only; implementation is not authorized
+**Status:** decisions approved; target-only implementation tracked in [`prod-secondary-buildout.md`](prod-secondary-buildout.md)
 **Repository baseline:** `origin/main` / `11f3b4b094a3b483f6690fb1e58fd0bdb707a80c`
 **Source account (must remain untouched):** `438465164125`, CLI profile `admin-cli`
 **Target account:** `710054969994`, CLI profile `admin-710054969994`
@@ -590,6 +590,4 @@ Every future plan/change must answer “yes” before apply/deploy:
 
 ## 16. Discovery completion statement
 
-This phase performed read-only repository, AWS metadata, GitHub environment metadata, and public DNS discovery only. No AWS, GitHub, DNS, Resend, database, or external resource was created, modified, imported, deployed, applied, locked, copied, shared, or deleted. No Terraform initialization/plan/apply occurred. No secret, Terraform state content, database row, respondent PII/token, credential, or email/provider data was retrieved or printed.
-
-Implementation remains stopped pending stakeholder decisions and a separate authorization.
+The discovery phase performed read-only repository, AWS metadata, GitHub environment metadata, and public DNS discovery only. Its no-mutation statement was accurate when recorded. Stakeholders subsequently approved the decisions and authorized target-only implementation. Current implementation evidence, mutations, safeguards, and blockers are recorded in [`prod-secondary-buildout.md`](prod-secondary-buildout.md). Source account `438465164125` remains outside the target Terraform provider/backend and must remain untouched.

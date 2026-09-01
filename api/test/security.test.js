@@ -165,6 +165,7 @@ test('new survey links use the canonical HTTPS origin while CORS retains legacy 
     'https://survey.cladvisorsurveys.com/?surveyName=Leadership+%26+Team&userId=secret%2Ftoken'
   );
   assert.throws(() => buildSurveyUrl('http://survey.cladvisorsurveys.com', { userId: 'token' }, 'prod'), /HTTPS/);
+  assert.throws(() => buildSurveyUrl('http://survey.cladvisorsurveys.com', { userId: 'token' }, 'prod-secondary'), /HTTPS/);
   assert.throws(() => buildSurveyUrl('https://user:password@survey.example.test', { userId: 'token' }), /without credentials/);
   assert.deepEqual(configuredCorsOrigins({
     FRONTEND_URL: 'https://dashboard.example.test/',
@@ -1659,6 +1660,8 @@ test('hosted cookie-authenticated mutations require the exact dashboard Origin',
   assert.equal(isTrustedStateChangingOrigin({ ...base, origin: 'https://evil.test' }), false);
   assert.equal(isTrustedStateChangingOrigin({ ...base, origin: 'https://dashboard.test' }), true);
   assert.equal(isTrustedStateChangingOrigin({ ...base, stateChanging: false, origin: undefined }), true);
+  assert.equal(isTrustedStateChangingOrigin({ ...base, nodeEnv: 'prod-secondary', origin: undefined }), false);
+  assert.throws(() => isTrustedStateChangingOrigin({ ...base, nodeEnv: 'prod', workerEnvironment: 'prod_secondary', origin: undefined }), /Unsupported EMAIL_WORKER_ENV/);
 });
 
 test('dashboard/admin endpoints require authentication', async () => {
@@ -1938,6 +1941,7 @@ test('CLA organization migration preserves survey data and enforces stable child
     'v1_8_bulk_survey_reminders.sql',
     'v1_9_reminder_provider_account_binding.sql',
     'v1_10_editable_survey_instructions.sql',
+    'v1_11_prod_secondary_controls.sql',
   ];
   const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
 
@@ -1950,7 +1954,7 @@ test('CLA organization migration preserves survey data and enforces stable child
   assert.deepEqual(
     masterIncludes.slice(sharedPreCutoverIncludes.length),
     postCutoverMasterIncludes,
-    'switching from the recorded cutover root to master must add only the reviewed lifecycle, webhook, reminder, and instructions migrations'
+    'switching from the recorded cutover root to master must add only the reviewed lifecycle, webhook, reminder, instructions, and prod-secondary control migrations'
   );
   assert.equal(new Set(cutoverIncludes).size, cutoverIncludes.length, 'cutover includes must not be duplicated');
   assert.match(migration, /VALUES \('CLA', 'cla'\)/);

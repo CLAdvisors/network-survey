@@ -1713,11 +1713,12 @@ test('JSON parsing accepts maximum roster requests without raising the global li
     message: 'Request body exceeds the allowed size.',
   });
 
-  const oversizedLogin = await request(app)
-    .post('/api/login')
-    .send({ padding: 'x'.repeat(150 * 1024) });
-  assert.equal(oversizedLogin.status, 413);
-  assert.equal(oversizedLogin.body.error, 'request_too_large');
+  for (const [method, path] of [['post', '/api/login'], ['post', '/api/user']]) {
+    const ordinaryOversized = await request(app)[method](path)
+      .send({ padding: 'x'.repeat(150 * 1024) });
+    assert.equal(ordinaryOversized.status, 413, `${method.toUpperCase()} ${path}`);
+    assert.equal(ordinaryOversized.body.error, 'request_too_large');
+  }
 });
 
 test('public signup can be disabled by ALLOW_PUBLIC_SIGNUP=false', async () => {

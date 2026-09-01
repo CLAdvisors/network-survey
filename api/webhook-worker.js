@@ -330,7 +330,7 @@ class WebhookWorker {
     }
 
     if (ACCEPTANCE_EVENTS.has(type)) {
-      if (delivery.status === 'leased') {
+      if (delivery.status === 'leased' || delivery.status === 'reminder_leased') {
         await client.query(
           `UPDATE survey_email_attempts SET finished_at=COALESCE(finished_at,now()),
             outcome=CASE WHEN provider_started_at IS NOT NULL THEN 'accepted' ELSE 'cancelled' END,
@@ -344,12 +344,13 @@ class WebhookWorker {
         `UPDATE survey_email_deliveries SET status='accepted',provider_message_id=COALESCE(provider_message_id,$2),
           dispatch_accepted_at=COALESCE(dispatch_accepted_at,now()),dispatch_failed_at=NULL,lease_owner=NULL,lease_token=NULL,
           lease_expires_at=NULL,next_attempt_at=now(),updated_at=now()
-         WHERE id=$1 AND status IN ('pending','retry_wait','leased','uncertain','failed','cancelled','accepted')`,
+         WHERE id=$1 AND status IN ('pending','retry_wait','leased','reminder_pending','reminder_retry_wait','reminder_leased','uncertain','failed','cancelled','accepted')`,
         [delivery.id, providerId]
       );
       await client.query(
-        'UPDATE respondent SET email_sent=true WHERE respondent_id=$1 AND survey_id=$2',
-        [delivery.respondent_id, delivery.survey_id]
+        `UPDATE respondent SET email_sent=true WHERE respondent_id=$1 AND survey_id=$2
+           AND EXISTS(SELECT 1 FROM survey_launches l WHERE l.id=$3 AND l.kind='initial')`,
+        [delivery.respondent_id, delivery.survey_id, delivery.launch_id]
       );
     }
 
@@ -555,7 +556,7 @@ class WebhookWorker {
       // Preserve universal lock order: delivery rows are locked before the address boundary.
       const candidates = await client.query(
         `SELECT id,status FROM survey_email_deliveries WHERE lower(btrim(to_address))=$1
-          AND status IN ('pending','retry_wait','leased') ORDER BY id FOR UPDATE`, [normalized]
+          AND status IN ('pending','retry_wait','leased','reminder_pending','reminder_retry_wait','reminder_leased') ORDER BY id FOR UPDATE`, [normalized]
       );
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`email-suppression-boundary:${this.providerAccountScope}:${normalized}`]);
       const active = (await client.query(
@@ -568,17 +569,17 @@ class WebhookWorker {
         await client.query('COMMIT');
         return { cancelled: 0, fenced: 0 };
       }
-      const pendingIds = candidates.rows.filter((row) => row.status !== 'leased').map((row) => row.id);
-      const leasedIds = candidates.rows.filter((row) => row.status === 'leased').map((row) => row.id);
+      const pendingIds = candidates.rows.filter((row) => !['leased','reminder_leased'].includes(row.status)).map((row) => row.id);
+      const leasedIds = candidates.rows.filter((row) => ['leased','reminder_leased'].includes(row.status)).map((row) => row.id);
       const cancelled = pendingIds.length ? await client.query(
         `UPDATE survey_email_deliveries SET status='cancelled',provider_suppressed_at=COALESCE(provider_suppressed_at,now()),
           last_error_code='suppressed',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
-         WHERE id=ANY($1::uuid[]) AND status IN ('pending','retry_wait')`, [pendingIds]
+         WHERE id=ANY($1::uuid[]) AND status IN ('pending','retry_wait','reminder_pending','reminder_retry_wait')`, [pendingIds]
       ) : { rowCount: 0 };
       const fenced = leasedIds.length ? await client.query(
         `UPDATE survey_email_deliveries SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
           provider_suppressed_at=COALESCE(provider_suppressed_at,now()),last_error_code='suppressed',updated_at=now()
-         WHERE id=ANY($1::uuid[]) AND status='leased'`, [leasedIds]
+         WHERE id=ANY($1::uuid[]) AND status IN ('leased','reminder_leased')`, [leasedIds]
       ) : { rowCount: 0 };
       await client.query('COMMIT');
       return { cancelled: cancelled.rowCount, fenced: fenced.rowCount };

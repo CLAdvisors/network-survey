@@ -43,6 +43,7 @@ const pool = new Pool({
       RELEASE_REVISION: 'local',
       SURVEY_URL: process.env.SURVEY_URL,
       EMAIL_RATE_PER_SECOND: '5',
+      RESEND_PROVIDER_ACCOUNT_SCOPE: 'ci-test',
     },
   });
 
@@ -107,15 +108,22 @@ const pool = new Pool({
 
   // Real PostgreSQL reminder races: reject overlapping campaigns and let a
   // completion holding the shared survey boundary cancel before provider I/O.
-  await pool.query(`UPDATE survey_email_deliveries SET status='cancelled',last_error_code='ci_cleanup' WHERE status IN ('pending','retry_wait')`);
+  await pool.query(`UPDATE survey_email_deliveries SET status='cancelled',last_error_code='ci_cleanup' WHERE status IN ('pending','retry_wait','reminder_pending','reminder_retry_wait')`);
   const reminderSurvey=(await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id,lifecycle_status,started_at) SELECT 'CI Reminder Race','Reminder',now(),'{}'::jsonb,organization_id,'active',now() FROM survey WHERE id=$1 RETURNING *`,[process.env.SURVEY_ID])).rows[0];
   const reminderRespondent=(await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES('Reminder Person','reminder@example.test',$1,$2,true,'ci-existing-reminder-token','English',true) RETURNING respondent_id`,[reminderSurvey.name,reminderSurvey.id])).rows[0];
   await pool.query(`INSERT INTO survey_reminder_templates(survey_id,language,subject,body_text,updated_by_user_id) VALUES($1,'english','Reminder','Please complete the survey.',$2)`,[reminderSurvey.id,actor.id]);
   worker.claiming=true;
   await worker.heartbeat();
   const reminderConfig={NODE_ENV:'test',SURVEY_DELIVERY_V2_ENABLED:'true',SURVEY_URL:process.env.SURVEY_URL,RESEND_API_KEY:'fake-only',RESEND_PROVIDER_ACCOUNT_SCOPE:'ci-test'};
+  await assert.rejects(
+    lifecycle.launchReminder(pool,actor,reminderSurvey.id,{idempotencyKey:'66666666-6666-4666-8666-666666666666'},{...reminderConfig,RESEND_PROVIDER_ACCOUNT_SCOPE:'wrong-scope'}),
+    error=>error.code==='survey_not_ready'&&error.details?.blockers?.some(({code})=>code==='worker_unavailable'),
+    'a heartbeat for another provider account must not make reminder launch ready'
+  );
   const reminder=await lifecycle.launchReminder(pool,actor,reminderSurvey.id,{idempotencyKey:'44444444-4444-4444-8444-444444444444'},reminderConfig);
   assert.equal(reminder.target_count,1);
+  const legacyVisible=await pool.query(`SELECT id FROM survey_email_deliveries WHERE launch_id=$1 AND ((status IN ('pending','retry_wait') AND next_attempt_at<=now()) OR (status='leased' AND lease_expires_at<=now()))`,[reminder.id]);
+  assert.equal(legacyVisible.rowCount,0,'legacy worker claim SQL must not see reminder queue states');
   await assert.rejects(
     lifecycle.launchReminder(pool,actor,reminderSurvey.id,{idempotencyKey:'55555555-5555-4555-8555-555555555555'},reminderConfig),
     error=>error.code==='reminder_in_progress'

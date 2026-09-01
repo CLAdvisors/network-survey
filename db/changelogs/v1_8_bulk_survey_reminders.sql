@@ -32,3 +32,37 @@ CREATE INDEX CONCURRENTLY respondent_reminder_eligibility
   WHERE can_respond IS TRUE AND response IS NULL;
 RESET lock_timeout;
 RESET statement_timeout;
+
+--changeset cladvisors:bulk-survey-reminder-isolated-queue-1 splitStatements:false
+--comment Isolate reminder claims from invitation-only workers and bind capability to suppression scope.
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+ALTER TABLE email_worker_heartbeats ADD COLUMN IF NOT EXISTS provider_account_scope VARCHAR(128);
+ALTER TABLE email_worker_heartbeats DROP CONSTRAINT IF EXISTS email_worker_heartbeats_provider_account_scope_check;
+ALTER TABLE email_worker_heartbeats ADD CONSTRAINT email_worker_heartbeats_provider_account_scope_check
+  CHECK (provider_account_scope IS NULL OR (provider_account_scope = btrim(provider_account_scope) AND provider_account_scope <> ''));
+ALTER TABLE survey_email_deliveries DROP CONSTRAINT IF EXISTS survey_email_deliveries_status_check;
+ALTER TABLE survey_email_deliveries ADD CONSTRAINT survey_email_deliveries_status_check CHECK(status IN (
+  'pending','leased','retry_wait','reminder_pending','reminder_leased','reminder_retry_wait',
+  'accepted','failed','uncertain','cancelled'
+));
+UPDATE survey_email_deliveries d SET status=CASE d.status
+  WHEN 'pending' THEN 'reminder_pending'
+  WHEN 'leased' THEN 'reminder_leased'
+  WHEN 'retry_wait' THEN 'reminder_retry_wait'
+END
+FROM survey_launches l
+WHERE l.id=d.launch_id AND l.kind='reminder' AND d.status IN ('pending','leased','retry_wait');
+COMMENT ON COLUMN email_worker_heartbeats.reminder_capable IS 'True only for workers that use reminder-only queue states and recheck lifecycle, eligibility, completion, and suppression at the provider boundary.';
+COMMENT ON COLUMN email_worker_heartbeats.provider_account_scope IS 'Provider account whose suppressions this worker enforces; required when reminder_capable is true.';
+
+--changeset cladvisors:bulk-survey-reminder-isolated-queue-index-1 runInTransaction:false
+--comment Accelerate isolated reminder claims without changing initial invitation work.
+SET lock_timeout = '5s';
+SET statement_timeout = '5min';
+DROP INDEX CONCURRENTLY IF EXISTS reminder_delivery_due_work;
+CREATE INDEX CONCURRENTLY reminder_delivery_due_work
+  ON survey_email_deliveries(next_attempt_at, created_at)
+  WHERE status IN ('reminder_pending','reminder_retry_wait','reminder_leased');
+RESET lock_timeout;
+RESET statement_timeout;

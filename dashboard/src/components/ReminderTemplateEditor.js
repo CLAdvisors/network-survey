@@ -61,9 +61,10 @@ const ReminderTemplateEditor = ({ surveyId, editable, onDirtyChange, onOperation
     const draftKey=`${targetSurvey}:${target.language}`; const savedDraft=drafts.current.get(draftKey);
     try {
       const {data}=await api.put(`/surveys/${targetSurvey}/reminder-templates/${target.language}`,{subject:target.subject,body:target.body,expectedVersion:target.version});
-      const saved=data.template;
-      if(drafts.current.get(draftKey)===savedDraft){drafts.current.delete(draftKey);onDirtyChange?.(targetSurvey,'reminderTemplate',false);}
-      if (targetSurvey !== surveyRef.current || version !== request.current) return;
+      const saved={...data.template,version:Number(data.template.version)};
+      const ownsDraft=drafts.current.get(draftKey)===savedDraft;
+      if(ownsDraft){drafts.current.delete(draftKey);onDirtyChange?.(targetSurvey,'reminderTemplate',false);}
+      if (targetSurvey !== surveyRef.current || !ownsDraft) return;
       setTemplates(current=>({...current,[target.language]:saved})); setOriginal(saved); setDraft(saved);
       advanceGeneration(targetSurvey);
       setNotice({severity:'success',message:'Reminder template saved.'});

@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const bcrypt = require('bcrypt');
 const { Model } = require('survey-core');
 
@@ -1938,11 +1940,33 @@ test('bulk reminder migration is additive, rerunnable through Liquibase, and fol
   const migration=fs.readFileSync(path.join(__dirname,'../../db/changelogs/v1_8_bulk_survey_reminders.sql'),'utf8');
   assert.match(master,/v1_7_email_webhook_delivery_truth\.sql[\s\S]+v1_8_bulk_survey_reminders\.sql/);
   assert.doesNotMatch(cutover,/v1_8_bulk_survey_reminders/,'historical CLA cutover must still precede lifecycle storage');
-  assert.equal((migration.match(/^--changeset /gm)||[]).length,2);
+  assert.equal((migration.match(/^--changeset /gm)||[]).length,4);
+  const appliedPrefix=`${migration.split('\n--changeset cladvisors:bulk-survey-reminder-isolated-queue-1')[0]}\n`;
+  assert.equal(createHash('sha256').update(appliedPrefix).digest('hex'),'19b3893952ef7f713ce1af5eb7ab72d13f6e26efffb252dbf490ef4c2471714a','published reminder changesets must remain checksum-stable');
   assert.match(migration,/CREATE TABLE survey_reminder_templates/);
   assert.match(migration,/configuration_version BIGINT NOT NULL DEFAULT 1/);
   assert.match(migration,/DROP INDEX CONCURRENTLY IF EXISTS respondent_reminder_eligibility/);
+  assert.match(migration,/provider_account_scope VARCHAR\(128\)/);
+  assert.match(migration,/bulk-survey-reminder-isolated-queue-1/);
+  assert.match(migration,/'reminder_pending','reminder_leased','reminder_retry_wait'/);
+  assert.match(migration,/UPDATE survey_email_deliveries d SET status=CASE d\.status/);
+  assert.match(migration,/CREATE INDEX CONCURRENTLY reminder_delivery_due_work/);
   assert.doesNotMatch(migration,/\bTRUNCATE\b|\bDELETE FROM respondent\b|DROP TABLE|DROP COLUMN/i);
+});
+
+test('rollback capability validation permits no-reminder artifacts, rejects shared-queue v1, and accepts isolated-queue v2', (t) => {
+  const release=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'reminder-capability-'));
+  t.after(()=>fs.rmSync(release,{recursive:true,force:true}));
+  fs.mkdirSync(path.join(release,'deploy'));
+  const base={format_version:1,webhook_ingest:1,webhook_projection:1,suppression_enforcement:1,schema:{webhook_delivery_truth:1}};
+  const validate=marker=>{
+    fs.writeFileSync(path.join(release,'deploy','CAPABILITIES.json'),JSON.stringify(marker));
+    return spawnSync(process.execPath,[path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),release],{encoding:'utf8'});
+  };
+  assert.equal(validate(base).status,0,'artifact without reminder launch support is safe when no database floor is requested');
+  const shared=validate({...base,reminder_provider_boundary:1});
+  assert.notEqual(shared.status,0);assert.match(shared.stderr,/unsafe shared reminder queue/);
+  assert.equal(validate({...base,reminder_provider_boundary:2}).status,0);
 });
 
 test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {
@@ -2132,6 +2156,7 @@ test('survey list compact aggregates include distinct provider summary counts fo
   const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
   assert.equal((serverSource.match(/'providerProblemCount'/g) || []).length, 2);
   assert.equal((serverSource.match(/'providerWaitingCount'/g) || []).length, 2);
+  assert.equal((serverSource.match(/'kind', l\.kind/g) || []).length, 2);
   assert.equal((serverSource.match(/d\.status='accepted' AND d\.provider_delivered_at IS NULL/g) || []).length, 2);
 });
 

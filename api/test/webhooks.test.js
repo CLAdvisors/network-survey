@@ -142,12 +142,15 @@ test('delivery projection preserves earliest facts and only event-specific evide
   const queries = [];
   const client = { async query(sql, values = []) { queries.push({ sql, values }); return { rowCount: 1, rows: [] }; } };
   const worker = new WebhookWorker({ pool: {}, env: { NODE_ENV: 'test', RESEND_PROVIDER_ACCOUNT_SCOPE: 'scope' } });
-  const delivery = { id: 'd', status: 'uncertain', respondent_id: 4, survey_id: 's' };
+  const delivery = { id: 'd', launch_id: 'launch-reminder', status: 'uncertain', respondent_id: 4, survey_id: 's' };
   const event = { event_type: 'email.delivered', event_created_at: '2026-08-05T00:00:00Z' };
   await worker.projectDelivery(client, event, deliveryEvent('email.delivered'), delivery);
   assert.match(queries[0].sql, /LEAST\(provider_delivered_at,\$2\)/);
   assert.ok(queries.some(({ sql }) => /SET status='accepted'/.test(sql)));
-  assert.ok(queries.some(({ sql }) => /UPDATE respondent SET email_sent=true/.test(sql)));
+  const legacyFlag=queries.find(({ sql }) => /UPDATE respondent SET email_sent=true/.test(sql));
+  assert.match(legacyFlag.sql,/l\.kind='initial'/);
+  assert.equal(legacyFlag.values[2],'launch-reminder');
+  assert.ok(queries.some(({sql})=>/reminder_pending.*reminder_retry_wait.*reminder_leased/.test(sql)));
 
   queries.length = 0;
   await worker.projectDelivery(client, { ...event, event_type: 'email.failed' }, deliveryEvent('email.failed'), delivery);

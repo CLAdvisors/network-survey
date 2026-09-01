@@ -194,6 +194,8 @@ test('reminder implementation selects and rechecks only incomplete eligible resp
   assert.match(lifecycleSource,/can_respond=true AND r\.response IS NULL/);
   assert.match(lifecycleSource,/displayedRespondentPredicate\('r'\)/);
   assert.match(lifecycleSource,/kind:'reminder'/);
+  assert.match(lifecycleSource,/prior_launch\.kind='reminder' AND prior\.status='uncertain'/);
+  assert.match(lifecycleSource,/status\) VALUES[\s\S]*'reminder_pending'/);
   assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
   assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
   assert.match(workerSource,/row\.launch_kind!=='reminder'.*email_sent/s);
@@ -203,7 +205,7 @@ test('launch fingerprint is canonical and aggregate SQL derives dispatch and dis
   assert.equal(fingerprint({targets:[1,2]}), fingerprint({targets:[1,2]}));
   assert.notEqual(fingerprint({targets:[1,2]}), fingerprint({targets:[2,1]}));
   const sql = aggregateSelect('WHERE l.survey_id=$1');
-  for (const state of ['pending','leased','retry_wait','accepted','failed','uncertain','cancelled']) assert.match(sql, new RegExp(state));
+  for (const state of ['pending','leased','retry_wait','reminder_pending','reminder_leased','reminder_retry_wait','accepted','failed','uncertain','cancelled']) assert.match(sql, new RegExp(state));
   assert.match(sql, /count\(DISTINCT d\.id\)/);
   assert.match(sql, /AS provider_problem_count/);
   assert.match(sql, /AS provider_waiting_count/);
@@ -220,6 +222,26 @@ test('expired ambiguous attempts never cross the provider idempotency boundary',
   assert.equal(canRetryAmbiguous({...base,now:new Date('2026-08-04T12:00:02Z')}), false, 'retry_wait cannot cross the anchored provider window');
   assert.equal(canRetryAmbiguous({...base,providerAttemptCount:6}), false);
   assert.equal(canRetryAmbiguous({...base,firstProviderStartedAt:null}), false);
+});
+
+test('worker capability is fail-closed and bound to the suppression scope', async () => {
+  const heartbeatCalls=[];
+  const scoped=new DeliveryWorker({pool:{query:async(sql,values)=>{heartbeatCalls.push({sql,values});return{rows:[],rowCount:1};}},provider:{},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  scoped.claiming=true;
+  await scoped.heartbeat();
+  assert.equal(scoped.reminderCapable,true);
+  assert.equal(heartbeatCalls[0].values[4],true);
+  assert.equal(heartbeatCalls[0].values[5],'scope-a');
+
+  const claimCalls=[];
+  const client={release(){},async query(sql,values=[]){claimCalls.push({sql,values});if(/email_worker_control/.test(sql))return{rows:[{claiming_enabled:true,minimum_release:''}]};return{rows:[],rowCount:0};}};
+  const unscoped=new DeliveryWorker({pool:{connect:async()=>client},provider:{},env:{NODE_ENV:'test'}});
+  assert.equal(unscoped.reminderCapable,false);
+  assert.equal(await unscoped.claim(),null);
+  const selection=claimCalls.find(({sql})=>/JOIN survey_launches/.test(sql));
+  assert.equal(selection.values[0],false);
+  assert.match(selection.sql,/\$1::boolean OR l\.kind<>'reminder'/);
+  assert.match(selection.sql,/\$1::boolean AND d\.status IN \('reminder_pending','reminder_retry_wait'\)/);
 });
 
 test('worker retry backoff is bounded and uses injected randomness', () => {
@@ -289,7 +311,7 @@ test('close atomically cancels queued work, fences leased work, and writes stric
   const client={release(){},async query(sql,values=[]){calls.push({sql,values});if(/SELECT s\.\*, om\.role/.test(sql))return{rows:[{id:surveyId,organization_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',role:'editor',lifecycle_status:'active'}]};return{rows:[],rowCount:1};}};
   const result=await transitionSurvey({connect:async()=>client},{id:4},surveyId,'close');
   assert.equal(result.lifecycleStatus,'closed');
-  assert.ok(calls.some(({sql})=>/status IN \('pending','retry_wait','leased'\)/.test(sql)&&/cancellation_requested_at/.test(sql)));
+  assert.ok(calls.some(({sql})=>/status IN \('pending','retry_wait','leased','reminder_pending','reminder_retry_wait','reminder_leased'\)/.test(sql)&&/cancellation_requested_at/.test(sql)));
   assert.ok(calls.some(({sql})=>/INSERT INTO audit_events/.test(sql)));
   assert.match(calls.at(-1).sql,/COMMIT/);
 });

@@ -23,6 +23,9 @@ for (const capability of required) {
 if (marker.reminder_provider_boundary !== undefined && (!Number.isSafeInteger(marker.reminder_provider_boundary) || marker.reminder_provider_boundary < 1)) {
   throw new Error('release has an invalid reminder provider-boundary capability');
 }
+if (marker.reminder_provider_boundary === 1) {
+  throw new Error('release uses the unsafe shared reminder queue; use capability 2 or an artifact without reminder launch support');
+}
 if (!Number.isSafeInteger(marker.schema?.webhook_delivery_truth) || marker.schema.webhook_delivery_truth < 1) {
   throw new Error('release lacks webhook delivery-truth schema capability');
 }
@@ -44,7 +47,7 @@ async function validateDatabaseFloor() {
          COALESCE((SELECT processing_enabled FROM email_webhook_worker_control WHERE environment=$1),false) AS projection_required,
          COALESCE((SELECT enforcement_enabled FROM email_suppression_control WHERE environment=$1),false) AS suppression_required,
          CASE WHEN to_regclass('survey_reminder_templates') IS NULL THEN false ELSE
-           EXISTS(SELECT 1 FROM survey_launches l JOIN survey_email_deliveries d ON d.launch_id=l.id WHERE l.kind='reminder' AND d.status IN ('pending','leased','retry_wait'))
+           EXISTS(SELECT 1 FROM survey_launches l WHERE l.kind='reminder')
          END AS reminder_boundary_required`,
       [env]
     );
@@ -52,7 +55,7 @@ async function validateDatabaseFloor() {
     if (floor.ingestion_required && marker.webhook_ingest < 1) throw new Error('registration requires webhook ingestion capability');
     if (floor.projection_required && marker.webhook_projection < 1) throw new Error('processing control requires webhook projection capability');
     if (floor.suppression_required && marker.suppression_enforcement < 1) throw new Error('suppression latch requires suppression enforcement capability');
-    if (floor.reminder_boundary_required && Number(marker.reminder_provider_boundary || 0) < 1) throw new Error('pending reminders require provider-boundary eligibility capability');
+    if (floor.reminder_boundary_required && Number(marker.reminder_provider_boundary || 0) < 2) throw new Error('reminder history requires isolated-queue and kind-aware webhook capability 2');
   } finally {
     await pool.end();
   }

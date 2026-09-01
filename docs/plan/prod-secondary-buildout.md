@@ -1,6 +1,6 @@
 # prod-secondary buildout record
 
-**Status:** implementation in progress; infrastructure dark/fenced
+**Status:** target foundation deployed and verified; public edge remains dark/fenced
 **Target:** AWS account `710054969994`, `us-east-1`
 **Source isolation:** accounts `438465164125` staging/production are not Terraform providers, backends, or resource targets for this root
 
@@ -45,16 +45,24 @@ The workload root is `terraform/envs/prod-secondary` with backend key `envs/prod
 
 No DNS, ACM certificate, Resend API key, webhook endpoint, source snapshot, source secret, or source database data was created/copied.
 
-## Runtime activation sequence
+## Runtime deployment evidence
 
-1. Merge/record an immutable SHA containing exact `prod-secondary` namespace controls and RDS-managed-secret support.
-2. Package and upload that artifact using the explicitly authorized target bootstrap profile.
-3. Apply the saved target-only NAT/runtime plan. ASG refresh uses ELB health and cannot complete on a failed application bootstrap.
-4. Verify both instances through SSM, target health, exact-release API/worker heartbeats, and disabled durable controls.
-5. Temporarily enable the one-time owner bootstrap, redeploy, verify the owner, then disable bootstrap and remove its runtime IAM access.
-6. Keep ALB ingress empty and CloudFront disabled until the separate certificate/access activation.
+- immutable release `de44efeaa44e5e6a082415ca66bffdd36ede501c` is installed on both private ASG instances
+- both ALB targets are healthy; local API health reports database connectivity healthy
+- API, delivery worker, and webhook worker run the exact release on both instances
+- migration `prod-secondary-disabled-controls-1` ran exactly once
+- delivery claiming, global sending, webhook claiming/processing, suppression enforcement, webhook ingestion, and legacy delivery remain disabled
+- no Resend API key or webhook secret is configured
+- the approved CLA owner exists exactly once as an active organization owner and is not a platform administrator
+- bootstrap was returned to false, instance access to bootstrap parameters was removed, and historical release directories containing resolved bootstrap material were removed
+- Terraform reports no drift after the final apply
+- ALB ingress remains empty and both CloudFront distributions remain disabled with no aliases
 
-## Current blocker
+The target-only bootstrap password remains in its operator-managed SecureString for approved handoff; it is not available to the application role and was never printed or committed.
+
+Post-build read-only verification in source account `438465164125` confirmed the existing production and staging instances remain running, both RDS instances remain available, and both public API health endpoints return healthy. No source-account mutation command or source Terraform provider/backend was used.
+
+## Remaining blocker
 
 The authenticated `gh` identity lacks repository administration permission. Creation/protection of the `prod-secondary` GitHub environment returned HTTP 403. A repository administrator must create it with the current production reviewer and configure:
 

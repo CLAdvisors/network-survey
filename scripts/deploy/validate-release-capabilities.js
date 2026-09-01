@@ -5,6 +5,11 @@ const path = require('path');
 
 const releaseDir = path.resolve(process.argv[2] || '.');
 const checkDatabase = process.argv.includes('--database');
+const runtimeApiDirIndex = process.argv.indexOf('--runtime-api-dir');
+if (runtimeApiDirIndex >= 0 && !process.argv[runtimeApiDirIndex + 1]) throw new Error('--runtime-api-dir requires a path');
+const runtimeApiDir = runtimeApiDirIndex >= 0
+  ? path.resolve(process.argv[runtimeApiDirIndex + 1])
+  : path.join(releaseDir, 'api');
 const markerPath = path.join(releaseDir, 'deploy', 'CAPABILITIES.json');
 const required = ['webhook_ingest', 'webhook_projection', 'suppression_enforcement'];
 
@@ -31,9 +36,8 @@ if (!Number.isSafeInteger(marker.schema?.webhook_delivery_truth) || marker.schem
 }
 async function validateDatabaseFloor() {
   if (!checkDatabase) return;
-  const apiDir = path.join(releaseDir, 'api');
-  require(path.join(apiDir, 'node_modules', 'dotenv')).config({ path: path.join(apiDir, '.env.prod') });
-  const { Pool } = require(path.join(apiDir, 'node_modules', 'pg'));
+  require(path.join(runtimeApiDir, 'node_modules', 'dotenv')).config({ path: path.join(runtimeApiDir, '.env.prod') });
+  const { Pool } = require(path.join(runtimeApiDir, 'node_modules', 'pg'));
   const env = process.env.EMAIL_WORKER_ENV;
   const pool = new Pool({
     user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,
@@ -48,7 +52,25 @@ async function validateDatabaseFloor() {
          COALESCE((SELECT enforcement_enabled FROM email_suppression_control WHERE environment=$1),false) AS suppression_required,
          CASE WHEN to_regclass('survey_reminder_templates') IS NULL THEN false ELSE
            EXISTS(SELECT 1 FROM survey_launches l WHERE l.kind='reminder')
-         END AS reminder_boundary_required`,
+         END AS reminder_boundary_required,
+         EXISTS(
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema=current_schema() AND table_name='survey_launches' AND column_name='provider_account_scope'
+         ) AS reminder_provider_binding_schema,
+         CASE WHEN to_regclass('survey_reminder_templates') IS NULL THEN false ELSE
+           EXISTS(
+             SELECT 1 FROM survey_launches l
+             WHERE l.kind='reminder'
+               AND to_jsonb(l) ? 'provider_account_scope'
+               AND (
+                 to_jsonb(l)->>'provider_account_scope' IS NOT NULL
+                 OR EXISTS(
+                   SELECT 1 FROM survey_email_deliveries d
+                   WHERE d.launch_id=l.id AND d.status IN ('reminder_pending','reminder_leased','reminder_retry_wait')
+                 )
+               )
+           )
+         END AS reminder_provider_binding_required`,
       [env]
     );
     const floor = result.rows[0];
@@ -56,6 +78,8 @@ async function validateDatabaseFloor() {
     if (floor.projection_required && marker.webhook_projection < 1) throw new Error('processing control requires webhook projection capability');
     if (floor.suppression_required && marker.suppression_enforcement < 1) throw new Error('suppression latch requires suppression enforcement capability');
     if (floor.reminder_boundary_required && Number(marker.reminder_provider_boundary || 0) < 2) throw new Error('reminder history requires isolated-queue and kind-aware webhook capability 2');
+    if (floor.reminder_provider_binding_schema && marker.reminder_provider_boundary !== undefined && Number(marker.reminder_provider_boundary) < 3) throw new Error('provider-binding schema rejects reminder-launch artifacts below account-bound capability 3');
+    if (floor.reminder_provider_binding_required && Number(marker.reminder_provider_boundary || 0) < 3) throw new Error('provider-bound reminder history requires account-bound claim and webhook capability 3');
   } finally {
     await pool.end();
   }

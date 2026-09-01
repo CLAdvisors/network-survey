@@ -230,11 +230,17 @@ class WebhookWorker {
     let byTag = null;
     if (providerId) {
       byProvider = (await client.query(
-        'SELECT * FROM survey_email_deliveries WHERE provider_message_id=$1 FOR UPDATE', [providerId]
+        `SELECT d.* FROM survey_email_deliveries d JOIN survey_launches l ON l.id=d.launch_id
+         WHERE d.provider_message_id=$1 AND (l.kind<>'reminder' OR l.provider_account_scope IS NULL OR l.provider_account_scope=$2)
+         FOR UPDATE OF d`, [providerId,event.provider_account_scope]
       )).rows[0] || null;
     }
     if (tag && UUID_PATTERN.test(tag)) {
-      byTag = (await client.query('SELECT * FROM survey_email_deliveries WHERE id=$1 FOR UPDATE', [tag])).rows[0] || null;
+      byTag = (await client.query(
+        `SELECT d.* FROM survey_email_deliveries d JOIN survey_launches l ON l.id=d.launch_id
+         WHERE d.id=$1 AND (l.kind<>'reminder' OR l.provider_account_scope IS NULL OR l.provider_account_scope=$2)
+         FOR UPDATE OF d`, [tag,event.provider_account_scope]
+      )).rows[0] || null;
     }
     if (byProvider && byTag && byProvider.id !== byTag.id) throw new Error('correlation_conflict');
     const delivery = byProvider || byTag;
@@ -555,8 +561,11 @@ class WebhookWorker {
       await client.query('BEGIN');
       // Preserve universal lock order: delivery rows are locked before the address boundary.
       const candidates = await client.query(
-        `SELECT id,status FROM survey_email_deliveries WHERE lower(btrim(to_address))=$1
-          AND status IN ('pending','retry_wait','leased','reminder_pending','reminder_retry_wait','reminder_leased') ORDER BY id FOR UPDATE`, [normalized]
+        `SELECT d.id,d.status FROM survey_email_deliveries d JOIN survey_launches l ON l.id=d.launch_id
+          WHERE lower(btrim(d.to_address))=$1
+          AND (l.kind<>'reminder' OR l.provider_account_scope IS NULL OR l.provider_account_scope=$2)
+          AND d.status IN ('pending','retry_wait','leased','reminder_pending','reminder_retry_wait','reminder_leased')
+          ORDER BY d.id FOR UPDATE OF d`, [normalized,this.providerAccountScope]
       );
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`email-suppression-boundary:${this.providerAccountScope}:${normalized}`]);
       const active = (await client.query(

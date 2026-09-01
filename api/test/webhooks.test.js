@@ -158,6 +158,38 @@ test('delivery projection preserves earliest facts and only event-specific evide
   assert.equal(queries.some(({ sql }) => /SET status='accepted'/.test(sql)), false);
 });
 
+test('webhook correlation exact-matches bound reminders while allowing legacy null reminders to reconcile', async () => {
+  const calls=[];
+  const delivery={id:'11111111-1111-4111-8111-111111111111',provider_message_id:'provider-1'};
+  const client={async query(sql,values){calls.push({sql,values});return{rows:[delivery],rowCount:1};}};
+  const worker=new WebhookWorker({pool:{},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  const correlated=await worker.correlate(client,{provider_account_scope:'scope-a',provider_message_id:'provider-1'},{data:{email_id:'provider-1',tags:{app:'network_survey',environment:'test',delivery_id:delivery.id}}});
+  assert.equal(correlated.id,delivery.id);
+  assert.equal(calls.length,2);
+  for(const call of calls){
+    assert.equal(call.values[1],'scope-a');
+    assert.match(call.sql,/JOIN survey_launches/);
+    assert.match(call.sql,/l\.kind<>'reminder' OR l\.provider_account_scope IS NULL OR l\.provider_account_scope=\$2/);
+  }
+});
+
+test('suppression reconciliation cannot cancel reminders bound to another provider account', async () => {
+  const calls=[];
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT d\.id,d\.status FROM survey_email_deliveries/.test(sql))return{rows:[{id:'11111111-1111-4111-8111-111111111111',status:'reminder_pending'}]};
+    if(/SELECT EXISTS\(SELECT 1 FROM email_suppressions/.test(sql))return{rows:[{suppressed:true}]};
+    if(/UPDATE survey_email_deliveries SET status='cancelled'/.test(sql))return{rowCount:values[0].length,rows:[]};
+    return{rowCount:0,rows:[]};
+  }};
+  const worker=new WebhookWorker({pool:{connect:async()=>client},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  const result=await worker.reconcileAddress('Person@Example.test');
+  assert.deepEqual(result,{cancelled:1,fenced:0});
+  const selection=calls.find(({sql})=>/SELECT d\.id,d\.status FROM survey_email_deliveries/.test(sql));
+  assert.deepEqual(selection.values,['person@example.test','scope-a']);
+  assert.match(selection.sql,/JOIN survey_launches l ON l\.id=d\.launch_id/);
+  assert.match(selection.sql,/l\.kind<>'reminder' OR l\.provider_account_scope IS NULL OR l\.provider_account_scope=\$2/);
+});
+
 test('claim, replay, purge, and canary primitives use fenced v1_7 contracts', async () => {
   const calls = [];
   const client = {

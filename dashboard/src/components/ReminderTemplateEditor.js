@@ -69,7 +69,31 @@ const ReminderTemplateEditor = ({ surveyId, editable, onDirtyChange, onOperation
       advanceGeneration(targetSurvey);
       setNotice({severity:'success',message:'Reminder template saved.'});
     } catch(error) {
-      if (targetSurvey === surveyRef.current && version === request.current) setNotice({severity:'error',message:error.response?.data?.message || 'Unable to save reminder template.'});
+      const message=error.response?.data?.message || 'Unable to save reminder template.';
+      const conflict=error.response?.status===409&&error.response?.data?.error==='template_version_conflict';
+      if(conflict){
+        try{
+          const {data}=await api.get(`/surveys/${targetSurvey}/reminder-templates`);
+          const records=Object.fromEntries((data.templates||[]).map(item=>[item.language,{...item,version:Number(item.version)}]));
+          const persisted=records[target.language]||emptyTemplate(target.language);
+          if(drafts.current.get(draftKey)===savedDraft){
+            const rebased={...savedDraft,version:persisted.version};
+            const rebasedDirty=rebased.subject!==persisted.subject||rebased.body!==persisted.body;
+            if(rebasedDirty)drafts.current.set(draftKey,rebased);else drafts.current.delete(draftKey);
+            advanceGeneration(targetSurvey);
+            onDirtyChange?.(targetSurvey,'reminderTemplate',rebasedDirty);
+            if(targetSurvey===surveyRef.current){
+              setTemplates(records);
+              setOriginal(persisted);setDraft(rebased);
+              setNotice({severity:'error',message});
+            }
+          }
+        }catch(reloadError){
+          if(targetSurvey===surveyRef.current&&version===request.current)setNotice({severity:'error',message:reloadError.response?.data?.message||message});
+        }
+      }else if(targetSurvey===surveyRef.current&&version===request.current){
+        setNotice({severity:'error',message});
+      }
     } finally { end(targetSurvey); }
   };
 

@@ -1892,6 +1892,7 @@ test('CLA organization migration preserves survey data and enforces stable child
     'v1_6_survey_lifecycle_email_delivery.sql',
     'v1_7_email_webhook_delivery_truth.sql',
     'v1_8_bulk_survey_reminders.sql',
+    'v1_9_reminder_provider_account_binding.sql',
   ];
   const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
 
@@ -1954,6 +1955,26 @@ test('bulk reminder migration is additive, rerunnable through Liquibase, and fol
   assert.doesNotMatch(migration,/\bTRUNCATE\b|\bDELETE FROM respondent\b|DROP TABLE|DROP COLUMN/i);
 });
 
+test('reminder provider binding migration is additive and preserves published reminder checksums', () => {
+  const master=fs.readFileSync(path.join(__dirname,'../../db/changelogs/master-changelog.xml'),'utf8');
+  const published=fs.readFileSync(path.join(__dirname,'../../db/changelogs/v1_8_bulk_survey_reminders.sql'),'utf8');
+  const migration=fs.readFileSync(path.join(__dirname,'../../db/changelogs/v1_9_reminder_provider_account_binding.sql'),'utf8');
+  assert.match(master,/v1_8_bulk_survey_reminders\.sql[\s\S]+v1_9_reminder_provider_account_binding\.sql/);
+  assert.equal(createHash('sha256').update(published).digest('hex'),'6c7251e8d9d1f46035e72446355cb173ac3f8b1826b278175a2ee0cf6f995690','all published v1_8 changesets must remain checksum-stable');
+  assert.equal((migration.match(/^--changeset /gm)||[]).length,1);
+  assert.match(migration,/ADD COLUMN provider_account_scope VARCHAR\(128\)/);
+  assert.match(migration,/kind <> 'initial' OR provider_account_scope IS NULL/);
+  assert.match(migration,/provider_account_scope IS DISTINCT FROM OLD\.provider_account_scope/);
+  assert.match(migration,/NEW\.kind = 'reminder' AND NEW\.provider_account_scope IS NULL/);
+  assert.match(migration,/BEFORE INSERT OR UPDATE OF kind ON survey_launches/);
+  assert.match(migration,/survey_launches_reminder_provider_scope/);
+  assert.doesNotMatch(migration,/\bUPDATE\s+survey_launches\b|\bDELETE\b|\bTRUNCATE\b|DROP TABLE|DROP COLUMN/i,'legacy null reminder rows must remain unmodified and safely distinguishable');
+  const validator=fs.readFileSync(path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),'utf8');
+  const marker=JSON.parse(fs.readFileSync(path.join(__dirname,'../../scripts/deploy/CAPABILITIES.json'),'utf8'));
+  assert.equal(marker.reminder_provider_boundary,3);
+  assert.match(validator,/to_jsonb\(l\) \? 'provider_account_scope'[\s\S]+d\.status IN \('reminder_pending','reminder_leased','reminder_retry_wait'\)/,'active legacy null-scope reminders must also raise the capability-3 quarantine floor');
+});
+
 test('remote deployment quiesces old workers before state-converting migrations', () => {
   const deploy=fs.readFileSync(path.join(__dirname,'../../scripts/deploy/remote-deploy.sh'),'utf8');
   const sendingPause=deploy.indexOf('set-email-sending.js false');
@@ -1984,6 +2005,29 @@ test('rollback capability validation permits no-reminder artifacts, rejects shar
   const shared=validate({...base,reminder_provider_boundary:1});
   assert.notEqual(shared.status,0);assert.match(shared.stderr,/unsafe shared reminder queue/);
   assert.equal(validate({...base,reminder_provider_boundary:2}).status,0);
+});
+
+test('rollback database validation uses the installed runtime and enforces provider-binding capability 3', (t) => {
+  const root=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'reminder-runtime-capability-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const release=path.join(root,'artifact');
+  const runtime=path.join(root,'runtime-api');
+  fs.mkdirSync(path.join(release,'deploy'),{recursive:true});
+  fs.mkdirSync(path.join(runtime,'node_modules','dotenv'),{recursive:true});
+  fs.mkdirSync(path.join(runtime,'node_modules','pg'),{recursive:true});
+  fs.writeFileSync(path.join(runtime,'node_modules','dotenv','index.js'),'exports.config=()=>({});\n');
+  fs.writeFileSync(path.join(runtime,'node_modules','pg','index.js'),`exports.Pool=class { async query(){return {rows:[{ingestion_required:false,projection_required:false,suppression_required:false,reminder_boundary_required:true,reminder_provider_binding_required:true}]};} async end(){} };\n`);
+  const base={format_version:1,webhook_ingest:1,webhook_projection:1,suppression_enforcement:1,schema:{webhook_delivery_truth:1}};
+  const validate=boundary=>{
+    fs.writeFileSync(path.join(release,'deploy','CAPABILITIES.json'),JSON.stringify({...base,reminder_provider_boundary:boundary}));
+    return spawnSync(process.execPath,[path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),release,'--database','--runtime-api-dir',runtime],{encoding:'utf8'});
+  };
+  const capability2=validate(2);
+  assert.notEqual(capability2.status,0);assert.match(capability2.stderr,/capability 3/);
+  assert.equal(validate(3).status,0);
+  const rollback=fs.readFileSync(path.join(__dirname,'../../.github/workflows/rollback-api.yml'),'utf8');
+  assert.match(rollback,/TRUSTED_VALIDATOR_B64=.*validate-release-capabilities\.js/);
+  assert.match(rollback,/node \/tmp\/ona-trusted-release-validator\.js \/tmp\/ona-deploy --database --runtime-api-dir \/opt\/service\/current\/api/);
 });
 
 test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {

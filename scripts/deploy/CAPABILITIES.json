@@ -3,10 +3,11 @@
   "webhook_ingest": 1,
   "webhook_projection": 1,
   "suppression_enforcement": 1,
-  "reminder_provider_boundary": 2,
+  "reminder_provider_boundary": 3,
   "schema": {
     "email_delivery": 6,
     "webhook_delivery_truth": 1,
-    "bulk_reminders": 1
+    "bulk_reminders": 1,
+    "reminder_provider_binding": 1
   }
 }

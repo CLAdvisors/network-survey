@@ -194,7 +194,8 @@ test('reminder implementation selects and rechecks only incomplete eligible resp
   assert.match(lifecycleSource,/can_respond=true AND r\.response IS NULL/);
   assert.match(lifecycleSource,/displayedRespondentPredicate\('r'\)/);
   assert.match(lifecycleSource,/kind:'reminder'/);
-  assert.match(lifecycleSource,/prior_launch\.kind='reminder' AND prior\.status='uncertain'/);
+  assert.match(lifecycleSource,/prior_launch\.kind='reminder' AND \(prior\.status='uncertain' OR \(prior_launch\.provider_account_scope IS NULL/);
+  assert.match(lifecycleSource,/INSERT INTO survey_launches\(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id,provider_account_scope\)/);
   assert.match(lifecycleSource,/status\) VALUES[\s\S]*'reminder_pending'/);
   assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
   assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
@@ -240,8 +241,27 @@ test('worker capability is fail-closed and bound to the suppression scope', asyn
   assert.equal(await unscoped.claim(),null);
   const selection=claimCalls.find(({sql})=>/JOIN survey_launches/.test(sql));
   assert.equal(selection.values[0],false);
+  assert.equal(selection.values[1],'');
   assert.match(selection.sql,/\$1::boolean OR l\.kind<>'reminder'/);
+  assert.match(selection.sql,/l\.kind<>'reminder' OR l\.provider_account_scope=\$2/);
   assert.match(selection.sql,/\$1::boolean AND d\.status IN \('reminder_pending','reminder_retry_wait'\)/);
+});
+
+test('provider boundary releases a reminder whose immutable launch scope mismatches the worker', async () => {
+  const calls=[];
+  const row={id:'delivery-1',survey_id:'11111111-1111-4111-8111-111111111111',lease_token:'lease-1',launch_kind:'reminder',launch_provider_account_scope:'scope-b'};
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT id,name,lifecycle_status/.test(sql))return{rows:[{id:row.survey_id,name:'Scoped survey',lifecycle_status:'active',archived_at:null}]};
+    if(/SELECT d\.\*,r\.uuid/.test(sql))return{rows:[row]};
+    return{rows:[],rowCount:1};
+  }};
+  let providerCalls=0;
+  const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{send:async()=>{providerCalls+=1;}},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  const result=await worker.startProviderRequest({id:row.id,survey_id:row.survey_id,lease_token:row.lease_token});
+  assert.equal(result.action,'disabled');
+  assert.equal(providerCalls,0);
+  assert.ok(calls.some(({sql,values})=>/UPDATE survey_email_deliveries SET status=CASE/.test(sql)&&values[2]==='provider_scope_mismatch'));
+  assert.equal(calls.some(({sql})=>/email_suppressions|reserve_provider_rate/.test(sql)),false);
 });
 
 test('worker retry backoff is bounded and uses injected randomness', () => {

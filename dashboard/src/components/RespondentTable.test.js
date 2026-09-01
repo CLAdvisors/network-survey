@@ -162,6 +162,32 @@ test('ignores a lower-revision parent roster after accepting newer authoritative
   expect(screen.getByTestId('respondent-name')).toHaveTextContent('Newer');
 });
 
+test('does not expose another survey roster when switching back with stale props', async () => {
+  const view = render(<RespondentTable revision={2} surveyName="survey-a" rows={[
+    { id: 1, name: 'Survey A', email: 'a@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  await screen.findByText('Survey A');
+
+  view.rerender(<RespondentTable revision={0} surveyName="survey-b" rows={[
+    { id: 1, name: 'Survey B', email: 'b@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  await screen.findByText('Survey B');
+
+  view.rerender(<RespondentTable revision={1} surveyName="survey-a" rows={[
+    { id: 1, name: 'Stale Survey A', email: 'a@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  await waitFor(() => expect(screen.getByTestId('respondent-name')).toHaveTextContent(''));
+  expect(screen.queryByText('Survey B')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Add respondent' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Edit respondent' })).not.toBeInTheDocument();
+
+  view.rerender(<RespondentTable revision={2} surveyName="survey-a" rows={[
+    { id: 1, name: 'Current Survey A', email: 'a@example.test', canRespond: true, language: 'English' },
+  ]} />);
+  expect(await screen.findByText('Current Survey A')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Edit respondent' })).toBeInTheDocument();
+});
+
 test('ignores an older mutation refresh after a newer authoritative roster arrives', async () => {
   const oldRefresh = deferred();
   api.patch.mockResolvedValue({ status: 200, data: { revision: 5 } });

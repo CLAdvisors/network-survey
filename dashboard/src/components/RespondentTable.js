@@ -61,6 +61,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
   const [mutationErrors, setMutationErrors] = useState({});
   const draftsRef = useRef(new Map());
   const acceptedRevisionRef = useRef(new Map());
+  const displayedSurveyRef = useRef(surveyName);
   const propRevision = parseRevision(revision);
   if (surveyName && propRevision !== null) {
     acceptedRevisionRef.current.set(surveyName, Math.max(acceptedRevisionRef.current.get(surveyName) ?? -1, propRevision));
@@ -77,7 +78,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
   });
   const { begin, end, isPending, advanceGeneration } = useSurveyOperationState('respondents', onOperationChange);
   const operationPending = isPending(surveyName);
-  const respondentsReady = Array.isArray(rows) && Number.isSafeInteger(authoritativeRevision) && !loading && !loadError;
+  const respondentsReady = displayedSurveyRef.current === surveyName && Array.isArray(rows) && Number.isSafeInteger(authoritativeRevision) && !loading && !loadError;
   const hasIncompleteRows = tableRows.some((row) => !String(row.name || '').trim() || !String(row.email || '').trim());
   const surveyIdentity = useRef(surveyName);
   surveyIdentity.current = surveyName;
@@ -211,7 +212,18 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
 
   useEffect(() => {
     const nextRevision = parseRevision(revision);
-    if (nextRevision !== null && nextRevision < (acceptedRevisionRef.current.get(surveyName) ?? -1)) return;
+    const surveyChanged = displayedSurveyRef.current !== surveyName;
+    if (nextRevision !== null && nextRevision < (acceptedRevisionRef.current.get(surveyName) ?? -1)) {
+      if (surveyChanged) {
+        displayedSurveyRef.current = surveyName;
+        setTableRows([]);
+        setOriginalRows([]);
+        setAuthoritativeRevision(null);
+        setHasChanges(false);
+      }
+      return;
+    }
+    displayedSurveyRef.current = surveyName;
     if (Array.isArray(rows)) {
       const updatedRows = rows.map(row => ({
         ...row,

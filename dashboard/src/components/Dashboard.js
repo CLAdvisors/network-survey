@@ -26,6 +26,7 @@ const Dashboard = () => {
   const [respondentData, setRespondentData] = React.useState(null);
   const [respondentLoading, setRespondentLoading] = React.useState(false);
   const [respondentError, setRespondentError] = React.useState(null);
+  const [respondentRevision, setRespondentRevision] = React.useState(null);
   const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
   const [snackbar, setSnackbar] = React.useState(null);
   const [dirtyBySurvey, setDirtyBySurvey] = React.useState({});
@@ -80,6 +81,7 @@ const Dashboard = () => {
         setRespondentData(null);
         setRespondentLoading(false);
         setRespondentError(null);
+        setRespondentRevision(null);
         return;
       }
       const selectedId = surveyId(selectSurvey);
@@ -91,6 +93,7 @@ const Dashboard = () => {
         setRespondentData(null);
         setRespondentLoading(false);
         setRespondentError(null);
+        setRespondentRevision(null);
       }
       const questionGeneration = surveyOperationGeneration('questions', selectedId);
       setQuestionLoading(true);
@@ -126,7 +129,9 @@ const Dashboard = () => {
             setRelatedRefresh((value) => value + 1);
             return;
           }
+          const rosterRevision = Number(respondentResponse.headers?.['x-roster-revision']);
           setRespondentData(respondentResponse.data);
+          setRespondentRevision(Number.isSafeInteger(rosterRevision) && rosterRevision >= 0 ? rosterRevision : null);
           setRespondentLoading(false);
         }
       } catch (err) {
@@ -136,6 +141,7 @@ const Dashboard = () => {
             return;
           }
           setRespondentData(null);
+          setRespondentRevision(null);
           setRespondentError('Unable to load survey respondents. Retry before editing this survey.');
           setRespondentLoading(false);
         }
@@ -153,6 +159,7 @@ const Dashboard = () => {
       setQuestionLoading(true);
       setQuestionError(null);
       setRespondentData(null);
+      setRespondentRevision(null);
       setRespondentLoading(canViewSensitiveSurveyData(childData));
       setRespondentError(null);
     }
@@ -359,6 +366,7 @@ const Dashboard = () => {
             {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
             <RespondentTable
               rows={selectedCanViewRespondents ? respondentData : null}
+              revision={selectedCanViewRespondents ? respondentRevision : null}
               loading={selectedCanViewRespondents && respondentLoading}
               loadError={selectedCanViewRespondents ? respondentError : null}
               onRetry={() => setRelatedRefresh((value) => value + 1)}

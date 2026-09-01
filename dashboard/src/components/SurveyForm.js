@@ -85,7 +85,7 @@ const SurveyForm = () => {
     {
         console.log(response);
         if(response.status === 200) {
-            api.post('/updateTargets', formData)
+            api.post('/updateTargets', { ...formData, expectedRevision: 0 })
             api.post('/updateQuestions', formData)
         }
     });

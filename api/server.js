@@ -17,6 +17,7 @@ dotenvFlow.config();
 
 const { ResendProvider, reserveProviderRateOnClient } = require('./email');
 const lifecycle = require('./lifecycle');
+const respondentRoster = require('./respondent-roster');
 const { createResendWebhookHandler } = require('./webhooks');
 const { displayedRespondentPredicate, displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
@@ -275,7 +276,20 @@ function prepareSurveyForDemo(value) {
 
 // Resend signatures cover the exact bytes; this route must precede JSON parsing.
 app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '256kb' }), createResendWebhookHandler({ pool, env: process.env }));
+const rosterJsonParser = express.json({ limit: '3mb' });
+app.patch('/api/surveys/:surveyId/respondents', rosterJsonParser);
+app.post('/api/updateTargets', rosterJsonParser);
+app.delete('/api/user', rosterJsonParser);
 app.use(express.json());
+app.use((error, req, res, next) => {
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'request_too_large',
+      message: 'Request body exceeds the allowed size.',
+    });
+  }
+  return next(error);
+});
 
 function configuredCorsOrigins(env = process.env) {
   const additionalSurveyOrigins = String(env.SURVEY_ALLOWED_ORIGINS || '')
@@ -303,7 +317,8 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+  exposedHeaders: ['X-Roster-Revision']
 }));
 
 app.set('trust proxy', 1);
@@ -1254,7 +1269,7 @@ async function copySurveyForUser({ actor, sourceSurveyId, name }) {
   }
 }
 
-async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRoles = READ_SURVEY_ROLES } = {}) {
+async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRoles = READ_SURVEY_ROLES, queryable = pool, lock = '' } = {}) {
   if (!surveyId && surveyName && UUID_RE.test(surveyName)) {
     surveyId = surveyName;
     surveyName = null;
@@ -1276,7 +1291,7 @@ async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRol
     predicates.push(`s.name = $${values.length}`);
   }
 
-  const result = await pool.query(
+  const result = await queryable.query(
     `SELECT s.id, s.name, s.title, s.creation_date, s.questions,
             s.organization_id, s.created_by_user_id, s.lifecycle_status, s.lifecycle_version,
             s.started_at, s.closed_at, s.archived_at, om.role
@@ -1286,7 +1301,8 @@ async function resolveSurveyForUser(req, res, { surveyName, surveyId, allowedRol
      WHERE (${predicates.slice(1).join(' OR ')})
        AND s.archived_at IS NULL
      ORDER BY s.creation_date DESC NULLS LAST
-     LIMIT 1`,
+     LIMIT 1
+     ${lock ? `FOR ${lock} OF s` : ''}`,
     values
   );
 
@@ -1312,22 +1328,15 @@ async function insertSurvey(name, title, organizationId, createdByUserId) {
   console.log('Survey added successfully!');
   return result.rows[0];
 }
-async function insertUsers(users, deleteRow = null, survey = null, transactionClient = null) {
+async function insertUsers(users, survey = null, transactionClient = null) {
   const client = transactionClient || await pool.connect();
 
   try {
     if (!transactionClient) await client.query('BEGIN');
 
-    // If there's a row to delete, delete it first
-    if (deleteRow) {
-      const deleteQuery = `
-        DELETE FROM Respondent 
-        WHERE name = $1 AND (survey_id = $2 OR (survey_id IS NULL AND survey_name = $3))
-      `;
-      await client.query(deleteQuery, [deleteRow.name, survey?.id || deleteRow.surveyId || null, survey?.name || deleteRow.surveyName]);
-    }
-
-    // Then insert/update the modified rows
+    // This legacy helper is now limited to initial placeholder creation. Existing
+    // roster rows may only be edited through respondent-roster.js by stable ID.
+    // Insert/update the supplied rows
     for (const user of users) {
       const query = `
         INSERT INTO Respondent 
@@ -2060,7 +2069,7 @@ app.post('/api/survey', express.json(), requireAuth, async (req, res) => {
     const org = await getDefaultOrganizationForUser(req, res, data.organizationId || data.organization_id || null);
     if (!org) return;
     const survey = await insertSurvey(surveyName, '', org.organization_id, req.user.id);
-    await insertUsers([{userName: 'None', email: 'N/A', surveyName: surveyName, canRespond: false, language: 'English'}], null, survey);
+    await insertUsers([{userName: 'None', email: 'N/A', surveyName: surveyName, canRespond: false, language: 'English'}], survey);
     res.status(200).json({ message: 'Survey created successfully!', survey: { id: survey.id, name: survey.name, organizationId: survey.organization_id } });
   } catch (error) {
     console.error(error);
@@ -2287,90 +2296,25 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     res.status(500).json({ message: 'Failed to update email data.' });
   } 
 });
-// Modify the POST /api/updateTarget endpoint to handle the new fields
-app.post('/api/updateTarget', requireAuth, async (req, res) => {
-  const { csvData, surveyName, deleteRow } = req.body;
-
-  if (!surveyName) {
-    return res.status(400).json({ message: 'Survey name is required.' });
-  }
-  if (!csvData) {
-    return res.status(400).json({ message: 'CSV data is required.' });
-  }
-
+app.patch('/api/surveys/:surveyId/respondents', express.json(), requireAuth, async (req, res) => {
   try {
-    let csvArray = csvData.split('\n');
-    const header = csvArray.shift().split(',');
-    const headerDict = {};
-
-    // Clean up header names and create dictionary
-    header.forEach((name, index) => {
-      const cleanName = name.replace(/(\r\n|\n|\r|")/gm, "").trim();
-      headerDict[cleanName] = index;
-    });
-
-    if (csvArray.length === 0 || csvArray[0].length === 0) {
-      return res.status(400).json({ message: 'CSV data is empty.' });
-    }
-
-    // Convert to json with safer column access
-    const surveyTargets = csvArray
-      .filter(x => x !== '')
-      .map((row) => {
-        const columns = row.split(',').map(col => col.replace(/(\r\n|\n|\r|")/gm, "").trim());
-        
-        // Safely access required columns
-        const firstName = (columns[headerDict['First']] || '').trim();
-        const lastName = (columns[headerDict['Last']] || '').trim();
-        const email = (columns[headerDict['Email']] || '').trim();
-        
-        // Safely access optional columns with defaults
-        const language = headerDict['Language'] !== undefined 
-          ? (columns[headerDict['Language']] || 'English').trim()
-          : 'English';
-          
-        // Check for either "Respondent" or "Can Respond" column
-        const canRespond = headerDict['Respondent'] !== undefined
-          ? (columns[headerDict['Respondent']] || 'true').toLowerCase() === 'true'
-          : (headerDict['Can Respond'] !== undefined
-              ? (columns[headerDict['Can Respond']] || 'true').toLowerCase() === 'true'
-              : true);
-
-        return {
-          userName: `${firstName} ${lastName}`.trim(),
-          email: email,
-          language: language,
-          canRespond: canRespond,
-          surveyName: surveyName
-        };
-      })
-      .filter(target => target.userName && target.email); // Filter out invalid entries
-
-    // Validate that we have valid data
-    if (surveyTargets.length === 0) {
-      return res.status(400).json({ message: 'No valid respondent data found in CSV.' });
-    }
-
-    const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
-    if (!survey) return;
-
-    // Handle the database operations with potential deletion
-    await lifecycle.withEditableSurvey(pool, req.user, survey.id, (client, lockedSurvey) => insertUsers(surveyTargets, deleteRow, lockedSurvey, client));
-
-    res.status(200).json({ 
-      message: 'Respondents updated successfully.',
-      updatedCount: surveyTargets.length
-    });
-
+    const result = await respondentRoster.mutateRoster(pool, req.user, req.params.surveyId, req.body || {});
+    res.set('X-Roster-Revision', String(result.revision));
+    res.status(200).json({ message: 'Respondent roster updated.', ...result });
   } catch (error) {
     if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
-    console.error('Error updating respondents:', error);
-    res.status(500).json({ 
-      message: 'Failed to update respondents', 
-      error: error.message 
-    });
+    console.error('Error updating respondent roster:', error);
+    res.status(500).json({ error: 'roster_update_failed', message: 'Failed to update respondent roster.' });
   }
 });
+
+// The old single-row route renamed respondents by deleting and reinserting them.
+// It is deliberately retired so no client can bypass stable-ID batch editing.
+app.post('/api/updateTarget', requireAuth, (_req, res) => res.status(410).json({
+  error: 'legacy_roster_edit_retired',
+  message: 'Single-row respondent updates are no longer supported. Refresh the dashboard and save the roster as one batch.',
+}));
+
 app.put('/api/survey-notifications/:surveyId/subject', express.json(), requireAuth, async (req, res) => {
   const { language, subject } = req.body || {};
   if (typeof language !== 'string' || !language.trim() || typeof subject !== 'string' || !subject.trim()) {
@@ -2443,96 +2387,25 @@ app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => 
   }
 });
 
-// Modify the POST /api/updateTargets endpoint to handle the new fields
+// CSV imports are additions only: mutable names must never select an existing
+// respondent. Occupied names are rejected by complete-roster validation.
 app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => {
-  const data = req.body;
-  const csvData = data.csvData;
-  const surveyName = data.surveyName;
-
-  if (!surveyName) {
-    res.status(400).json({ message: 'Survey name is required.' });
-    return;
-  }
-  if (!csvData) {
-    res.status(400).json({ message: 'CSV data is required.' });
-    return;
-  }
-
   try {
-    let csvArray = csvData.split('\n');
-    const header = csvArray.shift().split(',');
-    const headerDict = {};
-
-    // Clean up header names and create dictionary
-    header.forEach((name, index) => {
-      const cleanName = name.replace(/(\r\n|\n|\r|")/gm, "").trim();
-      headerDict[cleanName] = index;
-    });
-
-    if (csvArray.length === 0 || csvArray[0].length === 0) {
-      res.status(400).json({ message: 'CSV data is empty.' });
-      return;
-    }
-
-    // Convert to json with safer column access
-    const surveyTargets = csvArray
-      .filter(x => x !== '')
-      .map((row) => {
-        const columns = row.split(',').map(col => col.replace(/(\r\n|\n|\r|")/gm, "").trim());
-        
-        // Safely access required columns
-        const firstName = (columns[headerDict['First']] || '').trim();
-        const lastName = (columns[headerDict['Last']] || '').trim();
-        const email = (columns[headerDict['Email']] || '').trim();
-        
-        // Safely access optional columns with defaults
-        const language = headerDict['Language'] !== undefined 
-          ? (columns[headerDict['Language']] || 'English').trim()
-          : 'English';
-          
-        // Check for either "Respondent" or "Can Respond" column
-        const canRespond = headerDict['Respondent'] !== undefined
-          ? (columns[headerDict['Respondent']] || 'true').toLowerCase() === 'true'
-          : (headerDict['Can Respond'] !== undefined
-              ? (columns[headerDict['Can Respond']] || 'true').toLowerCase() === 'true'
-              : true);
-
-        return {
-          userName: `${firstName} ${lastName}`.trim(),
-          email: email,
-          language: language,
-          canRespond: canRespond,
-          surveyName: surveyName
-        };
-      })
-      .filter(target => target.userName && target.email); // Filter out invalid entries
-
-    // Validate that we have valid data
-    if (surveyTargets.length === 0) {
-      res.status(400).json({ message: 'No valid respondent data found in CSV.' });
-      return;
-    }
-
+    const { surveyName, csvData, expectedRevision } = req.body || {};
+    if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });
+    const additions = respondentRoster.parseRespondentCsv(csvData);
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
-
-    // Insert the users into the database
-    await lifecycle.withEditableSurvey(pool, req.user, survey.id, (client, lockedSurvey) => insertUsers(surveyTargets, null, lockedSurvey, client));
-
-    res.status(200).json({ 
-      message: 'Survey created successfully.',
-      processedCount: surveyTargets.length
-    }); 
-
+    const result = await respondentRoster.mutateRoster(pool, req.user, survey.id, { expectedRevision, additions });
+    res.set('X-Roster-Revision', String(result.revision));
+    res.status(200).json({ message: 'Respondents imported successfully.', ...result, processedCount: additions.length });
   } catch (error) {
     if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
-    console.error('Error processing CSV:', error);
-    res.status(500).json({ 
-      message: 'Failed to process CSV data',
-      error: error.message
-    });
+    console.error('Error importing respondent CSV:', error);
+    res.status(500).json({ error: 'roster_import_failed', message: 'Failed to import respondent CSV.' });
   }
 });
+
 
 // PUT API endpoint for uploading a json file of questions
 const EXACT_QUESTION_REFERENCE_PROPERTIES = new Set([
@@ -3040,51 +2913,56 @@ app.get('/api/results', requireAuth, async (req, res) => {
 });
 
 // GET API endpoint for a list of survey targets and the status of their responses
-app.get('/api/targets', requireAuth, async(req, res) => {
+app.get('/api/targets', requireAuth, async (req, res) => {
   const { surveyName = '' } = req.query;
-
   let client;
-  try { client = await pool.connect(); }
-  catch (error) {
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const survey = await resolveSurveyForUser(req, res, {
+      surveyName,
+      allowedRoles: ANALYST_ROLES,
+      queryable: client,
+      lock: 'SHARE',
+    });
+    if (!survey) {
+      await client.query('ROLLBACK');
+      return;
+    }
+    const query = `SELECT r.name, r.contact_info, r.respondent_id, r.can_respond, r.lang, r.response IS NULL AS response_status,
+                   r.email_sent, d.status AS email_status, d.provider_outcome, d.provider_outcome_at, a.started_at AS last_email_attempt
+                 FROM Respondent r
+                 LEFT JOIN LATERAL (SELECT status,id,
+                   CASE WHEN provider_complained_at IS NOT NULL THEN 'complained' WHEN provider_bounced_at IS NOT NULL THEN 'bounced' WHEN provider_suppressed_at IS NOT NULL THEN 'suppressed' WHEN provider_failed_at IS NOT NULL THEN 'failed' WHEN provider_delivered_at IS NOT NULL THEN 'delivered' WHEN provider_delayed_at IS NOT NULL THEN 'delayed' WHEN provider_sent_at IS NOT NULL THEN 'sent' WHEN status='accepted' THEN 'accepted_unverified' ELSE NULL END AS provider_outcome,
+                   CASE WHEN provider_complained_at IS NOT NULL THEN provider_complained_at WHEN provider_bounced_at IS NOT NULL THEN provider_bounced_at WHEN provider_suppressed_at IS NOT NULL THEN provider_suppressed_at WHEN provider_failed_at IS NOT NULL THEN provider_failed_at WHEN provider_delivered_at IS NOT NULL THEN provider_delivered_at WHEN provider_delayed_at IS NOT NULL THEN provider_delayed_at WHEN provider_sent_at IS NOT NULL THEN provider_sent_at ELSE dispatch_accepted_at END AS provider_outcome_at
+                   FROM survey_email_deliveries WHERE respondent_id=r.respondent_id AND survey_id=r.survey_id ORDER BY created_at DESC LIMIT 1) d ON true
+                 LEFT JOIN LATERAL (SELECT started_at FROM survey_email_attempts WHERE delivery_id=d.id ORDER BY attempt_number DESC LIMIT 1) a ON true
+                 WHERE ${legacySurveyPredicate('r')}`;
+    const response = await client.query(query, [survey.id, survey.name]);
+    const respondents = response.rows.filter((row) => !isLegacyPlaceholderRespondent(row)).map((row) => ({
+      id: row.respondent_id,
+      name: row.name,
+      email: row.contact_info,
+      language: row.lang,
+      canRespond: row.can_respond,
+      status: row.response_status ? 'Incomplete' : 'Complete',
+      responseStatus: row.response_status ? 'incomplete' : 'complete',
+      emailStatus: row.email_status || (row.email_sent ? 'legacy_assumed_accepted' : 'not_queued'),
+      dispatchStatus: row.email_status || (row.email_sent ? 'legacy_assumed_accepted' : 'not_queued'),
+      providerOutcome: row.provider_outcome || (row.email_sent ? 'accepted_unverified' : null),
+      providerOutcomeAt: row.provider_outcome_at || null,
+      lastEmailAttempt: row.last_email_attempt || null,
+    }));
+    await client.query('COMMIT');
+    res.set('X-Roster-Revision', String(Number(survey.lifecycle_version) || 0));
+    res.status(200).json(respondents);
+  } catch (error) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
     console.error(error);
-    return res.status(500).json({ message: 'Failed to retrieve survey targets.' });
+    if (!res.headersSent) res.status(500).json({ message: 'Failed to retrieve survey targets.' });
+  } finally {
+    client?.release();
   }
-
-  const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: ANALYST_ROLES });
-  if (!survey) { client.release(); return; }
-
-  const query = `SELECT r.name, r.contact_info, r.respondent_id, r.can_respond, r.lang, r.response IS NULL AS response_status,
-                 r.email_sent, d.status AS email_status, d.provider_outcome, d.provider_outcome_at, a.started_at AS last_email_attempt
-               FROM Respondent r
-               LEFT JOIN LATERAL (SELECT status,id,
-                 CASE WHEN provider_complained_at IS NOT NULL THEN 'complained' WHEN provider_bounced_at IS NOT NULL THEN 'bounced' WHEN provider_suppressed_at IS NOT NULL THEN 'suppressed' WHEN provider_failed_at IS NOT NULL THEN 'failed' WHEN provider_delivered_at IS NOT NULL THEN 'delivered' WHEN provider_delayed_at IS NOT NULL THEN 'delayed' WHEN provider_sent_at IS NOT NULL THEN 'sent' WHEN status='accepted' THEN 'accepted_unverified' ELSE NULL END AS provider_outcome,
-                 CASE WHEN provider_complained_at IS NOT NULL THEN provider_complained_at WHEN provider_bounced_at IS NOT NULL THEN provider_bounced_at WHEN provider_suppressed_at IS NOT NULL THEN provider_suppressed_at WHEN provider_failed_at IS NOT NULL THEN provider_failed_at WHEN provider_delivered_at IS NOT NULL THEN provider_delivered_at WHEN provider_delayed_at IS NOT NULL THEN provider_delayed_at WHEN provider_sent_at IS NOT NULL THEN provider_sent_at ELSE dispatch_accepted_at END AS provider_outcome_at
-                 FROM survey_email_deliveries WHERE respondent_id=r.respondent_id AND survey_id=r.survey_id ORDER BY created_at DESC LIMIT 1) d ON true
-               LEFT JOIN LATERAL (SELECT started_at FROM survey_email_attempts WHERE delivery_id=d.id ORDER BY attempt_number DESC LIMIT 1) a ON true
-               WHERE ${legacySurveyPredicate('r')}`;
-  client.query(query, [survey.id, survey.name])
-    .then(response => {
-        const respondents = response.rows.filter((row) => !isLegacyPlaceholderRespondent(row)).map((row) => ({
-            id: row.respondent_id,
-            name: row.name,
-            email: row.contact_info,
-            language: row.lang,
-            canRespond: row.can_respond,
-            status: row.response_status ? 'Incomplete' : 'Complete',
-            responseStatus: row.response_status ? 'incomplete' : 'complete',
-            emailStatus: row.email_status || (row.email_sent ? 'legacy_assumed_accepted' : 'not_queued'),
-            dispatchStatus: row.email_status || (row.email_sent ? 'legacy_assumed_accepted' : 'not_queued'),
-            providerOutcome: row.provider_outcome || (row.email_sent ? 'accepted_unverified' : null),
-            providerOutcomeAt: row.provider_outcome_at || null,
-            lastEmailAttempt: row.last_email_attempt || null
-        }));
-        res.status(200).json(respondents);
-    })
-    .catch((error) => {
-      console.error(error.stack);
-      if (!res.headersSent) res.status(500).json({ message: 'Failed to retrieve survey targets.' });
-    })
-    .finally(() => client.release());
 });
 
 // GET API endpoint for a list of current surveys
@@ -3272,47 +3150,27 @@ app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
   } catch (error) { sendLifecycleError(res, error); }
 });
 
-// Delete user endpoint
+// Delete a respondent by stable identity through the same serialized/versioned
+// roster transaction used by edits and imports.
 app.delete('/api/user', requireAuth, async (req, res) => {
-  const { userName, surveyName } = req.body;
-  console.log("userName", userName);
-  console.log("surveyName", surveyName);
-
-  if (!userName || !surveyName) {
-    return res.status(400).json({ 
-      message: 'Both user name and survey name are required.' 
-    });
-  }
-
-  const client = await pool.connect();
-
   try {
+    const { respondentId, surveyName, expectedRevision } = req.body || {};
+    if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
-    const result = await lifecycle.withEditableSurvey(pool, req.user, survey.id, (transactionClient, lockedSurvey) => transactionClient.query(
-      'DELETE FROM respondent WHERE name = $1 AND survey_id = $2 RETURNING name, survey_name',
-      [userName, lockedSurvey.id]
-    ));
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ 
-        message: 'User not found in the specified survey.' 
-      });
-    }
-
-    res.status(200).json({
-      message: 'User deleted successfully from survey.',
-      deletedUser: result.rows[0]
+    const result = await respondentRoster.mutateRoster(pool, req.user, survey.id, {
+      expectedRevision,
+      deletions: [respondentId],
     });
-
+    res.set('X-Roster-Revision', String(result.revision));
+    res.status(200).json({ message: 'Respondent deleted successfully.', ...result });
   } catch (error) {
     if (error instanceof lifecycle.LifecycleError) return sendLifecycleError(res, error);
-    console.error('Error deleting user:', error);
-    res.status(500).json({ message: 'Failed to delete user' });
-  } finally {
-    client.release();
+    console.error('Error deleting respondent:', error);
+    res.status(500).json({ error: 'respondent_delete_failed', message: 'Failed to delete respondent.' });
   }
 });
+
 
 // Delete question endpoint
 app.delete('/api/question', requireAuth, async (req, res) => {

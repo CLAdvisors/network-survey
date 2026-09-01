@@ -1664,7 +1664,9 @@ test('dashboard/admin endpoints require authentication', async () => {
     ['post', '/api/startSurvey', { surveyName: 'S' }],
     ['post', '/api/updateEmails', { surveyName: 'S', csvData: 'English,Hello' }],
     ['post', '/api/updateTarget', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],
+    ['patch', '/api/surveys/11111111-1111-4111-8111-111111111111/respondents', { expectedRevision: 0, updates: [] }],
     ['post', '/api/updateTargets', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],
+    ['delete', '/api/user', { surveyName: 'S', respondentId: 1, expectedRevision: 0 }],
     ['post', '/api/updateQuestions', { surveyName: 'S', questions: { elements: [] } }],
     ['get', '/api/survey-notifications/S'],
     ['put', '/api/survey-notifications/S/subject', { language: 'English', subject: 'Invitation' }],
@@ -1680,6 +1682,42 @@ test('dashboard/admin endpoints require authentication', async () => {
   for (const [method, url, body] of endpoints) {
     const res = await request(app)[method](url).send(body || {});
     assert.equal(res.status, 401, `${method.toUpperCase()} ${url}`);
+  }
+});
+
+test('JSON parsing accepts maximum roster requests without raising the global limit', async () => {
+  const validMaximumBatch = {
+    expectedRevision: 0,
+    additions: Array.from({ length: 1000 }, (_, index) => {
+      const prefix = String(index);
+      return {
+        name: `${prefix}${'\u0001'.repeat(100 - prefix.length)}`,
+        email: `${prefix}${'\u0001'.repeat(250 - prefix.length)}@a.co`,
+        language: 'English',
+        canRespond: true,
+      };
+    }),
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(validMaximumBatch)) > 2 * 1024 * 1024);
+  const maximum = await request(app)
+    .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
+    .send(validMaximumBatch);
+  assert.equal(maximum.status, 401);
+
+  const oversizedRoster = await request(app)
+    .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
+    .send({ padding: 'x'.repeat(3 * 1024 * 1024) });
+  assert.equal(oversizedRoster.status, 413);
+  assert.deepEqual(oversizedRoster.body, {
+    error: 'request_too_large',
+    message: 'Request body exceeds the allowed size.',
+  });
+
+  for (const [method, path] of [['post', '/api/login'], ['post', '/api/user']]) {
+    const ordinaryOversized = await request(app)[method](path)
+      .send({ padding: 'x'.repeat(150 * 1024) });
+    assert.equal(ordinaryOversized.status, 413, `${method.toUpperCase()} ${path}`);
+    assert.equal(ordinaryOversized.body.error, 'request_too_large');
   }
 });
 

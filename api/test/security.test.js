@@ -1685,29 +1685,39 @@ test('dashboard/admin endpoints require authentication', async () => {
   }
 });
 
-test('JSON parsing accepts valid roster-sized requests and returns structured oversized errors', async () => {
-  const validLargeBatch = {
+test('JSON parsing accepts maximum roster requests without raising the global limit', async () => {
+  const validMaximumBatch = {
     expectedRevision: 0,
-    additions: Array.from({ length: 1000 }, (_, index) => ({
-      name: `Respondent ${index}`,
-      email: `${'a'.repeat(80)}${index}@example.test`,
-      language: 'English',
-      canRespond: true,
-    })),
+    additions: Array.from({ length: 1000 }, (_, index) => {
+      const prefix = String(index);
+      return {
+        name: `${prefix}${'\u0001'.repeat(100 - prefix.length)}`,
+        email: `${prefix}${'\u0001'.repeat(250 - prefix.length)}@a.co`,
+        language: 'English',
+        canRespond: true,
+      };
+    }),
   };
-  const overLegacyLimit = await request(app)
+  assert.ok(Buffer.byteLength(JSON.stringify(validMaximumBatch)) > 2 * 1024 * 1024);
+  const maximum = await request(app)
     .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
-    .send(validLargeBatch);
-  assert.equal(overLegacyLimit.status, 401);
+    .send(validMaximumBatch);
+  assert.equal(maximum.status, 401);
 
-  const oversized = await request(app)
+  const oversizedRoster = await request(app)
     .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
-    .send({ padding: 'x'.repeat(2 * 1024 * 1024) });
-  assert.equal(oversized.status, 413);
-  assert.deepEqual(oversized.body, {
+    .send({ padding: 'x'.repeat(3 * 1024 * 1024) });
+  assert.equal(oversizedRoster.status, 413);
+  assert.deepEqual(oversizedRoster.body, {
     error: 'request_too_large',
     message: 'Request body exceeds the allowed size.',
   });
+
+  const oversizedLogin = await request(app)
+    .post('/api/login')
+    .send({ padding: 'x'.repeat(150 * 1024) });
+  assert.equal(oversizedLogin.status, 413);
+  assert.equal(oversizedLogin.body.error, 'request_too_large');
 });
 
 test('public signup can be disabled by ALLOW_PUBLIC_SIGNUP=false', async () => {

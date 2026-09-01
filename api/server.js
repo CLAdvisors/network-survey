@@ -276,7 +276,12 @@ function prepareSurveyForDemo(value) {
 
 // Resend signatures cover the exact bytes; this route must precede JSON parsing.
 app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '256kb' }), createResendWebhookHandler({ pool, env: process.env }));
-app.use(express.json({ limit: '2mb' }));
+app.use([
+  '/api/surveys/:surveyId/respondents',
+  '/api/updateTargets',
+  '/api/user',
+], express.json({ limit: '3mb' }));
+app.use(express.json());
 app.use((error, req, res, next) => {
   if (error?.type === 'entity.too.large') {
     return res.status(413).json({

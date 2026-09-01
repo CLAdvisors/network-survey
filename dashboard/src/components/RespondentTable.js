@@ -20,10 +20,14 @@ const TEMPLATE_DATA = [
 
 const apiErrorMessage = (error, fallback) => error?.response?.data?.message || error?.response?.data?.error || fallback;
 
-const responseRevision = (response) => {
-  const value = Number(response?.headers?.['x-roster-revision'] ?? response?.data?.revision);
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+const parseRevision = (value) => {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  if (typeof value === 'string' && !/^\d+$/.test(value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 };
+
+const responseRevision = (response) => parseRevision(response?.headers?.['x-roster-revision'] ?? response?.data?.revision);
 
 const editableRespondentValue = (row) => [
   row.name || '',
@@ -57,8 +61,8 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
   const [mutationErrors, setMutationErrors] = useState({});
   const draftsRef = useRef(new Map());
   const acceptedRevisionRef = useRef(new Map());
-  const propRevision = Number(revision);
-  if (surveyName && Number.isSafeInteger(propRevision) && propRevision >= 0) {
+  const propRevision = parseRevision(revision);
+  if (surveyName && propRevision !== null) {
     acceptedRevisionRef.current.set(surveyName, Math.max(acceptedRevisionRef.current.get(surveyName) ?? -1, propRevision));
   }
   const mutationError = mutationErrors[surveyName] || null;
@@ -206,8 +210,7 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
 
 
   useEffect(() => {
-    const parsedRevision = Number(revision);
-    const nextRevision = Number.isSafeInteger(parsedRevision) && parsedRevision >= 0 ? parsedRevision : null;
+    const nextRevision = parseRevision(revision);
     if (nextRevision !== null && nextRevision < (acceptedRevisionRef.current.get(surveyName) ?? -1)) return;
     if (Array.isArray(rows)) {
       const updatedRows = rows.map(row => ({

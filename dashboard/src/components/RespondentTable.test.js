@@ -78,6 +78,18 @@ test('keeps respondent mutations unavailable until the roster loads successfully
   expect(retry).toHaveBeenCalledTimes(1);
 });
 
+test('keeps mutations unavailable when roster revision metadata is missing', async () => {
+  render(<RespondentTable revision={null} surveyName="survey-1" rows={[
+    { id: 1, name: 'One', email: 'one@example.test', canRespond: true, language: 'English' },
+  ]} />);
+
+  expect(await screen.findByTestId('respondent-name')).toHaveTextContent('One');
+  expect(screen.queryByRole('button', { name: 'Add respondent' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Upload respondents' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Edit respondent' })).not.toBeInTheDocument();
+  expect(api.patch).not.toHaveBeenCalled();
+});
+
 test('submits every changed existing row in one stable-ID batch request', async () => {
   api.patch.mockResolvedValue({ status: 200, data: { revision: 1 } });
   api.get.mockResolvedValue({

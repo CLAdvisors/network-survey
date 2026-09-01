@@ -7,8 +7,8 @@ Durable launch rows may be created only when `SURVEY_DELIVERY_V2_ENABLED=true`. 
 ## Deployment order
 
 1. Take or confirm the final database snapshot.
-2. Apply Liquibase migrations.
-3. Deploy the API and `ona-email-worker` from the same release artifact.
+2. Start the release handoff: pause sending, claiming, and webhook projection, then wait until fresh worker heartbeats report no active dispatch or projection. `remote-deploy.sh` performs this before Liquibase. If migration fails, it restores previous controls only when the trusted current validator confirms the previous artifact still satisfies the resulting database floor; otherwise controls remain paused.
+3. Apply Liquibase migrations, then deploy the API and workers from the same release artifact.
 4. Confirm `/health`, worker heartbeat freshness, readiness output, and the release revision while both rollout gates remain disabled.
 5. Set the staging Terraform `survey_delivery_v2_enabled` input to true and apply; keep legacy start and claiming disabled. Redeploy the current API artifact so it downloads the updated S3 runtime config, then verify the flag in `/opt/service/current/api/.env.prod`.
 6. Enable claiming with the fenced operator command below, then immediately launch a controlled one-recipient staging survey.
@@ -51,7 +51,7 @@ Before Phase 2 activation, the rollback workflow validates the target artifact b
 
 Bulk reminders use the same `SURVEY_DELIVERY_V2_ENABLED`, claiming, sending, rate, suppression, and release-fence controls; this change does not enable any hosted gate. Before allowing an administrator to launch the first reminder:
 
-1. Apply `v1_8_bulk_survey_reminders.sql` and verify a second Liquibase update is a no-op.
+1. Quiesce sending, claiming, and webhook projection before applying `v1_8_bulk_survey_reminders.sql`; verify a second Liquibase update is a no-op.
 2. Deploy the API and worker from the same release and pin both sending/claiming controls to that exact revision.
 3. Confirm the release marker reports `reminder_provider_boundary >= 2` and a fresh compatible worker heartbeat exists for the exact configured `RESEND_PROVIDER_ACCOUNT_SCOPE`.
 4. Exercise readiness with fakes or a provider-disabled environment first. Do not use `/api/testEmail`; it remains gone.

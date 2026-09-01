@@ -1954,6 +1954,23 @@ test('bulk reminder migration is additive, rerunnable through Liquibase, and fol
   assert.doesNotMatch(migration,/\bTRUNCATE\b|\bDELETE FROM respondent\b|DROP TABLE|DROP COLUMN/i);
 });
 
+test('remote deployment quiesces old workers before state-converting migrations', () => {
+  const deploy=fs.readFileSync(path.join(__dirname,'../../scripts/deploy/remote-deploy.sh'),'utf8');
+  const sendingPause=deploy.indexOf('set-email-sending.js false');
+  const claimingPause=deploy.indexOf('set-email-claiming.js false');
+  const webhookPause=deploy.indexOf('set-webhook-processing.js false');
+  const quiescence=deploy.indexOf('Waiting for dispatch and webhook workers to observe disabled controls');
+  const migrationCall=deploy.lastIndexOf('\nrun_database_migrations\n');
+  assert.ok(sendingPause>0&&claimingPause>sendingPause&&webhookPause>claimingPause);
+  assert.ok(quiescence>webhookPause&&migrationCall>quiescence,'worker handoff and drain must precede Liquibase execution');
+  assert.match(deploy,/claiming=true AND heartbeat_at>now\(\)-interval '45 seconds'/);
+  assert.match(deploy,/processing=true AND heartbeat_at>now\(\)-interval '45 seconds'/);
+  assert.ok(deploy.indexOf('trap restore_pre_activation_handoff EXIT')<sendingPause,'migration failures must enter the guarded handoff cleanup');
+  assert.match(deploy,/MIGRATION_STARTED=true[\s\S]+run_database_migrations/);
+  const preActivationRestore=deploy.slice(deploy.indexOf('restore_pre_activation_handoff()'),deploy.indexOf('trap restore_pre_activation_handoff EXIT'));
+  assert.match(preActivationRestore,/MIGRATION_STARTED[\s\S]+validate-release-capabilities\.js[\s\S]+PREVIOUS_RELEASE[\s\S]+leaving email controls paused/,'post-migration failure must not resume an incompatible previous release');
+});
+
 test('rollback capability validation permits no-reminder artifacts, rejects shared-queue v1, and accepts isolated-queue v2', (t) => {
   const release=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'reminder-capability-'));
   t.after(()=>fs.rmSync(release,{recursive:true,force:true}));

@@ -276,7 +276,16 @@ function prepareSurveyForDemo(value) {
 
 // Resend signatures cover the exact bytes; this route must precede JSON parsing.
 app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '256kb' }), createResendWebhookHandler({ pool, env: process.env }));
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
+app.use((error, req, res, next) => {
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'request_too_large',
+      message: 'Request body exceeds the allowed size.',
+    });
+  }
+  return next(error);
+});
 
 function configuredCorsOrigins(env = process.env) {
   const additionalSurveyOrigins = String(env.SURVEY_ALLOWED_ORIGINS || '')

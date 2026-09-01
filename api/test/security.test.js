@@ -1685,6 +1685,31 @@ test('dashboard/admin endpoints require authentication', async () => {
   }
 });
 
+test('JSON parsing accepts valid roster-sized requests and returns structured oversized errors', async () => {
+  const validLargeBatch = {
+    expectedRevision: 0,
+    additions: Array.from({ length: 1000 }, (_, index) => ({
+      name: `Respondent ${index}`,
+      email: `${'a'.repeat(80)}${index}@example.test`,
+      language: 'English',
+      canRespond: true,
+    })),
+  };
+  const overLegacyLimit = await request(app)
+    .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
+    .send(validLargeBatch);
+  assert.equal(overLegacyLimit.status, 401);
+
+  const oversized = await request(app)
+    .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
+    .send({ padding: 'x'.repeat(2 * 1024 * 1024) });
+  assert.equal(oversized.status, 413);
+  assert.deepEqual(oversized.body, {
+    error: 'request_too_large',
+    message: 'Request body exceeds the allowed size.',
+  });
+});
+
 test('public signup can be disabled by ALLOW_PUBLIC_SIGNUP=false', async () => {
   const res = await request(app)
     .post('/api/register')

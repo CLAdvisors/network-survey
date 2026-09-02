@@ -30,10 +30,14 @@ export const surveyTableSx = {
   '& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell[data-field="name"]': {
     fontWeight: 700,
   },
+  '@media (hover: none)': {
+    '& .MuiDataGrid-row.Mui-selected:hover': {
+      backgroundColor: (theme) => alpha(theme.palette.primary.dark, theme.palette.action.selectedOpacity),
+    },
+  },
   '@media (forced-colors: active)': {
     '& .MuiDataGrid-row.Mui-selected': {
       backgroundColor: 'Canvas',
-      borderInlineStart: '4px solid Highlight',
       boxShadow: 'none',
       color: 'CanvasText',
     },

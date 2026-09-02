@@ -375,30 +375,45 @@ function emailHistoryCursorSecret(config = process.env) {
   return secret;
 }
 
+function emailHistoryCursorKey(config = process.env) {
+  return crypto.createHmac('sha256', emailHistoryCursorSecret(config))
+    .update('email-history-cursor-encryption-v1')
+    .digest();
+}
+
 function encodeEmailHistoryCursor({ surveyId, organizationId, createdAt, id }, config = process.env) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(String(createdAt || ''))) throw new LifecycleError(500, 'email_history_cursor_failed', 'Email history pagination could not be created.');
-  const payload = Buffer.from(JSON.stringify({
+  const plaintext = Buffer.from(JSON.stringify({
     v: 1,
     surveyId: String(surveyId),
     organizationId: String(organizationId),
     createdAt: String(createdAt),
     id: String(id),
-  })).toString('base64url');
-  const signature = crypto.createHmac('sha256', emailHistoryCursorSecret(config)).update(payload).digest('base64url');
-  return `${payload}.${signature}`;
+  }));
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', emailHistoryCursorKey(config), nonce);
+  cipher.setAAD(Buffer.from('email-history-cursor:v1'));
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return `v1.${nonce.toString('base64url')}.${ciphertext.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}`;
 }
 
 function decodeEmailHistoryCursor(cursor, survey, config = process.env) {
   const invalid = () => { throw new LifecycleError(400, 'email_history_cursor_invalid', 'Email history cursor is invalid or expired.'); };
-  if (typeof cursor !== 'string' || cursor.length < 10 || cursor.length > MAX_EMAIL_HISTORY_CURSOR_LENGTH) invalid();
+  if (typeof cursor !== 'string' || cursor.length < 40 || cursor.length > MAX_EMAIL_HISTORY_CURSOR_LENGTH) invalid();
   const parts = cursor.split('.');
-  if (parts.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(parts[0]) || !/^[A-Za-z0-9_-]{43}$/.test(parts[1])) invalid();
-  const expected = crypto.createHmac('sha256', emailHistoryCursorSecret(config)).update(parts[0]).digest();
-  let actual;
-  try { actual = Buffer.from(parts[1], 'base64url'); } catch { invalid(); }
-  if (actual.toString('base64url') !== parts[1] || actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) invalid();
+  if (parts.length !== 4 || parts[0] !== 'v1' || !/^[A-Za-z0-9_-]{16}$/.test(parts[1])
+      || !/^[A-Za-z0-9_-]+$/.test(parts[2]) || !/^[A-Za-z0-9_-]{22}$/.test(parts[3])) invalid();
   let value;
-  try { value = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')); } catch { invalid(); }
+  try {
+    const nonce = Buffer.from(parts[1], 'base64url');
+    const ciphertext = Buffer.from(parts[2], 'base64url');
+    const tag = Buffer.from(parts[3], 'base64url');
+    if (nonce.toString('base64url') !== parts[1] || ciphertext.toString('base64url') !== parts[2] || tag.toString('base64url') !== parts[3]) invalid();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', emailHistoryCursorKey(config), nonce);
+    decipher.setAAD(Buffer.from('email-history-cursor:v1'));
+    decipher.setAuthTag(tag);
+    value = JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
+  } catch { invalid(); }
   if (value?.v !== 1 || value?.surveyId !== String(survey.id) || value?.organizationId !== String(survey.organization_id)
       || !UUID_RE.test(String(value?.id || '')) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(String(value?.createdAt || ''))) invalid();
   return { createdAt: value.createdAt, id: value.id };
@@ -406,9 +421,10 @@ function decodeEmailHistoryCursor(cursor, survey, config = process.env) {
 
 function emailHistoryOutcome(row) {
   const outcome = (code, label, explanation, occurredAt = null) => ({ code, label, explanation, occurredAt });
+  const suppressionIsAmbiguous = row.provider_suppressed_at && ['uncertain', 'leased', 'reminder_leased'].includes(row.status);
   if (row.provider_complained_at) return outcome('complained', 'Complaint reported', 'The recipient reported this message as spam.', row.provider_complained_at);
   if (row.provider_bounced_at) return outcome('bounced', 'Bounced', "The recipient's mail server rejected the message.", row.provider_bounced_at);
-  if (row.provider_suppressed_at) return outcome('suppressed', 'Suppressed', 'The message was blocked for this address and was not sent again.', row.provider_suppressed_at);
+  if (row.provider_suppressed_at && !suppressionIsAmbiguous) return outcome('suppressed', 'Suppressed', 'The message was blocked for this address and was not sent again.', row.provider_suppressed_at);
   if (row.provider_failed_at) return outcome('provider_failed', 'Delivery failed', 'The email provider reported that delivery failed.', row.provider_failed_at);
   if (row.provider_delivered_at) return outcome('delivered', 'Delivered', "The recipient's mail server confirmed delivery.", row.provider_delivered_at);
   if (row.provider_delayed_at) return outcome('delayed', 'Delayed', 'The email provider reported a delivery delay; a final result is not yet available.', row.provider_delayed_at);
@@ -448,10 +464,13 @@ function emailHistoryItem(row) {
   };
 }
 
-async function listEmailHistory(pool, user, surveyId, { cursor, limit } = {}, config = process.env) {
+async function listEmailHistory(pool, user, surveyId, params = {}, config = process.env) {
   const client = await pool.connect();
   try {
     const survey = await loadAuthorizedSurvey(client, user, surveyId, 'analyst');
+    const unsupported = Object.keys(params).filter((key) => !['cursor', 'limit'].includes(key));
+    if (unsupported.length) throw new LifecycleError(400, 'email_history_parameter_invalid', 'Email history contains an unsupported query parameter.');
+    const { cursor, limit } = params;
     let pageSize = DEFAULT_EMAIL_HISTORY_PAGE_SIZE;
     if (limit !== undefined) {
       if (typeof limit !== 'string' || !/^[1-9][0-9]{0,3}$/.test(limit)) throw new LifecycleError(400, 'email_history_limit_invalid', 'Email history limit must be a positive integer.');

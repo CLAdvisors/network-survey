@@ -4,7 +4,7 @@
 
 `GET /api/surveys/:surveyId/email-history?limit=25&cursor=…` is an authenticated, read-only message history. The stable survey UUID is authoritative. Every page first re-authorizes the current user as an analyst-or-higher member (or platform administrator), then scopes the delivery query by both `survey_id` and the authorized `organization_id`. Invalid/missing/unauthorized survey IDs all return `survey_not_found` (404).
 
-Pages default to 50 records and are capped at 100. The query fetches `limit + 1` rows ordered by `(created_at DESC, id DESC)`. `pageInfo.hasMore` and a non-null `pageInfo.nextCursor` are returned only when the extra row exists. The HMAC-signed, base64url cursor binds its version, survey, tenant, exact PostgreSQL timestamp in microseconds, and delivery UUID. Cursor parsing is length/schema/signature bounded; bad or cross-survey cursors return 400 only after survey authorization. All SQL values are parameters.
+Pages default to 50 records and are capped at 100. The query fetches `limit + 1` rows ordered by `(created_at DESC, id DESC)`. `pageInfo.hasMore` and a non-null `pageInfo.nextCursor` are returned only when the extra row exists. The versioned AES-256-GCM encrypted cursor binds its survey, tenant, exact PostgreSQL timestamp in microseconds, and delivery UUID without disclosing those values. Its key is domain-separated from the configured cursor/session secret. Cursor parsing is length/schema/authentication bounded; bad or cross-survey cursors return 400 only after survey authorization. All SQL values are parameters.
 
 Response shape:
 
@@ -48,11 +48,11 @@ Webhook-projected occurrences are authoritative and can overlap. The displayed c
 13. queued
 14. unknown legacy/incomplete state
 
-Adverse webhook truth intentionally remains visible even if another positive occurrence also exists. Opens are never queried or interpreted. “Provider accepted” is not recipient delivery; only “Delivered” represents recipient mail-server confirmation.
+Adverse webhook truth intentionally remains visible even if another positive occurrence also exists. Because the durable suppression timestamp is also used for local provider-boundary cancellation, suppression does not override an `uncertain` or actively leased provider request; those remain unknown/processing unless a definitive webhook occurrence resolves them. Opens are never queried or interpreted. “Provider accepted” is not recipient delivery; only “Delivered” represents recipient mail-server confirmation.
 
 ## Privacy boundary
 
-The API deliberately omits respondent tokens, tokenized URLs, subjects/bodies/templates, render inputs, payload hashes, provider IDs/payloads/webhook bodies, raw error codes/messages, suppression evidence, credentials, lease/claim data, and infrastructure/state data. The compatibility `/deliveries` URL returns the same redacted contract. Responses use `Cache-Control: no-store`.
+The API deliberately omits respondent tokens, tokenized URLs, subjects/bodies/templates, render inputs, payload hashes, provider IDs/payloads/webhook bodies, raw error codes/messages, suppression evidence, credentials, lease/claim data, and infrastructure/state data. The retired `/deliveries` URL returns the same redacted contract; legacy status filters and raw UUID cursors are rejected rather than silently returning unfiltered identities. Responses use `Cache-Control: no-store`.
 
 The dashboard renders the section only for roles already permitted to view the survey roster. It uses an accessible desktop table and narrow-screen cards, explicit refresh, bounded next/previous pages, humane empty/loading/error states, and abort-plus-generation fencing. Loaded data is keyed by session, survey, page, and cursor so switching any of them cannot display a prior response. It does not poll or add resend, retry, export, search, or body preview.
 

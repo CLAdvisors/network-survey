@@ -26,6 +26,7 @@ const Outcome = ({ status }) => (
     <Typography variant="caption" component="p" color="text.secondary" sx={{ mt: 0.75, maxWidth: 360 }}>
       {status?.explanation || 'This historical record does not contain enough information to determine the current outcome.'}
     </Typography>
+    {status?.occurredAt && <Typography variant="caption" component="p" color="text.secondary" sx={{ mt: 0.5 }}>Outcome reported {formatDateTime(status.occurredAt)}</Typography>}
   </Box>
 );
 
@@ -146,6 +147,11 @@ const EmailHistoryView = ({ survey, sessionKey }) => {
     focusAfterLoad.current = true;
     setPageIndex((current) => current - 1);
   };
+  const retryCurrentPage = () => {
+    focusAfterLoad.current = true;
+    setAnnouncement(`Retrying email history page ${pageIndex + 1}.`);
+    setRefreshToken((value) => value + 1);
+  };
   const refresh = () => {
     focusAfterLoad.current = false;
     setAnnouncement('Refreshing newest email history.');
@@ -169,14 +175,14 @@ const EmailHistoryView = ({ survey, sessionKey }) => {
       </Stack>
 
       {loading && visibleMessages.length === 0 && <Box role="status" sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /><Typography variant="body2" sx={{ mt: 1 }}>Loading email history…</Typography></Box>}
-      {error && <Alert severity="error" sx={{ mt: 2 }} action={<Button color="inherit" onClick={refresh} aria-label="Retry loading email history">Retry</Button>}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mt: 2 }} action={<Button color="inherit" onClick={retryCurrentPage} aria-label={`Retry email history page ${pageIndex + 1}`}>Retry page</Button>}>{error}</Alert>}
       {!loading && !error && visibleMessages.length === 0 && <Typography sx={{ py: 4 }} color="text.secondary">No invitation or reminder messages have been queued for this survey.</Typography>}
       {visibleMessages.length > 0 && <Box sx={{ mt: 2 }}><DesktopHistory messages={visibleMessages} /><MobileHistory messages={visibleMessages} /></Box>}
 
-      {!error && (visibleMessages.length > 0 || pageIndex > 0) && <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2 }}>
+      {(visibleMessages.length > 0 || pageIndex > 0) && <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2 }}>
         <Button onClick={previousPage} disabled={loading || pageIndex === 0} aria-label="Previous email history page">Previous</Button>
         <Typography variant="body2" color="text.secondary" aria-live="polite">Page {pageIndex + 1}</Typography>
-        <Button onClick={nextPage} disabled={loading || !pageInfo?.hasMore || !pageInfo?.nextCursor} aria-label="Next email history page">Next</Button>
+        <Button onClick={nextPage} disabled={loading || Boolean(error) || !pageInfo?.hasMore || !pageInfo?.nextCursor} aria-label="Next email history page">Next</Button>
       </Stack>}
       <Box role="status" aria-live="polite" aria-atomic="true" sx={{ position: 'absolute', width: 1, height: 1, p: 0, m: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
         {announcement}

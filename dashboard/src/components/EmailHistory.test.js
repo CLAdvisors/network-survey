@@ -49,6 +49,7 @@ test('renders semantic desktop table and responsive cards with privacy-safe stat
   expect(screen.getByTestId('email-history-table-view')).toBeInTheDocument();
   expect(screen.getByTestId('email-history-card-view')).toHaveAttribute('aria-label', 'Email message history cards');
   expect(screen.getAllByText('Provider accepted').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getAllByText(/Outcome reported/).length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText(/only “Delivered” confirms receipt/i)).toBeInTheDocument();
   expect(screen.getAllByText('A Recipient With A Very Long Name That Must Wrap').length).toBeGreaterThanOrEqual(2);
   expect(screen.getAllByText('a.very.long.address.for.responsive.layout@example.test').length).toBeGreaterThanOrEqual(2);
@@ -69,7 +70,7 @@ test('shows bounded loading, empty, error/retry, and explicit refresh states', a
   fireEvent.click(screen.getByRole('button', { name: 'Refresh email history for Lifecycle survey' }));
   expect(await screen.findByText('History is temporarily unavailable.')).toBeInTheDocument();
   api.get.mockResolvedValueOnce(response('survey-1'));
-  fireEvent.click(screen.getByRole('button', { name: 'Retry loading email history' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Retry email history page 1' }));
   expect((await screen.findAllByText('A Recipient With A Very Long Name That Must Wrap')).length).toBeGreaterThanOrEqual(2);
   expect(api.get.mock.calls.every(([, options]) => options?.signal)).toBe(true);
 
@@ -98,6 +99,21 @@ test('paginates with opaque cursors, supports previous, and focuses the section 
   fireEvent.click(screen.getByRole('button', { name: 'Refresh email history for Lifecycle survey' }));
   expect((await screen.findAllByText('Refreshed newest')).length).toBeGreaterThanOrEqual(2);
   expect(api.get.mock.calls[3][0]).not.toContain('cursor=');
+});
+
+test('keeps previous and current-page retry available when a later page fails', async () => {
+  api.get
+    .mockResolvedValueOnce(response('survey-1', [message()], { limit: 25, hasMore: true, nextCursor: 'page-two.cursor' }))
+    .mockRejectedValueOnce({ response: { data: { message: 'Page two unavailable.' } } })
+    .mockResolvedValueOnce(response('survey-1', [message({ recipient: { displayName: 'Retried page two', address: 'retried@example.test' } })]));
+  render(<EmailHistory survey={{ id: 'survey-1', name: 'Lifecycle survey' }} />);
+  await screen.findAllByText('A Recipient With A Very Long Name That Must Wrap');
+  fireEvent.click(screen.getByRole('button', { name: 'Next email history page' }));
+  expect(await screen.findByText('Page two unavailable.')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Previous email history page' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry email history page 2' }));
+  expect((await screen.findAllByText('Retried page two')).length).toBeGreaterThanOrEqual(2);
+  expect(api.get.mock.calls[2][0]).toContain('cursor=page-two.cursor');
 });
 
 test('never flashes or accepts stale recipients across survey and session switches', async () => {

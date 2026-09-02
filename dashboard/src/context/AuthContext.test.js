@@ -37,6 +37,8 @@ test('logout fences identity immediately and serializes a following login behind
   const initialRevision = Number(screen.getByTestId('revision').textContent);
 
   await userEvent.click(screen.getByRole('button', { name: 'Logout now' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Logout now' }));
+  expect(api.post.mock.calls.filter(([url]) => url === '/logout')).toHaveLength(1);
   expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
   expect(screen.getByTestId('user')).toHaveTextContent('none');
   expect(Number(screen.getByTestId('revision').textContent)).toBeGreaterThan(initialRevision);

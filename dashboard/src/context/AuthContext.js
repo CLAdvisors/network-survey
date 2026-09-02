@@ -65,6 +65,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
+    if (pendingLogout.current) return pendingLogout.current;
     const generation = ++authGeneration.current;
     setIsAuthenticated(false);
     setUser(null);

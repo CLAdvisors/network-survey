@@ -56,17 +56,19 @@ function historyPool(rows, { role = 'analyst', surveyId = SURVEY_ID, organizatio
   return { pool: { connect: async () => client }, calls };
 }
 
-test('opaque cursors are signed, bounded, and scoped to the exact survey and tenant', () => {
-  const cursor = encodeEmailHistoryCursor({ surveyId: SURVEY_ID, organizationId: ORG_ID, createdAt: '2026-08-01T10:00:00.123456Z', id: baseRow().id }, SECRET);
-  assert.equal(cursor.includes(SURVEY_ID), false, 'cursor payload is opaque on the wire');
+test('opaque cursors are encrypted, authenticated, bounded, and scoped to the exact survey and tenant', () => {
+  const input = { surveyId: SURVEY_ID, organizationId: ORG_ID, createdAt: '2026-08-01T10:00:00.123456Z', id: baseRow().id };
+  const cursor = encodeEmailHistoryCursor(input, SECRET);
+  assert.equal(cursor.includes(SURVEY_ID), false, 'cursor does not disclose its survey UUID');
+  assert.equal(cursor.includes(baseRow().id), false, 'cursor does not disclose its delivery UUID');
+  assert.notEqual(cursor, encodeEmailHistoryCursor(input, SECRET), 'a random nonce prevents equality leakage');
   assert.deepEqual(decodeEmailHistoryCursor(cursor, { id: SURVEY_ID, organization_id: ORG_ID }, SECRET), {
     createdAt: '2026-08-01T10:00:00.123456Z', id: baseRow().id,
   });
   assert.throws(() => decodeEmailHistoryCursor(`${cursor.slice(0, -1)}x`, { id: SURVEY_ID, organization_id: ORG_ID }, SECRET), error => error instanceof LifecycleError && error.code === 'email_history_cursor_invalid');
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-  const signature = cursor.split('.')[1];
-  const alias = `${cursor.slice(0, -1)}${alphabet[(alphabet.indexOf(signature.at(-1)) + 1) % alphabet.length]}`;
-  assert.throws(() => decodeEmailHistoryCursor(alias, { id: SURVEY_ID, organization_id: ORG_ID }, SECRET), error => error.code === 'email_history_cursor_invalid');
+  const parts = cursor.split('.');
+  const tamperedCiphertext = [parts[0], parts[1], `${parts[2].slice(0, -1)}${parts[2].at(-1) === 'A' ? 'B' : 'A'}`, parts[3]].join('.');
+  assert.throws(() => decodeEmailHistoryCursor(tamperedCiphertext, { id: SURVEY_ID, organization_id: ORG_ID }, SECRET), error => error.code === 'email_history_cursor_invalid');
   assert.throws(() => decodeEmailHistoryCursor(cursor, { id: OTHER_SURVEY_ID, organization_id: ORG_ID }, SECRET), error => error.status === 400);
   assert.throws(() => decodeEmailHistoryCursor('x'.repeat(1025), { id: SURVEY_ID, organization_id: ORG_ID }, SECRET), error => error.status === 400);
 });
@@ -88,6 +90,8 @@ test('status precedence preserves adverse webhook truth, delivery, delay, accept
   assert.equal(emailHistoryOutcome(baseRow({ status: 'reminder_retry_wait', attempt_count: 2 })).code, 'processing');
   assert.equal(emailHistoryOutcome(baseRow({ status: 'failed' })).code, 'failed');
   assert.equal(emailHistoryOutcome(baseRow({ status: 'uncertain' })).code, 'unknown');
+  assert.equal(emailHistoryOutcome(baseRow({ status: 'uncertain', provider_suppressed_at: '2026-08-02T00:00:00Z' })).code, 'unknown', 'local suppression must not erase an unresolved provider request');
+  assert.equal(emailHistoryOutcome(baseRow({ status: 'leased', provider_suppressed_at: '2026-08-02T00:00:00Z' })).code, 'processing', 'leased local suppression remains non-definitive');
   assert.equal(emailHistoryOutcome(baseRow({ status: 'cancelled' })).code, 'skipped');
   assert.equal(emailHistoryOutcome(baseRow({ status: 'cancelled', attempt_count: 1 })).code, 'cancelled');
   assert.equal(emailHistoryOutcome(baseRow()).code, 'queued');
@@ -160,6 +164,7 @@ test('zero history and legacy/null snapshots return a stable bounded contract', 
   assert.equal(response.messages[0].status.code, 'unknown');
   assert.equal(response.messages[0].recipient.displayName, null);
   await assert.rejects(() => listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, { limit: '0' }, SECRET), error => error.code === 'email_history_limit_invalid');
+  await assert.rejects(() => listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, { status: 'failed' }, SECRET), error => error.code === 'email_history_parameter_invalid');
 });
 
 test('history route is authenticated/no-store and v1_11 is additive in the master pending set', () => {
@@ -167,6 +172,7 @@ test('history route is authenticated/no-store and v1_11 is additive in the maste
   const migration = fs.readFileSync(path.join(__dirname, '../../db/changelogs/v1_11_survey_email_history_pagination.sql'), 'utf8');
   const master = fs.readFileSync(path.join(__dirname, '../../db/changelogs/master-changelog.xml'), 'utf8');
   const cutover = fs.readFileSync(path.join(__dirname, '../../db/changelogs/cla-production-cutover.xml'), 'utf8');
+  const ci = fs.readFileSync(path.join(__dirname, '../../.github/workflows/ci.yml'), 'utf8');
   assert.match(server, /\/api\/surveys\/:surveyId\/email-history', requireAuth, sendEmailHistory/);
   assert.match(server, /sendEmailHistory[\s\S]+Cache-Control', 'no-store'/);
   assert.match(master, /v1_10_editable_survey_instructions\.sql[\s\S]+v1_11_survey_email_history_pagination\.sql/);
@@ -177,4 +183,7 @@ test('history route is authenticated/no-store and v1_11 is additive in the maste
   assert.match(migration, /DROP INDEX CONCURRENTLY IF EXISTS delivery_survey_history_page/);
   assert.match(migration, /CREATE INDEX CONCURRENTLY delivery_survey_history_page[\s\S]+survey_id, organization_id, created_at DESC, id DESC/);
   assert.doesNotMatch(migration, /DELETE|TRUNCATE|DROP TABLE|DROP COLUMN/i);
+  assert.match(ci, /db-pre-lifecycle[\s\S]+v1_11_survey_email_history_pagination\.sql\/d/);
+  assert.match(ci, /db-capability1[\s\S]+v1_11_survey_email_history_pagination\.sql\/d/);
+  assert.match(ci, /email history pagination index missing or invalid/);
 });

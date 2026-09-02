@@ -12,9 +12,9 @@ const choices = [
   { value: 'stable-beta', label: 'Beta', definition: 'A short second definition.' },
 ];
 
-function Fixture({ variant = 'popover', parentEvents = {}, popoverHoverTarget = 'button' }) {
+function Fixture({ variant = 'popover-info', parentEvents = {} }) {
   return (
-    <DefinitionExperience variant={variant} choices={choices} popoverHoverTarget={popoverHoverTarget}>
+    <DefinitionExperience variant={variant} choices={choices}>
       {({ renderControl, getItemProps }) => (
         <div data-testid="answer-control" {...parentEvents}>
           {choices.map((choice) => <div key={choice.value} {...getItemProps(choice)}>{choice.label}{renderControl(choice)}</div>)}
@@ -39,12 +39,12 @@ describe('DefinitionExperience', () => {
   });
 
   it('compares explicit-button and whole-row hover targets', () => {
-    const buttonView = render(<Fixture popoverHoverTarget="button" />);
+    const buttonView = render(<Fixture variant="popover-info" />);
     fireEvent.mouseEnter(screen.getByText('Beta').closest('div'));
     expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
     buttonView.unmount();
 
-    render(<Fixture popoverHoverTarget="row" />);
+    render(<Fixture variant="popover-row" />);
     const row = screen.getByText('Beta').closest('div');
     fireEvent.mouseEnter(row);
     expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();

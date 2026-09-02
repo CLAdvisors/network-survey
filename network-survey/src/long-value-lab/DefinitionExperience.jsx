@@ -2,7 +2,8 @@ import React from 'react';
 import { extractChoiceDefinition } from './longValueSchema';
 
 export const DEFINITION_VARIANTS = [
-  { id: 'popover', label: 'Focus popover', summary: 'One transient explanation at a time.' },
+  { id: 'popover-info', label: 'Info-button popover', summary: 'Hover, focus, or activate the explicit information button.' },
+  { id: 'popover-row', label: 'Whole-row popover', summary: 'Hover anywhere on a value row; focus or activation still uses its information button.' },
   { id: 'inline', label: 'Expandable cards', summary: 'Keep several definitions open in context.' },
   { id: 'panel', label: 'Detail panel', summary: 'Scan labels while one reading region stays visible.' },
   { id: 'glossary', label: 'Glossary preview', summary: 'Study or search definitions in a separate preview.' },
@@ -20,7 +21,9 @@ function stopDefinitionEvent(event) {
   event.stopPropagation();
 }
 
-export function DefinitionExperience({ variant, choices, children, popoverHoverTarget = 'button' }) {
+export function DefinitionExperience({ variant, choices, children }) {
+  const isPopover = variant === 'popover-info' || variant === 'popover-row';
+  const rowHover = variant === 'popover-row';
   const availableChoices = React.useMemo(
     () => choices.filter((choice) => definitionFor(choice)),
     [choices]
@@ -43,7 +46,7 @@ export function DefinitionExperience({ variant, choices, children, popoverHoverT
   }, [variant]);
 
   React.useEffect(() => {
-    if (variant !== 'popover') return undefined;
+    if (!isPopover) return undefined;
     const outside = (event) => {
       if (!rootRef.current?.contains(event.target)) {
         setOpenKeys(new Set());
@@ -52,7 +55,7 @@ export function DefinitionExperience({ variant, choices, children, popoverHoverT
     };
     document.addEventListener('pointerdown', outside);
     return () => document.removeEventListener('pointerdown', outside);
-  }, [variant]);
+  }, [isPopover]);
 
   React.useEffect(() => {
     if (glossaryOpen) dialogCloseRef.current?.focus();
@@ -113,7 +116,7 @@ export function DefinitionExperience({ variant, choices, children, popoverHoverT
   };
 
   const getItemProps = (choice) => {
-    if (variant !== 'popover' || popoverHoverTarget !== 'row' || !definitionFor(choice)) return {};
+    if (!rowHover || !definitionFor(choice)) return {};
     const key = keyFor(choice);
     return {
       onMouseEnter: (event) => {
@@ -159,15 +162,15 @@ export function DefinitionExperience({ variant, choices, children, popoverHoverT
           onMouseEnter={(event) => {
             lastOpenerRef.current = event.currentTarget;
             setActiveKey(key);
-            if (variant === 'popover' && popoverHoverTarget === 'button') openTransient(key);
+            if (variant === 'popover-info') openTransient(key);
           }}
           onFocus={(event) => {
             lastOpenerRef.current = event.currentTarget;
             setActiveKey(key);
-            if (variant === 'popover') openTransient(key);
+            if (isPopover) openTransient(key);
           }}
           onBlur={(event) => {
-            if (variant !== 'popover' || pinnedKey === key) return;
+            if (!isPopover || pinnedKey === key) return;
             if (event.relatedTarget?.closest?.(`[data-definition-cluster="${key}"]`)) return;
             setOpenKeys(new Set());
           }}
@@ -179,16 +182,16 @@ export function DefinitionExperience({ variant, choices, children, popoverHoverT
         >
           <span aria-hidden="true">i</span>
         </button>
-        {(variant === 'popover' || variant === 'inline') && expanded && (
+        {(isPopover || variant === 'inline') && expanded && (
           <section
             id={detailsId}
-            className={`lv-definition-callout lv-definition-callout--${variant}`}
+            className={`lv-definition-callout lv-definition-callout--${isPopover ? 'popover' : variant}`}
             data-definition-cluster={key}
             aria-label={`Definition: ${label}`}
           >
             <strong>{label}</strong>
             <DefinitionText text={definition} />
-            {variant === 'popover' && (
+            {isPopover && (
               <button type="button" className="lv-text-button" onClick={(event) => { stopDefinitionEvent(event); closeAll(); }}>
                 Close definition
               </button>

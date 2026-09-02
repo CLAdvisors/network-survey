@@ -2,7 +2,7 @@ import React from 'react';
 import { DefinitionExperience } from './DefinitionExperience';
 import { extractLongValueChoices } from './longValueSchema';
 
-export default function LongValueRadiogroup({ question, definitionVariant, popoverHoverTarget }) {
+export default function LongValueRadiogroup({ question, definitionVariant }) {
   const choices = React.useMemo(() => extractLongValueChoices(question), [question, question?.choices]);
   const [value, setValue] = React.useState(question?.value);
   const groupName = React.useId();
@@ -21,7 +21,7 @@ export default function LongValueRadiogroup({ question, definitionVariant, popov
   };
 
   return (
-    <DefinitionExperience variant={definitionVariant} choices={choices} popoverHoverTarget={popoverHoverTarget}>
+    <DefinitionExperience variant={definitionVariant} choices={choices}>
       {({ renderControl, getItemProps }) => (
         <fieldset className="lv-choice-fieldset">
           <legend className="lv-visually-hidden">{question?.title || question?.name}</legend>

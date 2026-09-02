@@ -26,10 +26,11 @@ The lab registers one optional custom property on SurveyJS `itemvalue` objects, 
 
 ## Variants
 
-1. **Focus popover** — one transient explanation at a time; opens through hover, keyboard focus, or activation. A lab toggle compares explicit information-button hover with whole-value-row hover. Compact, but repeated inspection may increase effort.
-2. **Expandable cards** — explicit, independently expandable definitions remain in context. Strong for reading and comparison, with high vertical cost.
-3. **Detail panel** — a synchronized, persistent reading region follows the last previewed value. Dense lists remain scannable; the relationship may be less obvious on narrow screens.
-4. **Glossary preview** — a searchable modal glossary supports up-front study and targeted previews while keeping the task compact. It introduces mode switching and memory load.
+1. **Info-button popover** — one transient explanation at a time; hover targets only the explicit information control, while focus and activation provide equivalent access. Compact and intentional, but the small discovery point may be missed.
+2. **Whole-row popover** — the same accessible popover with the entire value row as its hover target. Easier to discover, but more prone to incidental activation while scanning.
+3. **Expandable cards** — explicit, independently expandable definitions remain in context. Strong for reading and comparison, with high vertical cost.
+4. **Detail panel** — a synchronized, persistent reading region follows the last previewed value. Dense lists remain scannable; the relationship may be less obvious on narrow screens.
+5. **Glossary preview** — a searchable modal glossary supports up-front study and targeted previews while keeping the task compact. It introduces mode switching and memory load.
 
 Each treatment is applied to the existing custom draggable Q-sort/ranking workflow and to a SurveyJS radiogroup rendered through the same custom-question host pattern. Answers remain owned by a real `survey-core` `Model`.
 

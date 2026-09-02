@@ -36,21 +36,20 @@ function registerLabSchema() {
 
 function variantFromLocation() {
   const requested = new URLSearchParams(window.location.search).get('variant');
-  return DEFINITION_VARIANTS.some((variant) => variant.id === requested) ? requested : 'popover';
+  if (requested === 'popover') return 'popover-info';
+  return DEFINITION_VARIANTS.some((variant) => variant.id === requested) ? requested : 'popover-info';
 }
 
-function LabSurvey({ variant, popoverHoverTarget, onAnswersChange }) {
+function LabSurvey({ variant, onAnswersChange }) {
   const variantRef = React.useRef(variant);
-  const hoverTargetRef = React.useRef(popoverHoverTarget);
   const rootsRef = React.useRef(new Map());
   variantRef.current = variant;
-  hoverTargetRef.current = popoverHoverTarget;
 
   const renderQuestion = React.useCallback((question, root) => {
     const choices = extractLongValueChoices(question);
     if (question.getType() === 'draggableranking') {
       root.render(
-        <DefinitionExperience variant={variantRef.current} choices={choices} popoverHoverTarget={hoverTargetRef.current}>
+        <DefinitionExperience variant={variantRef.current} choices={choices}>
           {({ renderControl, getItemProps }) => (
             <DraggableRankingQuestion
               question={question}
@@ -67,11 +66,7 @@ function LabSurvey({ variant, popoverHoverTarget, onAnswersChange }) {
       return;
     }
     root.render(
-      <LongValueRadiogroup
-        question={question}
-        definitionVariant={variantRef.current}
-        popoverHoverTarget={hoverTargetRef.current}
-      />
+      <LongValueRadiogroup question={question} definitionVariant={variantRef.current} />
     );
   }, []);
 
@@ -108,7 +103,7 @@ function LabSurvey({ variant, popoverHoverTarget, onAnswersChange }) {
 
   React.useEffect(() => {
     rootsRef.current.forEach((root, question) => renderQuestion(question, root));
-  }, [renderQuestion, variant, popoverHoverTarget]);
+  }, [renderQuestion, variant]);
 
   React.useEffect(() => () => {
     rootsRef.current.forEach((root) => root.unmount());
@@ -120,7 +115,8 @@ function LabSurvey({ variant, popoverHoverTarget, onAnswersChange }) {
 }
 
 const MATRIX = [
-  ['Focus popover', 'Medium', 'Highest', 'Low', 'Inline fallback', 'Strong with focus/click', 'Medium'],
+  ['Info-button popover', 'Medium', 'Highest', 'Low', 'Inline fallback', 'Strong with focus/click', 'Medium'],
+  ['Whole-row popover', 'High on pointer devices', 'Highest', 'Low', 'Inline fallback', 'Strong with focus/click', 'Medium'],
   ['Expandable cards', 'High', 'Low when open', 'High', 'Long but direct', 'Strong, simple semantics', 'Low–medium'],
   ['Detail panel', 'Medium', 'High', 'Medium–high', 'Panel moves above task', 'Good; needs clear updates', 'Medium'],
   ['Glossary preview', 'High launch, low per item', 'Highest', 'High inside glossary', 'Purpose-built dialog', 'Good; focus management risk', 'High'],
@@ -129,7 +125,6 @@ const MATRIX = [
 export default function LongValueLab() {
   const [variant, setVariant] = React.useState(variantFromLocation);
   const [frame, setFrame] = React.useState('full');
-  const [popoverHoverTarget, setPopoverHoverTarget] = React.useState('button');
   const [answers, setAnswers] = React.useState({});
   const selectedVariant = DEFINITION_VARIANTS.find((candidate) => candidate.id === variant);
 
@@ -173,13 +168,6 @@ export default function LongValueLab() {
             ))}
           </div>
           <Typography variant="body2"><strong>{selectedVariant.label}:</strong> {selectedVariant.summary}</Typography>
-          {variant === 'popover' && (
-            <div className="lv-hover-controls" aria-label="Popover hover target">
-              <span>Hover target:</span>
-              <Button size="small" variant={popoverHoverTarget === 'button' ? 'contained' : 'text'} onClick={() => setPopoverHoverTarget('button')}>Info button</Button>
-              <Button size="small" variant={popoverHoverTarget === 'row' ? 'contained' : 'text'} onClick={() => setPopoverHoverTarget('row')}>Whole value row</Button>
-            </div>
-          )}
           <div className="lv-frame-controls" aria-label="Preview width">
             <span>Preview:</span>
             {[['full', 'Responsive'], ['375', '375 px'], ['320', '320 px']].map(([value, label]) => (
@@ -199,7 +187,7 @@ export default function LongValueLab() {
               <small>16 invented values · definitions from one sentence to multiple paragraphs</small>
             </div>
             <div className={PRODUCTION_SURVEY_CLASS_NAME}>
-              <LabSurvey variant={variant} popoverHoverTarget={popoverHoverTarget} onAnswersChange={setAnswers} />
+              <LabSurvey variant={variant} onAnswersChange={setAnswers} />
             </div>
             <section className="lv-answer-state" aria-live="polite" aria-label="Current SurveyJS answer state">
               <strong>Current machine-value answers</strong>
@@ -214,7 +202,7 @@ export default function LongValueLab() {
           <div className="lv-table-scroll" tabIndex="0" aria-label="Scrollable comparison table">
             <table>
               <thead><tr><th>Variant</th><th>Discoverability</th><th>Density</th><th>Comparison</th><th>Mobile</th><th>Accessibility</th><th>Implementation risk</th></tr></thead>
-              <tbody>{MATRIX.map((row) => <tr key={row[0]}>{row.map((cell, index) => index ? <td key={cell}>{cell}</td> : <th scope="row" key={cell}>{cell}</th>)}</tr>)}</tbody>
+              <tbody>{MATRIX.map((row) => <tr key={row[0]}>{row.map((cell, index) => index ? <td key={`${index}-${cell}`}>{cell}</td> : <th scope="row" key={cell}>{cell}</th>)}</tr>)}</tbody>
             </table>
           </div>
         </Paper>

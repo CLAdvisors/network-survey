@@ -40,7 +40,7 @@ describe('LongValueRadiogroup', () => {
 
   it('preserves answer state while switching definition variants', () => {
     const question = questionFixture();
-    const view = render(<LongValueRadiogroup question={question} definitionVariant="popover" />);
+    const view = render(<LongValueRadiogroup question={question} definitionVariant="popover-info" />);
     fireEvent.click(screen.getByRole('radio', { name: /Beta Not selected/ }));
 
     view.rerender(<LongValueRadiogroup question={question} definitionVariant="panel" />);

@@ -48,7 +48,7 @@ vi.mock('./CreateSurveyDialog', () => ({ default: () => null }));
 
 let mountSequence = 0;
 vi.mock('./SurveyInstructionsEditor', () => ({
-  default: ({ surveyId, readOnly, onDirtyChange, onOperationChange }) => <div data-testid="instructions-editor" data-survey={surveyId} data-readonly={String(readOnly)}>Survey Instructions<button onClick={() => onDirtyChange?.(surveyId, 'instructions', true)}>Dirty instructions</button><button onClick={() => onOperationChange?.(surveyId, 'instructions', true)}>Start instructions operation</button></div>,
+  default: ({ surveyId, readOnly, readOnlyMessage, onDirtyChange, onOperationChange }) => <div data-testid="instructions-editor" data-survey={surveyId} data-readonly={String(readOnly)} data-readonly-message={readOnlyMessage || ''}>Survey Instructions<button onClick={() => onDirtyChange?.(surveyId, 'instructions', true)}>Dirty instructions</button><button onClick={() => onOperationChange?.(surveyId, 'instructions', true)}>Start instructions operation</button></div>,
 }));
 vi.mock('./InvitationSubjectEditor', () => ({
   default: ({ surveyId, readOnly, onDirtyChange, onOperationChange }) => {
@@ -230,6 +230,20 @@ test('child mutations cannot replace a newer lifecycle lock with a delayed surve
 
   expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-readonly', 'true');
   expect(api.get.mock.calls.filter(([url]) => url === '/surveys')).toHaveLength(3);
+});
+
+test('uses launched terminology in lifecycle lock messaging while retaining active state logic', async () => {
+  const theme = createTheme();
+  render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Beta' }));
+
+  expect(screen.getByTestId('instructions-editor')).toHaveAttribute(
+    'data-readonly-message',
+    'Instructions are read-only while this survey is launched.',
+  );
+  expect(screen.getByText('Questions are read-only while this survey is launched.')).toBeInTheDocument();
+  expect(screen.getByText('Respondent identities are read-only while this survey is launched.')).toBeInTheDocument();
+  expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-readonly', 'true');
 });
 
 test('repeated survey and lifecycle switches never accumulate or alias email editors', async () => {

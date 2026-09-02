@@ -14,7 +14,7 @@ import ReminderTemplateEditor from "./ReminderTemplateEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
-import { lifecycleStatus, surveyId } from "./surveyLifecycle";
+import { lifecycleLabel, lifecycleStatus, surveyId } from "./surveyLifecycle";
 import { surveyOperationGeneration } from "./useSurveyOperationState";
 
 const Dashboard = () => {
@@ -337,7 +337,7 @@ const Dashboard = () => {
             surveyId={surveyId(selectSurvey)}
             readOnly={selectedReadOnly}
             readOnlyMessage={selectedIsLifecycleLocked
-              ? `Instructions are read-only while this survey is ${lifecycleStatus(selectSurvey)}.`
+              ? `Instructions are read-only while this survey is ${lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.`
               : 'You do not have permission to update these instructions.'}
             onDirtyChange={handleDirtyChange}
             onOperationChange={handleOperationChange}
@@ -346,7 +346,7 @@ const Dashboard = () => {
       )}
 
       <CollapsibleSection title="Survey Questions">
-        {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
+        {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
         <QuestionTable
           rows={questionData}
           loading={questionLoading}
@@ -394,7 +394,7 @@ const Dashboard = () => {
       {(selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations) && (
         <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
           <CollapsibleSection title="Survey Respondents">
-            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
+            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
             <RespondentTable
               rows={selectedCanViewRespondents ? respondentData : null}
               revision={selectedCanViewRespondents ? respondentRevision : null}

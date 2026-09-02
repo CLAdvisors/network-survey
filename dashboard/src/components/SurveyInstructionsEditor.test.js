@@ -91,8 +91,8 @@ test('shows read-only messaging, disables updates, and reloads authoritative con
   expect(await screen.findByText(/Current derived default: Derived default/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole('radio', { name: /hide the instruction block/i }));
 
-  rerender(<SurveyInstructionsEditor surveyId="survey-a" readOnly readOnlyMessage="Instructions are read-only while this survey is active." onDirtyChange={dirty} />);
-  expect(await screen.findByText(/read-only while this survey is active/i)).toBeInTheDocument();
+  rerender(<SurveyInstructionsEditor surveyId="survey-a" readOnly readOnlyMessage="Instructions are read-only while this survey is launched." onDirtyChange={dirty} />);
+  expect(await screen.findByText(/read-only while this survey is launched/i)).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: /use the derived default/i })).toBeDisabled();
   expect(screen.getByRole('button', { name: /save instructions/i })).toBeDisabled();
   expect(screen.getByRole('button', { name: /undo changes/i })).toBeEnabled();

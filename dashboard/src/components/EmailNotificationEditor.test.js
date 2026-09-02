@@ -45,7 +45,7 @@ test('saves multiline body as a structured template without overwriting subjects
 
 test('shows the API save error and keeps the failed edit dirty', async () => {
   api.get.mockResolvedValue(response('Original'));
-  api.post.mockRejectedValue({ response: { data: { message: 'Survey is active and cannot be edited.' } } });
+  api.post.mockRejectedValue({ response: { data: { message: 'Survey is launched and cannot be edited.' } } });
   render(<EmailNotificationEditor surveyId="survey-1" />);
 
   const body = await screen.findByLabelText('Invitation email body');
@@ -53,7 +53,7 @@ test('shows the API save error and keeps the failed edit dirty', async () => {
   await userEvent.type(body, ' changed');
   await userEvent.click(screen.getByRole('button', { name: 'Save body' }));
 
-  expect(await screen.findByText('Survey is active and cannot be edited.')).toBeInTheDocument();
+  expect(await screen.findByText('Survey is launched and cannot be edited.')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Save body' })).toBeEnabled();
   expect(body).toHaveValue('Original changed');
 });

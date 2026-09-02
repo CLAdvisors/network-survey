@@ -153,7 +153,9 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
             <LifecycleChip status={lifecycleStatus(survey)} />
           </Stack>
           <Typography variant="body2" color="text.secondary">
-            Started {formatDateTime(survey.startedAt || survey.started_at)}{survey.startedByName ? ` by ${survey.startedByName}` : ''}
+            {lifecycleStatus(survey) === 'draft'
+              ? 'Not launched'
+              : `Launched ${formatDateTime(survey.startedAt || survey.started_at)}${survey.startedByName ? ` by ${survey.startedByName}` : ''}`}
           </Typography>
         </Box>
         <Button onClick={manualRefresh} startIcon={loading ? <CircularProgress size={16} /> : <RefreshIcon />} disabled={loading} aria-label={`Refresh lifecycle for ${survey.name}`}>
@@ -207,7 +209,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
       {lifecycleStatus(survey) !== 'draft' && <Box sx={{ mt: 2, p: 1.25, borderRadius: 1, bgcolor: 'action.hover', display: 'flex', alignItems: 'center', gap: 1 }}>
         <LockIcon color="action" fontSize="small" />
         <Typography variant="body2" color="text.secondary">
-          Questions, respondents, initial-invitation templates, and survey design are read-only while this survey is {lifecycleStatus(survey)}. Reminder templates remain editable by administrators only while it is active.
+          Questions, respondents, initial-invitation templates, and survey design are read-only while this survey is {lifecycleLabel(lifecycleStatus(survey)).toLowerCase()}. Reminder templates are editable by administrators only while the survey is launched.
         </Typography>
       </Box>}
 

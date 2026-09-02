@@ -5,7 +5,7 @@ export const lifecycleStatus = (survey) =>
 
 export const lifecycleLabel = (status) => ({
   draft: 'Draft',
-  active: 'Active',
+  active: 'Launched',
   closed: 'Closed',
 }[String(status || '').toLowerCase()] || 'Draft');
 

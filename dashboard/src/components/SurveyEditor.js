@@ -25,7 +25,7 @@ import {
 } from '../utils/surveyToolbox';
 import { hideQuestionValueName } from '../utils/surveyCreatorMetadata';
 import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
-import { lifecycleStatus, surveyId } from './surveyLifecycle';
+import { lifecycleLabel, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
 // Define and register custom question class for draggableranking
@@ -671,7 +671,7 @@ const SurveyEditor = () => {
           Demo Survey
         </Button>
       </Box>
-      {lifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Survey design is read-only while this survey is {lifecycleStatus(selectedSurveyRecord)}. You can still preview it.</Alert>}
+      {lifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Survey design is read-only while this survey is {lifecycleLabel(lifecycleStatus(selectedSurveyRecord)).toLowerCase()}. You can still preview it.</Alert>}
       {roleLocked && <Alert severity="info" sx={{ mb: 2 }}>Your role has read-only access to this survey design. You can still preview it.</Alert>}
       {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
       <Box

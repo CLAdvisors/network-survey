@@ -134,7 +134,7 @@ const ReminderTemplateEditor = ({ surveyId, editable, onDirtyChange, onOperation
   };
 
   return <Paper elevation={2} sx={{p:3,borderRadius:2}} aria-label="Reminder email templates">
-    {!editable && <Alert severity="info" sx={{mb:2}}>Reminder templates are editable by survey administrators only while the survey is active.</Alert>}
+    {!editable && <Alert severity="info" sx={{mb:2}}>Reminder templates are editable by survey administrators only while the survey is launched.</Alert>}
     {notice && <Alert severity={notice.severity} sx={{mb:2}} onClose={()=>setNotice(null)}>{notice.message}</Alert>}
     <Typography component="h3" variant="h6" color="primary" sx={{fontWeight:'bold',mb:2}}>Reminder Email</Typography>
     <Autocomplete value={language} options={LANGUAGES} disableClearable disabled={!editable||loading||saving||dirty} getOptionLabel={item=>item?.label||''} onChange={(_event,next)=>next&&select(next,templates)} renderInput={params=><TextField {...params} label="Reminder language" helperText={dirty?'Save or revert before changing language.':' '} />} sx={{maxWidth:300,mb:2}} />

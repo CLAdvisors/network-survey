@@ -2,9 +2,9 @@ import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import api from '../api/axios';
-import SurveyLifecyclePanel from './SurveyLifecyclePanel';
+import SurveyLifecyclePanel, { LifecycleChip } from './SurveyLifecyclePanel';
 import {
-  launchCounts, launchStatus, providerCounts, providerOutcome, providerOutcomeLabel,
+  launchCounts, launchStatus, lifecycleLabel, lifecycleStatus, providerCounts, providerOutcome, providerOutcomeLabel,
   providerOutcomeTimestamp, providerTimestamps, shouldPollLaunch,
 } from './surveyLifecycle';
 
@@ -18,6 +18,22 @@ const deferred = () => {
   const promise = new Promise((done) => { resolve = done; });
   return { promise, resolve };
 };
+
+test('presents the internal active lifecycle contract as Launched', () => {
+  const survey = { lifecycle_status: 'active' };
+  expect(lifecycleStatus(survey)).toBe('active');
+  expect(lifecycleLabel(lifecycleStatus(survey))).toBe('Launched');
+  render(<LifecycleChip status={lifecycleStatus(survey)} />);
+  expect(screen.getByText('Launched')).toBeInTheDocument();
+  expect(screen.queryByText('Active')).not.toBeInTheDocument();
+});
+
+test('describes draft lifecycle timing without implying it has launched', async () => {
+  api.get.mockResolvedValue({ data: { launches: [] } });
+  render(<SurveyLifecyclePanel survey={{ id: 'survey-draft', name: 'Draft survey', lifecycleStatus: 'draft' }} />);
+  expect(screen.getByText('Not launched')).toBeInTheDocument();
+  expect(screen.queryByText(/^Launched /)).not.toBeInTheDocument();
+});
 
 test('normalizes the real snake_case launch aggregate contract', () => {
   expect(launchCounts({
@@ -107,6 +123,7 @@ test('uses plain-language aggregates instead of exposing operational keyword lis
   expect(screen.getByRole('status')).toHaveTextContent('Delivery update: 2 confirmations, 2 invitations awaiting a final result, 3 invitations with delivery problems, 1 delay report.');
   expect(screen.getByRole('heading', { level: 2, name: 'Survey lifecycle' })).toBeInTheDocument();
   expect(screen.getByRole('heading', { level: 3, name: 'Invitation sending' })).toBeInTheDocument();
+  expect(screen.getByText(/while this survey is launched.*only while the survey is launched/i)).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: /^\d+$/ })).not.toBeInTheDocument();
 
   const explanation = screen.getByLabelText('Current launch explanation');

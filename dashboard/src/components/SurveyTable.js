@@ -1,10 +1,66 @@
 import React, { useMemo } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
+import { alpha } from '@mui/material/styles';
 import { Chip, Stack, Tooltip, Typography } from '@mui/material';
 import MenuCell from './SurveyTableMenuCell';
 import { LifecycleChip } from './SurveyLifecyclePanel';
 import { launchCounts, lifecycleStatus, providerCounts } from './surveyLifecycle';
 import { responseRateDescription, responseRateLabel, responseRateSortValue, responseRateSummary } from './surveyResponseRate';
+
+export const surveyTableSx = {
+  '& .MuiDataGrid-columnHeader:hover': { backgroundColor: 'rgba(66, 179, 175, 0.3)' },
+  '& .MuiDataGrid-row:hover': { backgroundColor: 'rgba(0, 178, 140, 0.2)' },
+  '& .MuiDataGrid-row.Mui-selected': {
+    backgroundColor: (theme) => alpha(theme.palette.primary.dark, theme.palette.action.selectedOpacity),
+    boxShadow: (theme) => `inset 4px 0 0 ${theme.palette.text.primary}`,
+  },
+  '& .MuiDataGrid-row.Mui-selected:hover': {
+    backgroundColor: (theme) => alpha(
+      theme.palette.primary.dark,
+      theme.palette.action.selectedOpacity + theme.palette.action.hoverOpacity,
+    ),
+  },
+  '& .MuiDataGrid-row.Mui-selected:focus-within': {
+    outline: (theme) => `2px solid ${theme.palette.text.primary}`,
+    outlineOffset: '-2px',
+  },
+  '& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell': {
+    boxShadow: (theme) => `inset 0 2px 0 ${theme.palette.text.primary}, inset 0 -2px 0 ${theme.palette.text.primary}`,
+  },
+  '& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell[data-field="name"]': {
+    fontWeight: 700,
+  },
+  '@media (hover: none)': {
+    '& .MuiDataGrid-columnHeader:hover': {
+      backgroundColor: 'inherit',
+    },
+    '& .MuiDataGrid-row:hover': {
+      backgroundColor: 'transparent',
+    },
+    '& .MuiDataGrid-row.Mui-selected:hover': {
+      backgroundColor: (theme) => alpha(theme.palette.primary.dark, theme.palette.action.selectedOpacity),
+    },
+  },
+  '@media (forced-colors: active)': {
+    '& .MuiDataGrid-row.Mui-selected': {
+      backgroundColor: 'Canvas',
+      boxShadow: 'none',
+      color: 'CanvasText',
+    },
+    '& .MuiDataGrid-row.Mui-selected:hover': {
+      backgroundColor: 'Canvas',
+    },
+    '& .MuiDataGrid-row.Mui-selected:focus-within': {
+      outline: '2px solid Highlight',
+    },
+    '& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell': {
+      borderBlockStart: '2px solid Highlight',
+      borderBlockEnd: '2px solid Highlight',
+      boxShadow: 'none',
+      boxSizing: 'border-box',
+    },
+  },
+};
 
 const SurveyTable = ({
   rows,
@@ -94,7 +150,7 @@ const SurveyTable = ({
         const dispatch = launchCounts(latest);
         const adverse = counts.problems;
         const emailKind = latest.kind === 'reminder' ? 'reminder' : 'invitation';
-        const details = `${counts.delivered} delivery confirmations, ${counts.waiting} awaiting a final result, ${counts.problems} ${counts.problems === 1 ? emailKind : `${emailKind}s`} with delivery problems; ${counts.sent} provider accepted, ${counts.delayed} delayed, ${counts.bounced} bounced, ${counts.complained} complained, ${counts.suppressed} suppressed, ${counts.providerFailed} provider failed, ${counts.acceptedUnverified} accepted and unverified.`;
+        const details = `${counts.delivered} delivery confirmations, ${counts.waiting} awaiting a final result, ${counts.problems} ${counts.problems === 1 ? emailKind : `${emailKind}s`} with delivery problems; ${counts.sent} provider accepted, ${counts.delayed} ${counts.delayed === 1 ? 'delay report' : 'delay reports'}, ${counts.bounced} bounced, ${counts.complained} complained, ${counts.suppressed} suppressed, ${counts.providerFailed} provider failed, ${counts.acceptedUnverified} accepted and unverified.`;
         return <Tooltip title={details} arrow>
           <Stack spacing={0.25} justifyContent="center" aria-label={details} tabIndex={hasFocus ? 0 : -1} sx={{ minWidth: 0 }}>
             <Typography variant="body2" fontWeight={600} noWrap>{counts.delivered} confirmed delivered</Typography>
@@ -143,10 +199,7 @@ const SurveyTable = ({
         onRowClick={(params) => selectRow(params.row)}
         rowSelectionModel={selectedSurvey ? [selectedSurvey.id || selectedSurvey.name] : []}
         slots={{ toolbar: GridToolbar }}
-        sx={{
-          '& .MuiDataGrid-columnHeader:hover': { backgroundColor: 'rgba(66, 179, 175, 0.3)' },
-          '& .MuiDataGrid-row:hover': { backgroundColor: 'rgba(0, 178, 140, 0.2)' },
-        }}
+        sx={surveyTableSx}
       />
     </div>
   );

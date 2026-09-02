@@ -164,6 +164,8 @@ test('reminder readiness handles zero, one, 1,000, localization, and privacy-saf
   const recipient=index=>({respondent_id:index,contact_info:`person${index}@example.test`,uuid:`existing-token-${index}`,lang:'English'});
   const zero=evaluateReminderReadiness(survey,{recipients:[],templates:[template]},config);
   assert.equal(zero.canLaunch,false);assert.ok(zero.blockers.some(item=>item.code==='recipients_missing'));
+  const draft=evaluateReminderReadiness({...survey,lifecycle_status:'draft'},{recipients:[recipient(1)],templates:[template]},config);
+  assert.ok(draft.blockers.some(item=>item.code==='survey_not_active'&&item.message==='Only a launched survey can receive reminders.'));
   const one=evaluateReminderReadiness(survey,{recipients:[recipient(1)],templates:[template]},config);
   assert.equal(one.canLaunch,true);assert.equal(one.targetCount,1);
   const thousand=evaluateReminderReadiness(survey,{recipients:Array.from({length:1000},(_,index)=>recipient(index+1)),templates:[template]},config);
@@ -374,6 +376,15 @@ test('transactional launch locks control then survey, snapshots all work, activa
   assert.equal(deliveryCall.values[14],payloadHash(launchedPayload));
   assert.equal(frenchDeliveryCall.values[14],payloadHash(frenchPayload));
   assert.equal(releaseCount,1,'launchSurvey releases its checked-out connection exactly once');
+});
+
+test('close keeps the active API value while presenting launched terminology on conflicts', async()=>{
+  const surveyId='11111111-1111-4111-8111-111111111111';
+  const client={release(){},async query(sql){if(/SELECT s\.\*, om\.role/.test(sql))return{rows:[{id:surveyId,organization_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',role:'editor',lifecycle_status:'draft'}]};return{rows:[],rowCount:1};}};
+  await assert.rejects(
+    ()=>transitionSurvey({connect:async()=>client},{id:4},surveyId,'close'),
+    error=>error.code==='lifecycle_conflict'&&error.message==='Only a launched survey can be closed.',
+  );
 });
 
 test('close atomically cancels queued work, fences leased work, and writes strict audit', async()=>{

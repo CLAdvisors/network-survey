@@ -17,8 +17,9 @@ export const DRAGGABLE_RANKING_DEFINITION_LIMITS = Object.freeze({
   surveyDefinitionBytes: 512 * 1024,
 });
 
-const FORBIDDEN_LITERAL_CHARACTERS = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const FORBIDDEN_LITERAL_CHARACTERS = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\uD800-\uDFFF]/u;
 const textEncoder = typeof TextEncoder === 'undefined' ? null : new TextEncoder();
+const definitionAuthoringChoices = new WeakSet();
 const typeOf = (element) => typeof element?.getType === 'function' ? element.getType() : element?.type;
 const characterCount = (value) => [...value].length;
 const byteCount = (value) => textEncoder ? textEncoder.encode(value).length : unescape(encodeURIComponent(value)).length;
@@ -39,6 +40,15 @@ export const choiceDefinitionError = (value) => {
 };
 
 /** Register authoring metadata before any Survey Creator model is constructed. */
+const applyDefinitionEditorOptions = (editor) => {
+  if (!editor) return;
+  editor.rows = 5;
+  editor.autoGrow = true;
+  editor.allowResize = true;
+  editor.descriptionLocation = 'underInput';
+  editor.description = 'Optional plain text shown by the respondent information button. Line breaks are preserved and HTML is displayed literally. If any choice has a definition, every choice needs separate Value and Text strings; each ranking is limited to 100 choices and definition-enabled rankings to 1,000 choices per survey. Each definition is limited to 10,000 characters / 40,960 UTF-8 bytes, and all survey definitions together to 250,000 characters / 524,288 bytes.';
+};
+
 export const registerDraggableRankingDefinitionMetadata = () => {
   const property = registerChoiceDefinitionProperty({
     visible: false,
@@ -50,15 +60,25 @@ export const registerDraggableRankingDefinitionMetadata = () => {
   property.isLocalizable = false;
   property.locationInTable = 'detail';
   property.visible = true;
-  property.visibleIf = (choice) => typeOf(choice?.locOwner) === 'draggableranking';
-  property.onPropertyEditorUpdate = (_choice, editor) => {
-    editor.rows = 5;
-    editor.autoGrow = true;
-    editor.allowResize = true;
-    editor.descriptionLocation = 'underInput';
-    editor.description = 'Optional plain text shown by the respondent information button. Line breaks are preserved and HTML is displayed literally. If any choice has a definition, every choice needs separate Value and Text strings; each ranking is limited to 100 choices and definition-enabled rankings to 1,000 choices per survey. Each definition is limited to 10,000 characters / 40,960 UTF-8 bytes, and all survey definitions together to 250,000 characters / 524,288 bytes.';
-  };
   return property;
+};
+
+/** Scope the global ItemValue property to draggable-ranking choice editors. */
+export const configureDraggableRankingDefinitionVisibility = (_sender, options) => {
+  if (options?.property?.name !== CHOICE_DEFINITION_PROPERTY) return;
+  const isRankingChoice = options?.parentProperty?.name === 'choices' &&
+    typeOf(options?.parentElement) === 'draggableranking';
+  options.show = isRankingChoice;
+  if (isRankingChoice && options.element && typeof options.element === 'object') {
+    definitionAuthoringChoices.add(options.element);
+  }
+};
+
+/** Configure dynamically-created choice detail editors in Survey Creator. */
+export const configureDraggableRankingDefinitionEditor = (_sender, options) => {
+  if (options?.property?.name !== CHOICE_DEFINITION_PROPERTY ||
+      !definitionAuthoringChoices.has(options?.element || options?.obj)) return;
+  applyDefinitionEditorOptions(options.editor);
 };
 
 /** Fast Entry drops per-choice fields, so it is unsafe when definitions exist. */
@@ -72,7 +92,8 @@ export const configureDraggableRankingChoiceEditor = (_sender, options) => {
 };
 
 export const validateDraggableRankingDefinitionProperty = (_sender, options) => {
-  if (options?.propertyName !== CHOICE_DEFINITION_PROPERTY || typeOf(options?.element?.locOwner || options?.obj?.locOwner) !== 'draggableranking') return;
+  if (options?.propertyName !== CHOICE_DEFINITION_PROPERTY ||
+      !definitionAuthoringChoices.has(options?.element || options?.obj)) return;
   options.error = choiceDefinitionError(options.value);
 };
 

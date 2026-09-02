@@ -17,5 +17,7 @@ describe('Survey Editor definition runtime integration', () => {
     expect(source.indexOf('registerDraggableRankingDefinitionMetadata();'))
       .toBeLessThan(source.indexOf('new SurveyCreator(creatorOptions)'));
     expect(source).toContain('showJSONEditorTab: false');
+    expect(source).toContain('onPropertyShowing.add(configureDraggableRankingDefinitionVisibility)');
+    expect(source).toContain('onPropertyEditorCreated.add(configureDraggableRankingDefinitionEditor)');
   });
 });

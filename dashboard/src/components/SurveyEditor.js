@@ -28,6 +28,8 @@ import {
 import { hideQuestionValueName } from '../utils/surveyCreatorMetadata';
 import {
   configureDraggableRankingChoiceEditor,
+  configureDraggableRankingDefinitionEditor,
+  configureDraggableRankingDefinitionVisibility,
   normalizeDraggableRankingDefinitions,
   registerDraggableRankingDefinitionMetadata,
   validateDraggableRankingDefinitionProperty,
@@ -391,6 +393,8 @@ const SurveyEditor = () => {
   if (!creatorRef.current) {
     creatorRef.current = new SurveyCreator(creatorOptions);
     creatorRef.current.onSetPropertyEditorOptions.add(configureDraggableRankingChoiceEditor);
+    creatorRef.current.onPropertyShowing.add(configureDraggableRankingDefinitionVisibility);
+    creatorRef.current.onPropertyEditorCreated.add(configureDraggableRankingDefinitionEditor);
     creatorRef.current.onPropertyDisplayCustomError.add(validateDraggableRankingDefinitionProperty);
     // Add custom draggable-ranking question with a JSON template. Remove any
     // generated item first so the custom item appears exactly once.

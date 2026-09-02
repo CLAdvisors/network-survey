@@ -70,8 +70,12 @@ describe('production draggable-ranking Info definitions', () => {
 
     fireEvent.focus(info);
     const callout = screen.getByRole('region', { name: 'Definition: Beta' });
+    const rank = screen.getByRole('button', { name: 'Rank: Beta' });
     const close = within(callout).getByRole('button', { name: 'Close definition' });
-    fireEvent.blur(info, { relatedTarget: close });
+    fireEvent.blur(info, { relatedTarget: rank });
+    fireEvent.focus(rank);
+    expect(callout).toBeInTheDocument();
+    fireEvent.blur(rank, { relatedTarget: close });
     fireEvent.focus(close);
     expect(callout).toBeInTheDocument();
 
@@ -79,6 +83,21 @@ describe('production draggable-ranking Info definitions', () => {
     fireEvent.focus(outside);
     expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
     expect(info).not.toHaveAttribute('aria-controls');
+  });
+
+  it('does not steal unrelated keyboard focus when Escape closes hover-only content', () => {
+    render(<><input aria-label="Unrelated field" /><Fixture /></>);
+    const input = screen.getByRole('textbox', { name: 'Unrelated field' });
+    const info = screen.getByRole('button', { name: 'Info: Beta' });
+    input.focus();
+    expect(input).toHaveFocus();
+    fireEvent.mouseEnter(info);
+    expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
   });
 
   it('uses explicit-button-only hover and closes at the actual control boundary', () => {

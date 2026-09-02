@@ -283,6 +283,10 @@
   font-weight: 700;
 }
 
+.cla-survey-runtime .cla-choice-definition__action {
+  display: contents;
+}
+
 .cla-survey-runtime .cla-choice-definition__button {
   flex: 0 0 52px;
   width: 52px;

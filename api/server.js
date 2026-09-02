@@ -1537,7 +1537,8 @@ const DEFINED_RANKING_LIMITS = Object.freeze({
   surveyDefinitionChars: 250_000,
   surveyDefinitionBytes: 512 * 1024,
 });
-const FORBIDDEN_LITERAL_CHARACTERS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const FORBIDDEN_LITERAL_CHARACTERS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\uD800-\uDFFF]/u;
+const SURVEY_SCHEMA_MAX_BYTES = Math.floor(2.5 * 1024 * 1024);
 
 function normalizeBoundedLiteral(value, label, maxChars, maxBytes) {
   if (typeof value !== 'string') throw new Error(`${label} must be an explicit string.`);
@@ -1731,6 +1732,15 @@ const SURVEYJS_RESERVED_EXPRESSION_ROOTS = new Set(['item', 'row', 'panel', 'com
 function validateSurveyDefinition(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     throw new Error('Questions must be a SurveyJS schema object.');
+  }
+  let serializedBytes;
+  try {
+    serializedBytes = Buffer.byteLength(JSON.stringify(json), 'utf8');
+  } catch {
+    throw new Error('Questions schema must be JSON-serializable.');
+  }
+  if (serializedBytes > SURVEY_SCHEMA_MAX_BYTES) {
+    throw new Error(`Questions schema exceeds the ${SURVEY_SCHEMA_MAX_BYTES}-byte limit.`);
   }
   if (json.claNextQuestionNumber !== undefined &&
       (!Number.isSafeInteger(json.claNextQuestionNumber) || json.claNextQuestionNumber < 1)) {
@@ -3506,6 +3516,7 @@ module.exports = {
   SUPPORTED_QUESTION_TYPES,
   DEFINED_RANKING_LIMITS,
   QUESTION_DEFINITION_JSON_LIMIT,
+  SURVEY_SCHEMA_MAX_BYTES,
   validateSurveyDefinition,
   validateRequiredAnswers,
   normalizeQuestionNames,

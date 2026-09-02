@@ -10,6 +10,7 @@ const {
   pool,
   DEFINED_RANKING_LIMITS,
   QUESTION_DEFINITION_JSON_LIMIT,
+  SURVEY_SCHEMA_MAX_BYTES,
   validateSurveyDefinition,
   validateRequiredAnswers,
 } = require('../server');
@@ -119,7 +120,7 @@ test('definition-enabled ranking limits enforce characters, UTF-8 bytes, count, 
     assert.throws(() => validateSurveyDefinition(definedRanking(choices)));
   }
 
-  for (const forbidden of ['\t', '\0', '\u0085', '\u061c', '\u200e', '\u202e', '\u2066']) {
+  for (const forbidden of ['\t', '\0', '\u0085', '\u061c', '\u200e', '\u202e', '\u2066', '\uD800']) {
     assert.throws(() => validateSurveyDefinition(definedRanking([
       { value: 'value', text: 'Text', definition: `before${forbidden}after` },
     ])), /forbidden control or bidirectional formatting character/);
@@ -177,6 +178,14 @@ test('survey-wide definition character and byte budgets are enforced', () => {
     })),
   };
   assert.throws(() => validateSurveyDefinition(byteHeavy), /aggregate limit/);
+});
+
+test('the schema budget guarantees validator-approved JSON fits the authoring parser', () => {
+  assert.equal(SURVEY_SCHEMA_MAX_BYTES, Math.floor(2.5 * 1024 * 1024));
+  const accepted = { elements: [{ type: 'text', name: 'q', description: 'x'.repeat(SURVEY_SCHEMA_MAX_BYTES - 100) }] };
+  assert.doesNotThrow(() => validateSurveyDefinition(accepted));
+  accepted.elements[0].description += 'x'.repeat(200);
+  assert.throws(() => validateSurveyDefinition(accepted), /Questions schema exceeds the .*byte limit/);
 });
 
 test('/api/updateQuestions rejects unauthenticated oversized malformed bodies before parsing', async (t) => {

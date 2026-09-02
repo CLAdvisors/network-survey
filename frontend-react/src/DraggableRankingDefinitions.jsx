@@ -29,14 +29,18 @@ function DefinitionControl({ item, state, choiceAction }) {
   const reactId = React.useId().replace(/:/g, '');
   const detailsId = `${reactId}-choice-definition`;
   const buttonRef = React.useRef(null);
+  const actionRef = React.useRef(null);
   const calloutRef = React.useRef(null);
   const suppressNextFocusOpenRef = React.useRef(false);
   const expanded = state.openKey === key;
 
-  const isWithinControl = React.useCallback((node) => Boolean(
+  const isWithinPopover = React.useCallback((node) => Boolean(
     node && typeof node.nodeType === 'number' &&
       (buttonRef.current?.contains(node) || calloutRef.current?.contains(node))
   ), []);
+  const isWithinFocusPath = React.useCallback((node) => Boolean(
+    isWithinPopover(node) || (node && actionRef.current?.contains(node))
+  ), [isWithinPopover]);
 
   const close = React.useCallback((restoreFocus = false) => {
     state.close(key);
@@ -49,13 +53,15 @@ function DefinitionControl({ item, state, choiceAction }) {
   React.useEffect(() => {
     if (!expanded) return undefined;
     const handlePointerDown = (event) => {
-      if (!isWithinControl(event.target)) close(false);
+      if (!isWithinPopover(event.target)) close(false);
     };
     const handleKeyDown = (event) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
-      close(true);
+      // Hover is progressive enhancement and may open while keyboard focus is
+      // elsewhere. Never steal that unrelated focus when Escape dismisses it.
+      close(isWithinFocusPath(document.activeElement));
     };
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
@@ -63,13 +69,16 @@ function DefinitionControl({ item, state, choiceAction }) {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [close, expanded, isWithinControl]);
+  }, [close, expanded, isWithinFocusPath, isWithinPopover]);
 
   if (!definition) return null;
 
   const openTransient = () => state.openTransient(key);
-  const closeTransientOnExit = (event) => {
-    if (!isWithinControl(event.relatedTarget)) state.closeTransient(key);
+  const closeTransientOnPointerExit = (event) => {
+    if (!isWithinPopover(event.relatedTarget)) state.closeTransient(key);
+  };
+  const closeTransientOnFocusExit = (event) => {
+    if (!isWithinFocusPath(event.relatedTarget)) state.closeTransient(key);
   };
   const handleControlKeyDown = (event) => {
     event.stopPropagation();
@@ -94,7 +103,7 @@ function DefinitionControl({ item, state, choiceAction }) {
         onDragStart={stopAnswerEvent}
         onKeyDown={handleControlKeyDown}
         onMouseEnter={openTransient}
-        onMouseLeave={closeTransientOnExit}
+        onMouseLeave={closeTransientOnPointerExit}
         onFocus={() => {
           if (suppressNextFocusOpenRef.current) {
             suppressNextFocusOpenRef.current = false;
@@ -102,7 +111,7 @@ function DefinitionControl({ item, state, choiceAction }) {
           }
           openTransient();
         }}
-        onBlur={closeTransientOnExit}
+        onBlur={closeTransientOnFocusExit}
         onClick={(event) => {
           stopAnswerEvent(event);
           state.togglePinned(key);
@@ -110,7 +119,9 @@ function DefinitionControl({ item, state, choiceAction }) {
       >
         Info
       </button>
-      {choiceAction}
+      <span ref={actionRef} className="cla-choice-definition__action">
+        {choiceAction}
+      </span>
       {expanded && (
         <section
           ref={calloutRef}
@@ -123,8 +134,8 @@ function DefinitionControl({ item, state, choiceAction }) {
           onDragStart={stopAnswerEvent}
           onKeyDown={handleControlKeyDown}
           onMouseEnter={openTransient}
-          onMouseLeave={closeTransientOnExit}
-          onBlur={closeTransientOnExit}
+          onMouseLeave={closeTransientOnPointerExit}
+          onBlur={closeTransientOnFocusExit}
         >
           <strong>{label}</strong>
           <DefinitionText text={definition} />

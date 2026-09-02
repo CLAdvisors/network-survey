@@ -93,6 +93,32 @@ function Item({
   choiceContainerProps
 }) {
   const text = item.text ?? (item.value !== undefined ? String(item.value) : "");
+  const choiceAction = (
+    <button
+      ref={actionButtonRef}
+      type="button"
+      onClick={onAction}
+      disabled={actionDisabled}
+      aria-label={`${actionLabel}: ${text}`}
+      style={{
+        flex: "0 0 auto",
+        minWidth: 52,
+        minHeight: 44,
+        border: 0,
+        borderInlineStart: `1px solid ${colors.primaryBorder}`,
+        background: "transparent",
+        color: actionDisabled ? colors.disabled : colors.primary,
+        cursor: actionDisabled ? "not-allowed" : "pointer",
+        font: "inherit",
+        fontWeight: 600,
+        padding: "8px 10px"
+      }}
+    >
+      {actionLabel}
+    </button>
+  );
+  const supplementOwnsAction = React.isValidElement(supplement) &&
+    supplement.type?.rendersChoiceAction === true;
   return (
     <div
       ref={provided.innerRef}
@@ -129,29 +155,10 @@ function Item({
       >
         {text}
       </div>
-      {supplement}
-      <button
-        ref={actionButtonRef}
-        type="button"
-        onClick={onAction}
-        disabled={actionDisabled}
-        aria-label={`${actionLabel}: ${text}`}
-        style={{
-          flex: "0 0 auto",
-          minWidth: 52,
-          minHeight: 44,
-          border: 0,
-          borderInlineStart: `1px solid ${colors.primaryBorder}`,
-          background: "transparent",
-          color: actionDisabled ? colors.disabled : colors.primary,
-          cursor: actionDisabled ? "not-allowed" : "pointer",
-          font: "inherit",
-          fontWeight: 600,
-          padding: "8px 10px"
-        }}
-      >
-        {actionLabel}
-      </button>
+      {supplementOwnsAction
+        ? React.cloneElement(supplement, { choiceAction })
+        : supplement}
+      {!supplementOwnsAction && choiceAction}
     </div>
   );
 }

@@ -58,4 +58,44 @@ describe('attachDraggableRankingRenderer', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Info: Stable label' })).not.toBeInTheDocument());
     element.remove();
   });
+
+  it('unmounts roots and document listeners when SurveyJS detaches a question host', async () => {
+    const addListener = vi.spyOn(document, 'addEventListener');
+    const removeListener = vi.spyOn(document, 'removeEventListener');
+    const onAfterRenderQuestion = surveyEvent();
+    const survey = { onAfterRenderQuestion };
+    const question = {
+      name: 'detached',
+      choices: [{ value: 'one', text: 'One', definition: 'Definition one.' }],
+      value: [],
+      getType: () => 'draggableranking',
+    };
+    const element = document.createElement('section');
+    element.className = 'sd-question';
+    element.innerHTML = '<div class="sd-question__content"></div>';
+    document.body.appendChild(element);
+    const dispose = attachDraggableRankingRenderer(survey);
+
+    onAfterRenderQuestion.emit({ question, htmlElement: element });
+    const info = await screen.findByRole('button', { name: 'Info: One' });
+    fireEvent.click(info);
+    await screen.findByRole('region', { name: 'Definition: One' });
+    const ownedListeners = addListener.mock.calls.filter(([type]) =>
+      type === 'pointerdown' || type === 'keydown'
+    );
+    expect(ownedListeners).toHaveLength(2);
+
+    element.remove();
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Info: One' })).not.toBeInTheDocument());
+    ownedListeners.forEach(([type, handler]) => {
+      expect(removeListener).toHaveBeenCalledWith(type, handler);
+    });
+    expect(onAfterRenderQuestion.size()).toBe(1);
+
+    dispose();
+    expect(onAfterRenderQuestion.size()).toBe(0);
+    addListener.mockRestore();
+    removeListener.mockRestore();
+  });
 });

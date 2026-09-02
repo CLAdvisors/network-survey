@@ -6,6 +6,7 @@ import {
 
 export const DRAGGABLE_RANKING_DEFINITION_LIMITS = Object.freeze({
   choices: 100,
+  surveyChoices: 1000,
   valueCharacters: 128,
   valueBytes: 512,
   textCharacters: 240,
@@ -55,7 +56,7 @@ export const registerDraggableRankingDefinitionMetadata = () => {
     editor.autoGrow = true;
     editor.allowResize = true;
     editor.descriptionLocation = 'underInput';
-    editor.description = 'Optional plain text shown by the respondent information button. Line breaks are preserved and HTML is displayed literally. If any choice has a definition, every choice needs separate Value and Text strings; the ranking is limited to 100 choices. Each definition is limited to 10,000 characters / 40,960 UTF-8 bytes, and all survey definitions together to 250,000 characters / 524,288 bytes.';
+    editor.description = 'Optional plain text shown by the respondent information button. Line breaks are preserved and HTML is displayed literally. If any choice has a definition, every choice needs separate Value and Text strings; each ranking is limited to 100 choices and definition-enabled rankings to 1,000 choices per survey. Each definition is limited to 10,000 characters / 40,960 UTF-8 bytes, and all survey definitions together to 250,000 characters / 524,288 bytes.';
   };
   return property;
 };
@@ -94,6 +95,7 @@ const boundedLiteralError = (value, label, maxCharacters, maxBytes) => {
 export const normalizeDraggableRankingDefinitions = (elements) => {
   let surveyCharacters = 0;
   let surveyBytes = 0;
+  let surveyChoices = 0;
   const limits = DRAGGABLE_RANKING_DEFINITION_LIMITS;
 
   const normalized = (Array.isArray(elements) ? elements : []).map((element, questionIndex) => {
@@ -108,6 +110,10 @@ export const normalizeDraggableRankingDefinitions = (elements) => {
     if (!hasDefinitions) return element;
     if (element.choices.length > limits.choices) {
       throw new Error(`Question ${questionIndex + 1} with definitions may contain at most ${limits.choices} choices.`);
+    }
+    surveyChoices += element.choices.length;
+    if (surveyChoices > limits.surveyChoices) {
+      throw new Error(`Definition-enabled rankings may contain at most ${limits.surveyChoices} choices across the survey.`);
     }
 
     const values = new Set();
@@ -128,11 +134,17 @@ export const normalizeDraggableRankingDefinitions = (elements) => {
       if (typeof textSource !== 'string') {
         throw new Error(`${label} must explicitly define string value and text properties when any definition is present.`);
       }
+      if (/[\r\n]/u.test(choice.value)) {
+        throw new Error(`${label} value must be canonical and may not contain CR or LF characters.`);
+      }
+      if (choice.value !== choice.value.trim()) {
+        throw new Error(`${label} value must be canonical and may not have leading or trailing whitespace.`);
+      }
       const valueError = boundedLiteralError(choice.value, `${label} value`, limits.valueCharacters, limits.valueBytes);
       if (valueError) throw new Error(valueError);
       const textError = boundedLiteralError(textSource, `${label} text`, limits.textCharacters, limits.textBytes);
       if (textError) throw new Error(textError);
-      const value = choice.value.replace(/\r\n?/g, '\n').trim();
+      const value = choice.value;
       const text = textSource.replace(/\r\n?/g, '\n').trim();
       if (values.has(value)) throw new Error(`Question ${questionIndex + 1} choice values must be unique: ${value}.`);
       values.add(value);

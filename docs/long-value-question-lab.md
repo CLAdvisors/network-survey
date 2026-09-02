@@ -24,6 +24,8 @@ The lab and production browser runtimes register one optional custom property on
 
 `definition` is deliberately additive and namespaced by its location on a choice rather than encoded into `value` or `text`. SurveyJS preserves registered item-value properties during model serialization. Production supports this field only on `draggableranking.choices`, uses English literal strings, exposes a multiline Survey Creator editor, validates bounded content in the API, and stores only `value` in answers. No presentation-variant field is stored in survey JSON.
 
+For a ranking with any nonblank definition, every choice must persist an explicit, unique, canonical string `value` and a nonempty string `text`. Limits are 100 choices per ranking, 1,000 definition-enabled choices per survey, 128 characters/512 UTF-8 bytes for values, 240 characters/1,024 bytes for labels, 10,000 characters/40,960 bytes per definition, and 250,000 characters/512 KiB across definitions. Fast Entry is disabled because it cannot preserve multiline per-choice metadata.
+
 ## Variants
 
 The first variant is the fixed production treatment. Variants 2–5 remain comparison artifacts in the lab.

@@ -8,7 +8,10 @@ const choiceLabel = (item) => String(
   item?.text ?? item?.source?.text ?? item?.value ?? ''
 );
 
-const choiceDefinition = (item) => getChoiceDefinition(item?.source ?? item);
+const choiceDefinition = (item) => {
+  const definition = getChoiceDefinition(item?.source ?? item);
+  return definition.trim() ? definition : '';
+};
 
 function DefinitionText({ text }) {
   const paragraphs = String(text).split(/\n\s*\n/);
@@ -19,7 +22,7 @@ function DefinitionText({ text }) {
   );
 }
 
-function DefinitionControl({ item, state }) {
+function DefinitionControl({ item, state, choiceAction }) {
   const key = item.key;
   const label = choiceLabel(item);
   const definition = choiceDefinition(item);
@@ -83,7 +86,7 @@ function DefinitionControl({ item, state }) {
         type="button"
         className={`cla-choice-definition__button${expanded ? ' is-active' : ''}`}
         aria-label={`Info: ${label}`}
-        aria-controls={detailsId}
+        aria-controls={expanded ? detailsId : undefined}
         aria-expanded={expanded}
         onPointerDown={stopAnswerEvent}
         onMouseDown={stopAnswerEvent}
@@ -107,6 +110,7 @@ function DefinitionControl({ item, state }) {
       >
         Info
       </button>
+      {choiceAction}
       {expanded && (
         <section
           ref={calloutRef}
@@ -120,6 +124,7 @@ function DefinitionControl({ item, state }) {
           onKeyDown={handleControlKeyDown}
           onMouseEnter={openTransient}
           onMouseLeave={closeTransientOnExit}
+          onBlur={closeTransientOnExit}
         >
           <strong>{label}</strong>
           <DefinitionText text={definition} />
@@ -138,6 +143,11 @@ function DefinitionControl({ item, state }) {
     </>
   );
 }
+
+// DraggableRankingQuestion uses this marker to place the Rank/Unrank action
+// between the Info trigger and its callout. DOM, visual, and keyboard focus
+// order therefore remain Info -> Rank/Unrank -> callout controls.
+DefinitionControl.rendersChoiceAction = true;
 
 /** Production Option 1: explicit Info-button definitions for draggable ranking. */
 export function DraggableRankingWithDefinitions(props) {
@@ -166,9 +176,9 @@ export function DraggableRankingWithDefinitions(props) {
   return (
     <DraggableRankingQuestion
       {...props}
-      renderChoiceSupplement={(item) => (
+      renderChoiceSupplement={(item) => choiceDefinition(item) ? (
         <DefinitionControl key={item.key} item={item} state={definitionState} />
-      )}
+      ) : null}
     />
   );
 }

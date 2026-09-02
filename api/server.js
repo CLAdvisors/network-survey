@@ -275,26 +275,8 @@ function prepareSurveyForDemo(value) {
   return prepare(value);
 }
 
-// Resend signatures cover the exact bytes; this route must precede JSON parsing.
+// Resend signatures cover the exact bytes; this route must precede every JSON parser.
 app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '256kb' }), createResendWebhookHandler({ pool, env: process.env }));
-const rosterJsonParser = express.json({ limit: '3mb' });
-const questionDefinitionJsonParser = express.json({ limit: '1mb' });
-app.patch('/api/surveys/:surveyId/respondents', rosterJsonParser);
-app.post('/api/updateTargets', rosterJsonParser);
-app.delete('/api/user', rosterJsonParser);
-// Long literal definitions can exceed Express's 100 KiB default, but only the
-// question-authoring endpoint needs the larger request budget.
-app.post('/api/updateQuestions', questionDefinitionJsonParser);
-app.use(express.json());
-app.use((error, req, res, next) => {
-  if (error?.type === 'entity.too.large') {
-    return res.status(413).json({
-      error: 'request_too_large',
-      message: 'Request body exceeds the allowed size.',
-    });
-  }
-  return next(error);
-});
 
 function configuredCorsOrigins(env = process.env) {
   const additionalSurveyOrigins = String(env.SURVEY_ALLOWED_ORIGINS || '')
@@ -376,6 +358,35 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Large request parsers are mounted only after session loading and trusted-origin
+// enforcement. A valid-looking session is required before Express allocates and
+// parses these route-specific request budgets; requireAuth still performs the
+// authoritative user/status lookup in each route handler.
+function requireAuthenticatedSession(req, res, next) {
+  if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+}
+const rosterJsonParser = express.json({ limit: '3mb' });
+const QUESTION_DEFINITION_JSON_LIMIT = '3mb';
+const questionDefinitionJsonParser = express.json({ limit: QUESTION_DEFINITION_JSON_LIMIT });
+app.patch('/api/surveys/:surveyId/respondents', requireAuthenticatedSession, rosterJsonParser);
+app.post('/api/updateTargets', requireAuthenticatedSession, rosterJsonParser);
+app.delete('/api/user', requireAuthenticatedSession, rosterJsonParser);
+// Only definition authoring receives this larger budget. All unrelated routes
+// retain Express's 100 KiB default JSON limit.
+app.post('/api/updateQuestions', requireAuthenticatedSession, questionDefinitionJsonParser);
+app.use(express.json());
+app.use((error, req, res, next) => {
+  if (error?.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'request_too_large',
+      message: 'Request body exceeds the allowed size.',
+    });
+  }
+  return next(error);
+});
+
 const isLocalEnvironment = ['development', 'dev', 'local', 'test'].includes(process.env.NODE_ENV || 'development');
 const allowPublicSignup = process.env.ALLOW_PUBLIC_SIGNUP === 'true' || (isLocalEnvironment && process.env.ALLOW_PUBLIC_SIGNUP !== 'false');
 
@@ -1516,6 +1527,7 @@ function validateItemDefinitions(items, label, { requireObjects = false } = {}) 
 
 const DEFINED_RANKING_LIMITS = Object.freeze({
   choices: 100,
+  surveyChoices: 1000,
   valueChars: 128,
   valueBytes: 512,
   textChars: 240,
@@ -1539,6 +1551,24 @@ function normalizeBoundedLiteral(value, label, maxChars, maxBytes) {
     throw new Error(`${label} exceeds its ${maxChars}-character or ${maxBytes}-byte limit.`);
   }
   return normalized;
+}
+
+function validateCanonicalMachineLiteral(value, label, maxChars, maxBytes) {
+  if (typeof value !== 'string') throw new Error(`${label} must be an explicit string.`);
+  if (/[\r\n]/u.test(value)) {
+    throw new Error(`${label} must be canonical and may not contain CR or LF characters.`);
+  }
+  if (value !== value.trim()) {
+    throw new Error(`${label} must be canonical and may not have leading or trailing whitespace.`);
+  }
+  if (value.length === 0) throw new Error(`${label} must be nonempty.`);
+  if (FORBIDDEN_LITERAL_CHARACTERS_RE.test(value)) {
+    throw new Error(`${label} contains a forbidden control or bidirectional formatting character.`);
+  }
+  if ([...value].length > maxChars || Buffer.byteLength(value, 'utf8') > maxBytes) {
+    throw new Error(`${label} exceeds its ${maxChars}-character or ${maxBytes}-byte limit.`);
+  }
+  return value;
 }
 
 function rejectMisplacedDefinitions(node, label, allowDefinition = false) {
@@ -1582,6 +1612,10 @@ function normalizeDraggableRankingChoices(choices, questionLabel, definitionTota
   if (choices.length > DEFINED_RANKING_LIMITS.choices) {
     throw new Error(`${questionLabel} with definitions may contain at most ${DEFINED_RANKING_LIMITS.choices} choices.`);
   }
+  definitionTotals.choices += choices.length;
+  if (definitionTotals.choices > DEFINED_RANKING_LIMITS.surveyChoices) {
+    throw new Error(`Definition-enabled rankings may contain at most ${DEFINED_RANKING_LIMITS.surveyChoices} choices across the survey.`);
+  }
 
   const values = new Set();
   return choices.map((choice, index) => {
@@ -1593,7 +1627,7 @@ function normalizeDraggableRankingChoices(choices, questionLabel, definitionTota
         !Object.prototype.hasOwnProperty.call(choice, 'text')) {
       throw new Error(`${label} must explicitly define string value and text properties when any definition is present.`);
     }
-    const value = normalizeBoundedLiteral(
+    const value = validateCanonicalMachineLiteral(
       choice.value, `${label} value`, DEFINED_RANKING_LIMITS.valueChars, DEFINED_RANKING_LIMITS.valueBytes);
     const text = normalizeBoundedLiteral(
       choice.text, `${label} text`, DEFINED_RANKING_LIMITS.textChars, DEFINED_RANKING_LIMITS.textBytes);
@@ -1720,7 +1754,7 @@ function validateSurveyDefinition(json) {
   }
 
   const questionNames = new Set();
-  const definitionTotals = { chars: 0, bytes: 0 };
+  const definitionTotals = { chars: 0, bytes: 0, choices: 0 };
   const normalized = {
     ...json,
     elements: json.elements.map((element, index) => {
@@ -3471,6 +3505,7 @@ module.exports = {
   NESTED_QUESTIONS_UNSUPPORTED_MESSAGE,
   SUPPORTED_QUESTION_TYPES,
   DEFINED_RANKING_LIMITS,
+  QUESTION_DEFINITION_JSON_LIMIT,
   validateSurveyDefinition,
   validateRequiredAnswers,
   normalizeQuestionNames,

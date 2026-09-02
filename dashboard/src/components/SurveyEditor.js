@@ -33,6 +33,7 @@ import {
   validateDraggableRankingDefinitionProperty,
 } from '../utils/draggableRankingDefinitions';
 import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
+import { releaseSurveyModel, replaceSurveyContextModel } from '../utils/surveyModelLifecycle';
 import { lifecycleLabel, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
@@ -236,6 +237,7 @@ const SurveyEditor = () => {
   const [previewError, setPreviewError] = useState(null);
   const creatorRef = useRef(null);
   const surveyHooksRef = useRef(new Map());
+  const surveyContextModelsRef = useRef(new Map());
   const selectedSurveyRef = useRef(null);
   const selectedSurveyRecord = surveys.find((survey) => surveyId(survey) === selectedSurvey || survey.name === selectedSurvey) || null;
   const lifecycleLocked = Boolean(selectedSurveyRecord) && lifecycleStatus(selectedSurveyRecord) !== 'draft';
@@ -279,6 +281,14 @@ const SurveyEditor = () => {
     if (!surveyModel || typeof surveyModel.onChoicesLazyLoad === 'undefined') {
       return;
     }
+
+    replaceSurveyContextModel(
+      surveyContextModelsRef.current,
+      surveyHooksRef.current,
+      context,
+      surveyModel,
+      cleanupDraggableSurveyRoots
+    );
 
     const existing = surveyHooksRef.current.get(surveyModel);
     if (existing) {
@@ -467,6 +477,7 @@ const SurveyEditor = () => {
         cleanupDraggableSurveyRoots(survey);
       });
       hooksMap.clear();
+      surveyContextModelsRef.current.clear();
     };
   }, []);
 
@@ -565,12 +576,12 @@ const SurveyEditor = () => {
 
   const handleClosePreview = () => {
     if (previewSurveyModel) {
-      const hooks = surveyHooksRef.current.get(previewSurveyModel);
-      if (hooks?.cleanup) {
-        hooks.cleanup();
-      }
-      surveyHooksRef.current.delete(previewSurveyModel);
-      cleanupDraggableSurveyRoots(previewSurveyModel);
+      releaseSurveyModel(
+        surveyContextModelsRef.current,
+        surveyHooksRef.current,
+        previewSurveyModel,
+        cleanupDraggableSurveyRoots
+      );
       if (typeof previewSurveyModel.dispose === 'function') {
         previewSurveyModel.dispose();
       }

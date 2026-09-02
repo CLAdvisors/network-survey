@@ -18,11 +18,24 @@ export function attachDraggableRankingRenderer(survey, options = {}) {
   const roots = new Map();
 
   const unmountQuestion = (question) => {
-    const root = roots.get(question);
-    if (!root) return;
-    root.unmount();
+    const entry = roots.get(question);
+    if (!entry) return;
+    entry.root.unmount();
     roots.delete(question);
   };
+
+  // SurveyJS can discard a rendered question host without emitting another
+  // onAfterRenderQuestion event (notably while Creator swaps preview models).
+  // Observe removals so independent React roots and their document listeners
+  // cannot outlive the host that made them reachable.
+  const detachedHostObserver = typeof MutationObserver === 'function' && document.documentElement
+    ? new MutationObserver(() => {
+      roots.forEach((entry, question) => {
+        if (!entry.host.isConnected) unmountQuestion(question);
+      });
+    })
+    : null;
+  detachedHostObserver?.observe(document.documentElement, { childList: true, subtree: true });
 
   const renderQuestion = (_, renderOptions) => {
     const question = renderOptions?.question;
@@ -53,7 +66,7 @@ export function attachDraggableRankingRenderer(survey, options = {}) {
     if (!question.title && question.name) question.title = question.name;
 
     const root = createRoot(host);
-    roots.set(question, root);
+    roots.set(question, { root, host });
     root.render(
       <DraggableRankingWithDefinitions
         question={question}
@@ -69,7 +82,8 @@ export function attachDraggableRankingRenderer(survey, options = {}) {
 
   return () => {
     survey.onAfterRenderQuestion.remove(renderQuestion);
-    roots.forEach((root) => root.unmount());
+    detachedHostObserver?.disconnect();
+    roots.forEach(({ root }) => root.unmount());
     roots.clear();
   };
 }

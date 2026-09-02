@@ -92,11 +92,25 @@ describe('draggable ranking definition authoring', () => {
 
     expect(() => normalizeDraggableRankingDefinitions([{
       type: 'draggableranking',
+      choices: [{ value: ' stable-id ', text: 'One', definition: 'Defined' }],
+    }])).toThrow('may not have leading or trailing whitespace');
+
+    expect(() => normalizeDraggableRankingDefinitions([{
+      type: 'draggableranking',
       choices: Array.from({ length: 101 }, (_, index) => ({
         value: `v${index}`,
         text: `Choice ${index}`,
         definition: 'Defined',
       })),
     }])).toThrow('at most 100 choices');
+
+    expect(() => normalizeDraggableRankingDefinitions(Array.from({ length: 11 }, (_, questionIndex) => ({
+      type: 'draggableranking',
+      choices: Array.from({ length: 100 }, (_, choiceIndex) => ({
+        value: `${questionIndex}-${choiceIndex}`,
+        text: `Choice ${choiceIndex}`,
+        definition: 'Defined',
+      })),
+    })))).toThrow('at most 1000 choices across the survey');
   });
 });

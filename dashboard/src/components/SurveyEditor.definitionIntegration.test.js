@@ -9,6 +9,7 @@ describe('Survey Editor definition runtime integration', () => {
     expect(source.match(/attachDraggableRankingRenderer\(surveyModel\)/g)).toHaveLength(1);
     expect(source).toContain("configureSurveyModel(options.survey, 'preview')");
     expect(source).toContain("configureSurveyModel(model, 'preview-runtime')");
+    expect(source).toContain('replaceSurveyContextModel(');
     expect(source).not.toContain('ReactDOM.createRoot');
   });
 

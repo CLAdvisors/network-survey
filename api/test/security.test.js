@@ -1014,6 +1014,36 @@ test('authenticated question update rejects nested, unknown, and invalid-identit
   assert.deepEqual(validResponse.body.questions.elements.map(({ name }) => name), ['question_1', 'question_2', 'question_3']);
   assert.equal(validResponse.body.questions.elements[2].visibleIf,
     '{question_1.Column 1} notempty and {question_3} empty');
+
+  // Exercise the real session/origin/parser/authorization route stack with the
+  // largest definition-feature shape allowed by all aggregate validators.
+  const maximumSchema = {
+    elements: Array.from({ length: 10 }, (_, questionIndex) => ({
+      type: 'draggableranking',
+      name: `maximum_${questionIndex}`,
+      choices: Array.from({ length: 100 }, (_, choiceIndex) => {
+        const prefix = `${questionIndex}-${choiceIndex}-`;
+        return {
+          value: prefix + '😀'.repeat(128 - [...prefix].length),
+          text: '😀'.repeat(240),
+          definition: 'd'.repeat(250),
+        };
+      }),
+    })),
+  };
+  const maximumPayload = { surveyName: 'Survey A', questions: maximumSchema };
+  assert.ok(Buffer.byteLength(JSON.stringify(maximumPayload)) > 1024 * 1024);
+  const maximumResponse = await agent.post('/api/updateQuestions').send(maximumPayload);
+  assert.equal(maximumResponse.status, 200);
+  assert.equal(maximumResponse.body.questions.elements.length, 10);
+
+  const oversizedResponse = await agent.post('/api/updateQuestions')
+    .send({ padding: 'x'.repeat(3 * 1024 * 1024) });
+  assert.equal(oversizedResponse.status, 413);
+  assert.deepEqual(oversizedResponse.body, {
+    error: 'request_too_large',
+    message: 'Request body exceeds the allowed size.',
+  });
 });
 
 test('authenticated question updates allocate above historical response keys for object and CSV payloads', async (t) => {
@@ -1717,11 +1747,8 @@ test('JSON parsing accepts maximum roster requests without raising the global li
   const oversizedRoster = await request(app)
     .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
     .send({ padding: 'x'.repeat(3 * 1024 * 1024) });
-  assert.equal(oversizedRoster.status, 413);
-  assert.deepEqual(oversizedRoster.body, {
-    error: 'request_too_large',
-    message: 'Request body exceeds the allowed size.',
-  });
+  assert.equal(oversizedRoster.status, 401);
+  assert.deepEqual(oversizedRoster.body, { error: 'Unauthorized' });
 
   for (const [method, path] of [['post', '/api/login'], ['post', '/api/user']]) {
     const ordinaryOversized = await request(app)[method](path)

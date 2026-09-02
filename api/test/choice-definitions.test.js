@@ -9,6 +9,7 @@ const {
   app,
   pool,
   DEFINED_RANKING_LIMITS,
+  QUESTION_DEFINITION_JSON_LIMIT,
   validateSurveyDefinition,
   validateRequiredAnswers,
 } = require('../server');
@@ -21,18 +22,34 @@ function choice(value, definition = 'Definition') {
   return { value, text: `Label ${value}`, definition };
 }
 
-test('definition-enabled draggable ranking choices normalize literal fields and retain machine values', () => {
+test('definition-enabled rankings preserve canonical machine IDs while normalizing text and definition', () => {
   const schema = validateSurveyDefinition(definedRanking([
-    { value: '  stable-one  ', text: '  Stable one  ', definition: '  First paragraph.\r\n\rSecond paragraph.  ' },
+    { value: 'Stable.ID-01', text: '  Stable one  ', definition: '  First paragraph.\r\n\rSecond paragraph.  ' },
     { value: 'stable-two', text: 'Stable two', definition: '   ' },
   ]));
 
   assert.deepEqual(schema.elements[0].choices, [
-    { value: 'stable-one', text: 'Stable one', definition: 'First paragraph.\n\nSecond paragraph.' },
+    { value: 'Stable.ID-01', text: 'Stable one', definition: 'First paragraph.\n\nSecond paragraph.' },
     { value: 'stable-two', text: 'Stable two' },
   ]);
-  assert.deepEqual(validateRequiredAnswers(schema, { values: ['stable-two', 'stable-one'] }), []);
+  assert.deepEqual(validateRequiredAnswers(schema, { values: ['stable-two', 'Stable.ID-01'] }), []);
   assert.deepEqual(validateRequiredAnswers(schema, { values: ['Stable one'] }), ['Invalid response: values']);
+});
+
+test('definition-enabled rankings reject noncanonical machine IDs without mutating input', () => {
+  const invalidValues = [
+    [' leading', /leading or trailing whitespace/],
+    ['trailing ', /leading or trailing whitespace/],
+    ['line\nbreak', /may not contain CR or LF/],
+    ['line\rbreak', /may not contain CR or LF/],
+    ['line\r\nbreak', /may not contain CR or LF/],
+  ];
+  for (const [value, message] of invalidValues) {
+    const input = definedRanking([{ value, text: 'Label', definition: 'Definition' }]);
+    const original = structuredClone(input);
+    assert.throws(() => validateSurveyDefinition(input), message);
+    assert.deepEqual(input, original);
+  }
 });
 
 test('legacy draggable rankings without definitions retain primitive and legacy object choices', () => {
@@ -78,6 +95,7 @@ test('one definition makes explicit, nonempty, unique string values and texts ma
 test('definition-enabled ranking limits enforce characters, UTF-8 bytes, count, and forbidden controls', () => {
   assert.deepEqual(DEFINED_RANKING_LIMITS, {
     choices: 100,
+    surveyChoices: 1000,
     valueChars: 128,
     valueBytes: 512,
     textChars: 240,
@@ -108,6 +126,38 @@ test('definition-enabled ranking limits enforce characters, UTF-8 bytes, count, 
   }
 });
 
+test('definition-enabled rankings enforce a 1000-choice survey aggregate', () => {
+  const schema = {
+    elements: Array.from({ length: 10 }, (_, questionIndex) => ({
+      type: 'draggableranking',
+      name: `q${questionIndex}`,
+      choices: Array.from({ length: 100 }, (_, choiceIndex) =>
+        choice(`${questionIndex}-${choiceIndex}`)),
+    })),
+  };
+  assert.equal(validateSurveyDefinition(schema).elements.flatMap(element => element.choices).length, 1000);
+
+  schema.elements.push({
+    type: 'draggableranking',
+    name: 'one_too_many',
+    choices: [choice('extra')],
+  });
+  assert.throws(() => validateSurveyDefinition(schema), /at most 1000 choices across the survey/);
+});
+
+test('survey definition UTF-8 byte budget has an independent exact boundary', () => {
+  const schema = {
+    elements: Array.from({ length: 128 }, (_, index) => ({
+      type: 'draggableranking',
+      name: `q${index}`,
+      choices: [choice(`v${index}`, '😀'.repeat(1024))],
+    })),
+  };
+  assert.doesNotThrow(() => validateSurveyDefinition(schema));
+  schema.elements[0].choices[0].definition += 'x';
+  assert.throws(() => validateSurveyDefinition(schema), /aggregate limit/);
+});
+
 test('survey-wide definition character and byte budgets are enforced', () => {
   const characterHeavy = {
     elements: Array.from({ length: 26 }, (_, questionIndex) => ({
@@ -129,20 +179,36 @@ test('survey-wide definition character and byte budgets are enforced', () => {
   assert.throws(() => validateSurveyDefinition(byteHeavy), /aggregate limit/);
 });
 
-test('/api/updateQuestions has a scoped 1 MiB JSON body limit', async (t) => {
+test('/api/updateQuestions rejects unauthenticated oversized malformed bodies before parsing', async (t) => {
   t.after(() => pool.end());
 
-  const acceptedByParser = await request(app)
+  const response = await request(app)
     .post('/api/updateQuestions')
-    .send({ padding: 'x'.repeat(150 * 1024) });
-  assert.equal(acceptedByParser.status, 401);
+    .set('Content-Type', 'application/json')
+    .send(`{"unfinished":"${'x'.repeat(3 * 1024 * 1024)}`);
+  assert.equal(response.status, 401);
+  assert.deepEqual(response.body, { error: 'Unauthorized' });
+});
 
-  const oversized = await request(app)
-    .post('/api/updateQuestions')
-    .send({ padding: 'x'.repeat(1024 * 1024) });
-  assert.equal(oversized.status, 413);
-  assert.deepEqual(oversized.body, {
-    error: 'request_too_large',
-    message: 'Request body exceeds the allowed size.',
-  });
+test('maximum-valid feature schema fits the scoped 3 MiB parser budget', () => {
+  assert.equal(QUESTION_DEFINITION_JSON_LIMIT, '3mb');
+  const maximumSchema = {
+    elements: Array.from({ length: 10 }, (_, questionIndex) => ({
+      type: 'draggableranking',
+      name: `q${questionIndex}`,
+      choices: Array.from({ length: 100 }, (_, choiceIndex) => {
+        const prefix = `${questionIndex}-${choiceIndex}-`;
+        return {
+          value: prefix + '😀'.repeat(128 - [...prefix].length),
+          text: '😀'.repeat(240),
+          definition: 'd'.repeat(250),
+        };
+      }),
+    })),
+  };
+  assert.doesNotThrow(() => validateSurveyDefinition(maximumSchema));
+  const payload = { surveyName: 'Maximum', questions: maximumSchema };
+  const payloadBytes = Buffer.byteLength(JSON.stringify(payload));
+  assert.ok(payloadBytes > 1024 * 1024);
+  assert.ok(payloadBytes < 3 * 1024 * 1024);
 });

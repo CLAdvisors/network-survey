@@ -40,6 +40,7 @@ describe('production draggable-ranking Info definitions', () => {
   it('opens the same literal, paragraph-preserving content by hover, focus, click, and tap activation', () => {
     const { container } = render(<Fixture />);
     const info = screen.getByRole('button', { name: /Info: A deliberately long Alpha/ });
+    expect(info).not.toHaveAttribute('aria-controls');
 
     fireEvent.mouseEnter(info);
     let details = screen.getByRole('region', { name: /Definition: A deliberately long Alpha/ });
@@ -60,6 +61,24 @@ describe('production draggable-ranking Info definitions', () => {
     fireEvent.touchStart(info);
     fireEvent.click(info);
     expect(screen.getByRole('region', { name: /Definition: A deliberately long Alpha/ })).toHaveTextContent('First paragraph.');
+  });
+
+  it('closes a focus-opened definition only after focus exits its trigger and callout', () => {
+    render(<><Fixture /><button type="button">Outside ranking</button></>);
+    const info = screen.getByRole('button', { name: 'Info: Beta' });
+    const outside = screen.getByRole('button', { name: 'Outside ranking' });
+
+    fireEvent.focus(info);
+    const callout = screen.getByRole('region', { name: 'Definition: Beta' });
+    const close = within(callout).getByRole('button', { name: 'Close definition' });
+    fireEvent.blur(info, { relatedTarget: close });
+    fireEvent.focus(close);
+    expect(callout).toBeInTheDocument();
+
+    fireEvent.blur(close, { relatedTarget: outside });
+    fireEvent.focus(outside);
+    expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
+    expect(info).not.toHaveAttribute('aria-controls');
   });
 
   it('uses explicit-button-only hover and closes at the actual control boundary', () => {
@@ -106,18 +125,51 @@ describe('production draggable-ranking Info definitions', () => {
     expect(onChange).toHaveBeenCalledWith(['stable-beta']);
   });
 
-  it('gives every question/choice relationship a unique ARIA target and keeps Info and Rank in the action row', async () => {
+  it('gives rendered callouts unique ARIA targets and keeps DOM, visual, and focus action order coherent', async () => {
     render(<><Fixture /><Fixture /></>);
     const infos = screen.getAllByRole('button', { name: /Info:/ });
-    const ids = infos.map((button) => button.getAttribute('aria-controls'));
+    expect(infos.every((button) => !button.hasAttribute('aria-controls'))).toBe(true);
+
+    const ids = [];
+    for (const info of infos) {
+      fireEvent.focus(info);
+      await waitFor(() => expect(info).toHaveAttribute('aria-controls'));
+      ids.push(info.getAttribute('aria-controls'));
+      fireEvent.blur(info, { relatedTarget: document.body });
+    }
     expect(new Set(ids).size).toBe(ids.length);
 
     const alphaInfo = infos[0];
-    const row = alphaInfo.parentElement;
-    expect(within(row).getByRole('button', { name: /Rank: A deliberately long Alpha/ })).toBeInTheDocument();
-    expect(alphaInfo).toHaveTextContent('Info');
-
     fireEvent.focus(alphaInfo);
-    await waitFor(() => expect(document.getElementById(alphaInfo.getAttribute('aria-controls'))).toBeInTheDocument());
+    const row = alphaInfo.parentElement;
+    const rank = within(row).getByRole('button', { name: /Rank: A deliberately long Alpha/ });
+    const close = within(row).getByRole('button', { name: 'Close definition' });
+    expect(alphaInfo.compareDocumentPosition(rank) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(rank.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.getElementById(alphaInfo.getAttribute('aria-controls'))).toBeInTheDocument();
+  });
+
+  it('does not add Info controls or supplemental row layout for blank and definition-free choices', async () => {
+    const definitionFreeQuestion = {
+      choices: [
+        { value: 'blank', text: 'Blank', definition: ' \n\t ' },
+        { value: 'missing', text: 'Missing' },
+      ],
+      value: [],
+      maxSelectedChoices: 0,
+    };
+    render(
+      <DraggableRankingWithDefinitions
+        question={definitionFreeQuestion}
+        value={[]}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Info:/ })).not.toBeInTheDocument();
+    const label = await screen.findByText('Blank');
+    expect(label).toHaveStyle({ flex: '1 1 auto', textAlign: 'center' });
+    expect(label).not.toHaveAttribute('aria-label');
+    expect(within(label.parentElement).getByRole('button', { name: 'Rank: Blank' })).toBeInTheDocument();
   });
 });

@@ -8,6 +8,9 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [memberships, setMemberships] = useState([]);
+  const [authSessionRevision, setAuthSessionRevision] = useState(0);
+  const authGeneration = React.useRef(0);
+  const pendingLogout = React.useRef(null);
 
   // Check authentication status on mount
   useEffect(() => {
@@ -15,11 +18,10 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const checkAuth = async () => {
+    const generation = ++authGeneration.current;
     try {
-      const response = await api.get('/check-auth', {
-        credentials: 'include'
-      });
-      
+      const response = await api.get('/check-auth', { credentials: 'include' });
+      if (generation !== authGeneration.current) return false;
       if (response.status === 200) {
         setUser(response.data.user);
         setMemberships(response.data.memberships || []);
@@ -29,36 +31,53 @@ export const AuthProvider = ({ children }) => {
         setUser(null);
         setMemberships([]);
       }
+      setAuthSessionRevision((value) => value + 1);
+      return response.status === 200;
     } catch (error) {
+      if (generation !== authGeneration.current) return false;
       console.error('Auth check failed:', error);
       setIsAuthenticated(false);
       setUser(null);
       setMemberships([]);
+      setAuthSessionRevision((value) => value + 1);
+      return false;
     } finally {
-      setIsLoading(false);
+      if (generation === authGeneration.current) setIsLoading(false);
     }
   };
 
   const login = async (username, password) => {
+    const generation = ++authGeneration.current;
     try {
+      await pendingLogout.current?.catch(() => {});
+      if (generation !== authGeneration.current) return false;
       const response = await api.post('/login', { username, password });
+      if (generation !== authGeneration.current) return false;
       setIsAuthenticated(true);
       setUser(response.data.user);
       setMemberships(response.data.memberships || []);
+      setAuthSessionRevision((value) => value + 1);
       return true;
     } catch (error) {
-      console.error('Login error:', error);
+      if (generation === authGeneration.current) console.error('Login error:', error);
       return false;
     }
   };
 
   const logout = async () => {
+    const generation = ++authGeneration.current;
+    setIsAuthenticated(false);
+    setUser(null);
+    setMemberships([]);
+    setAuthSessionRevision((value) => value + 1);
+    const request = api.post('/logout');
+    pendingLogout.current = request;
     try {
-      await api.post('/logout');
+      await request;
+    } catch (error) {
+      if (generation === authGeneration.current) console.error('Logout error:', error);
     } finally {
-      setIsAuthenticated(false);
-      setUser(null);
-      setMemberships([]);
+      if (pendingLogout.current === request) pendingLogout.current = null;
     }
   };
 
@@ -78,6 +97,7 @@ export const AuthProvider = ({ children }) => {
         isLoading, 
         user,
         memberships,
+        authSessionRevision,
         hasSurveyRole,
         canViewSensitiveSurveyData,
         canEditSurvey,

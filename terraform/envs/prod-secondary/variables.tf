@@ -68,6 +68,35 @@ variable "enable_public_aws_endpoints" {
   default     = true
 }
 
+variable "custom_domains" {
+  description = "Approved prod-secondary custom HTTPS names."
+  type = object({
+    api       = string
+    dashboard = string
+    survey    = string
+  })
+  default = {
+    api       = "api.cladvisorsurveys.com"
+    dashboard = "dashboard.cladvisorsurveys.com"
+    survey    = "surveys.cladvisorsurveys.com"
+  }
+
+  validation {
+    condition = (
+      var.custom_domains.api == "api.cladvisorsurveys.com" &&
+      var.custom_domains.dashboard == "dashboard.cladvisorsurveys.com" &&
+      var.custom_domains.survey == "surveys.cladvisorsurveys.com"
+    )
+    error_message = "prod-secondary custom domains must match the explicitly approved cladvisorsurveys.com names."
+  }
+}
+
+variable "enable_custom_domain_aliases" {
+  description = "Attach custom aliases only after ACM DNS validation succeeds."
+  type        = bool
+  default     = false
+}
+
 variable "enable_owner_bootstrap" {
   description = "One-time target-only CLA owner bootstrap gate. Return to false immediately after successful verification."
   type        = bool

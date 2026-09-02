@@ -49,6 +49,11 @@ output "frontend_bucket_names" {
   value = module.platform.frontend_bucket_names
 }
 
+output "custom_domain_configuration" {
+  description = "Custom aliases, activation state, certificate ARN, and external DNS validation records."
+  value       = module.platform.custom_domain_configuration
+}
+
 output "api_cloudfront_endpoint" {
   description = "Public AWS default HTTPS API endpoint; custom DNS remains deferred."
   value       = module.platform.api_cloudfront_endpoint

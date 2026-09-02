@@ -1,6 +1,6 @@
 # prod-secondary buildout record
 
-**Status:** target foundation and AWS default-domain public endpoints deployed and verified; custom DNS deferred
+**Status:** target foundation and custom same-site HTTPS endpoints deployed and verified
 **Target:** AWS account `710054969994`, `us-east-1`
 **Source isolation:** accounts `438465164125` staging/production are not Terraform providers, backends, or resource targets for this root
 
@@ -57,14 +57,18 @@ No DNS, ACM certificate, Resend API key, webhook endpoint, source snapshot, sour
 - bootstrap was returned to false, instance access to bootstrap parameters was removed, and historical release directories containing resolved bootstrap material were removed
 - Terraform reports no drift after the final apply
 - direct ALB CIDR ingress remains empty; the ALB origin allows only the AWS-managed CloudFront origin-facing prefix
-- API, dashboard, and survey CloudFront default-domain HTTPS endpoints are enabled with no custom aliases and return HTTP 200
-- dashboard-to-API CORS preflight returns the exact dashboard origin with credentials enabled
+- API, dashboard, and survey CloudFront distributions retain their default domains during the agreed transition window
+- ACM DNS validation succeeded for the three custom names, each CloudFront alias is deployed, and public HTTPS verification returns HTTP 200 with valid certificates
+- dashboard-to-API CORS preflight returns the exact custom dashboard origin with credentials enabled
+- both frontend bundles reference the custom API hostname; the dashboard bundle references the plural custom survey hostname
 
-Current AWS validation endpoints:
+Current canonical endpoints:
 
-- API: `https://d2owhx1glow77j.cloudfront.net`
-- dashboard: `https://d3tvm2yhgzair6.cloudfront.net`
-- survey: `https://d1i5psy3vi3gee.cloudfront.net`
+- API: `https://api.cladvisorsurveys.com`
+- dashboard: `https://dashboard.cladvisorsurveys.com`
+- survey: `https://surveys.cladvisorsurveys.com`
+
+The existing singular `https://survey.cladvisorsurveys.com` source-environment endpoint was not changed.
 
 The target-only bootstrap password remains in its operator-managed SecureString for approved handoff; it is not available to the application role and was never printed or committed.
 
@@ -76,4 +80,4 @@ The protected GitHub environment `prod-secondary` is configured with required re
 
 ## Remaining blockers
 
-Custom production hostnames/ACM remain deferred by decision. The current CloudFront default domains are suitable for endpoint validation, but custom same-site domains should be established before relying on browser session behavior for real users. The root dependency install also reports existing package vulnerabilities, including two critical findings; triage is required before declaring the environment ready for live production traffic.
+The root dependency install reports existing package vulnerabilities, including two critical findings; triage is required before declaring the environment ready for live production traffic.

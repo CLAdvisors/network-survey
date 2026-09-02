@@ -23,9 +23,11 @@ module "platform" {
   db_master_username    = "DbAdmin"
   backup_retention_days = 35
 
-  enable_public_aws_endpoints = var.enable_public_aws_endpoints
-  enable_owner_bootstrap      = var.enable_owner_bootstrap
-  operations_alert_email      = "bgarcia2324@gmail.com"
+  enable_public_aws_endpoints  = var.enable_public_aws_endpoints
+  custom_domains               = var.custom_domains
+  enable_custom_domain_aliases = var.enable_custom_domain_aliases
+  enable_owner_bootstrap       = var.enable_owner_bootstrap
+  operations_alert_email       = "bgarcia2324@gmail.com"
 
   common_tags = local.common_tags
 }

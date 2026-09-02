@@ -159,12 +159,13 @@ jobs:
             test "$TARGET_GROUP_COUNT" -gt 0 || { echo "ASG $ASG_NAME has no target group" >&2; exit 1; }
             ALB_ARN=$(by_tag_exact ona-api elasticloadbalancing:loadbalancer "$AWS_REGION")
             API_EDGE_DIST=$(by_tag_exact ona-api-edge cloudfront:distribution | sed 's|.*/||')
-            API_HOST=$(aws cloudfront get-distribution --id "$API_EDGE_DIST" \
-              --query 'Distribution.DomainName' --output text)
-            DASHBOARD_HOST=$(aws cloudfront get-distribution --id "$DASHBOARD_DIST" \
-              --query 'Distribution.DomainName' --output text)
-            SURVEY_HOST=$(aws cloudfront get-distribution --id "$SURVEY_DIST" \
-              --query 'Distribution.DomainName' --output text)
+            distribution_host() {
+              aws cloudfront get-distribution --id "$1" --output json |
+                jq -r '.Distribution.DistributionConfig.Aliases.Items[0] // .Distribution.DomainName'
+            }
+            API_HOST=$(distribution_host "$API_EDGE_DIST")
+            DASHBOARD_HOST=$(distribution_host "$DASHBOARD_DIST")
+            SURVEY_HOST=$(distribution_host "$SURVEY_DIST")
             DASHBOARD_ENABLED=$(aws cloudfront get-distribution --id "$DASHBOARD_DIST" --query 'Distribution.DistributionConfig.Enabled' --output text)
             SURVEY_ENABLED=$(aws cloudfront get-distribution --id "$SURVEY_DIST" --query 'Distribution.DistributionConfig.Enabled' --output text)
             if [ "$DASHBOARD_ENABLED" = True ] && [ "$SURVEY_ENABLED" = True ]; then FRONTENDS_ENABLED=true; else FRONTENDS_ENABLED=false; fi

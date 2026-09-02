@@ -64,6 +64,16 @@ output "frontend_bucket_names" {
   value       = { for name, bucket in aws_s3_bucket.frontend : name => bucket.bucket }
 }
 
+output "custom_domain_configuration" {
+  description = "Approved aliases and ACM DNS validation records."
+  value = {
+    aliases            = var.custom_domains
+    aliases_enabled    = var.enable_custom_domain_aliases
+    certificate_arn    = aws_acm_certificate.cloudfront.arn
+    validation_records = aws_acm_certificate.cloudfront.domain_validation_options
+  }
+}
+
 output "api_cloudfront_endpoint" {
   description = "HTTPS API endpoint on the CloudFront default domain."
   value = {

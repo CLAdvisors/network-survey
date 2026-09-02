@@ -139,6 +139,21 @@ variable "enable_public_aws_endpoints" {
   default     = false
 }
 
+variable "custom_domains" {
+  description = "Custom HTTPS names for the API and frontend CloudFront distributions."
+  type = object({
+    api       = string
+    dashboard = string
+    survey    = string
+  })
+}
+
+variable "enable_custom_domain_aliases" {
+  description = "Attach validated custom names and the ACM certificate to CloudFront."
+  type        = bool
+  default     = false
+}
+
 variable "enable_owner_bootstrap" {
   description = "Temporarily expose the approved CLA owner bootstrap configuration."
   type        = bool

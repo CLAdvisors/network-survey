@@ -13,7 +13,7 @@ It creates:
 - target-owned workload and RDS CMKs
 - an RDS-managed master credential in Secrets Manager
 - private/versioned config, artifact, dashboard, and survey buckets
-- CloudFront default-domain HTTPS distributions for the API, dashboard, and survey, with no custom aliases
+- CloudFront HTTPS distributions for the API, dashboard, and survey with optional validated ACM aliases while retaining default-domain access
 - exact `prod-secondary` runtime configuration with sending, claiming, webhook, bootstrap, cutover, and traffic gates off
 - target-scoped deploy IAM, runtime log groups, SNS routing, and baseline ALB/ASG/RDS alarms
 

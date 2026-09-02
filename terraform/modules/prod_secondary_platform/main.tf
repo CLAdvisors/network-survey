@@ -53,8 +53,8 @@ locals {
     "SESSION_SECRET_PARAMETER=/network-survey/prod-secondary/api/session-secret",
     "SESSION_COOKIE_NAME=prodSecondarySessionId",
     "ALLOW_PUBLIC_SIGNUP=false",
-    "FRONTEND_URL=https://${aws_cloudfront_distribution.frontend["dashboard"].domain_name}",
-    "SURVEY_URL=https://${aws_cloudfront_distribution.frontend["survey"].domain_name}",
+    "FRONTEND_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.dashboard : aws_cloudfront_distribution.frontend["dashboard"].domain_name}",
+    "SURVEY_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.survey : aws_cloudfront_distribution.frontend["survey"].domain_name}",
     "EMAIL_WORKER_ENV=prod-secondary",
     "EMAIL_RATE_BUDGET_ENV=prod-secondary",
     "SURVEY_DELIVERY_V2_ENABLED=false",
@@ -575,10 +575,27 @@ resource "aws_lb_listener" "https" {
   }
 }
 
+resource "aws_acm_certificate" "cloudfront" {
+  domain_name               = var.custom_domains.api
+  subject_alternative_names = [var.custom_domains.dashboard, var.custom_domains.survey]
+  validation_method         = "DNS"
+
+  options {
+    certificate_transparency_logging_preference = "ENABLED"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = merge(var.common_tags, { Name = "${var.name_prefix}-cloudfront" })
+}
+
 resource "aws_cloudfront_distribution" "api" {
   enabled         = var.enable_public_aws_endpoints
   is_ipv6_enabled = true
-  comment         = "prod-secondary API AWS endpoint; custom DNS is deferred"
+  aliases         = var.enable_custom_domain_aliases ? [var.custom_domains.api] : []
+  comment         = "prod-secondary API edge"
 
   origin {
     domain_name = aws_lb.api.dns_name
@@ -620,7 +637,10 @@ resource "aws_cloudfront_distribution" "api" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = !var.enable_custom_domain_aliases
+    acm_certificate_arn            = var.enable_custom_domain_aliases ? aws_acm_certificate.cloudfront.arn : null
+    ssl_support_method             = var.enable_custom_domain_aliases ? "sni-only" : null
+    minimum_protocol_version       = var.enable_custom_domain_aliases ? "TLSv1.2_2021" : "TLSv1"
   }
 
   tags = merge(var.common_tags, { Name = "${var.name_prefix}-api-edge", App = "ona-api-edge" })
@@ -1211,8 +1231,9 @@ resource "aws_cloudfront_distribution" "frontend" {
 
   enabled             = var.enable_public_aws_endpoints
   is_ipv6_enabled     = true
+  aliases             = var.enable_custom_domain_aliases ? [var.custom_domains[each.key]] : []
   default_root_object = "index.html"
-  comment             = "Dark prod-secondary ${each.key}; activation requires a separate review"
+  comment             = "prod-secondary ${each.key} edge"
 
   origin {
     domain_name              = each.value.bucket_regional_domain_name
@@ -1246,7 +1267,10 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = !var.enable_custom_domain_aliases
+    acm_certificate_arn            = var.enable_custom_domain_aliases ? aws_acm_certificate.cloudfront.arn : null
+    ssl_support_method             = var.enable_custom_domain_aliases ? "sni-only" : null
+    minimum_protocol_version       = var.enable_custom_domain_aliases ? "TLSv1.2_2021" : "TLSv1"
   }
 
   tags = merge(var.common_tags, { Name = "${var.name_prefix}-${each.key}", App = "ona-${each.key}" })

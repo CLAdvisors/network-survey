@@ -118,7 +118,9 @@ function Item({
           ? `${text}. ${stateLabel}. ${actionDisabled ? "Ranking limit reached." : "Drag to reorder or move between lists."}`
           : undefined}
         style={{
-          flex: "1 1 auto",
+          // A zero flex basis keeps long labels from claiming the action buttons'
+          // row; the label wraps inside the remaining space instead.
+          flex: supplement ? "1 1 0" : "1 1 auto",
           minWidth: 0,
           padding: 8,
           textAlign: supplement ? "start" : "center",

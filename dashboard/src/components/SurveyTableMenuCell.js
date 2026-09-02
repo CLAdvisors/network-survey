@@ -234,7 +234,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         <Box component="form" noValidate onSubmit={(event) => { event.preventDefault(); handleCopyConfirm(); }}>
           <DialogContent>
             <DialogContentText sx={{ mb: 2 }}>
-              Copy the survey title, question schema, and invitation email subject/body templates from “{row.name}”. No participants, contact details, response state, invitation links, or delivery history will be copied.
+              Copy the survey title, instructions override, question schema, and invitation email subject/body templates from “{row.name}”. No participants, contact details, response state, invitation links, or delivery history will be copied.
             </DialogContentText>
             <TextField
               autoFocus

@@ -28,8 +28,8 @@ test('canonical environments preserve existing behavior and accept exact prod-se
 
 test('prod-secondary migration seeds every hosted delivery control disabled', () => {
   const master = fs.readFileSync(path.join(repositoryRoot, 'db/changelogs/master-changelog.xml'), 'utf8');
-  const migration = fs.readFileSync(path.join(repositoryRoot, 'db/changelogs/v1_11_prod_secondary_controls.sql'), 'utf8');
-  assert.match(master, /v1_11_prod_secondary_controls\.sql/);
+  const migration = fs.readFileSync(path.join(repositoryRoot, 'db/changelogs/v1_8_prod_secondary_controls.sql'), 'utf8');
+  assert.match(master, /v1_8_prod_secondary_controls\.sql/);
   assert.match(migration, /email_worker_control[\s\S]*'prod-secondary', false/);
   assert.match(migration, /email_webhook_worker_control[\s\S]*'prod-secondary', false, false/);
   assert.match(migration, /email_suppression_control[\s\S]*'prod-secondary', false/);

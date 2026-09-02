@@ -9,8 +9,12 @@ vi.mock('../api/axios', () => ({ default: { get: vi.fn() } }));
 
 vi.mock('@mui/x-data-grid', () => ({
   GridToolbar: () => null,
-  DataGrid: ({ rows, columns, onRowClick, rowSelectionModel }) => (
-    <div data-testid="survey-grid" data-selection={JSON.stringify(rowSelectionModel)}>
+  DataGrid: ({ rows, columns, onRowClick, rowSelectionModel, sx }) => (
+    <div
+      data-testid="survey-grid"
+      data-selection={JSON.stringify(rowSelectionModel)}
+      data-selection-styles={String(Boolean(sx?.['& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell']))}
+    >
       {rows.map((row) => <button key={`select-${row.id}`} onClick={() => onRowClick({ row })}>Select row {row.name}</button>)}
       {columns.filter((column) => ['responseRateSortValue', 'invitationSummary', 'providerSummary'].includes(column.field)).map((column) => (
         <section
@@ -61,23 +65,26 @@ test('keeps survey dispatch acceptance separate from provider outcomes', () => {
   expect(details).toHaveAttribute('tabindex', '0');
 });
 
-test('keeps selected-row semantics and defines visible hover, focus, and forced-color combinations', () => {
+test('keeps selected-row indicators visible across horizontal scroll, hover, focus, and forced colors', () => {
   const selectRow = vi.fn();
   const selected = row('selected', {});
   const other = row('other', {});
   render(<SurveyTable rows={[selected, other]} selectedSurvey={selected} selectRow={selectRow} />);
 
   expect(screen.getByTestId('survey-grid')).toHaveAttribute('data-selection', '["selected"]');
+  expect(screen.getByTestId('survey-grid')).toHaveAttribute('data-selection-styles', 'true');
   fireEvent.click(screen.getByRole('button', { name: 'Select row Survey other' }));
   expect(selectRow).toHaveBeenCalledWith(expect.objectContaining(other));
 
   const theme = createTheme({ palette: { primary: { main: '#42b4af', dark: '#3b9f9b' }, text: { primary: '#333333' } } });
   const selectedStyle = surveyTableSx['& .MuiDataGrid-row.Mui-selected'];
-  const selectedHoverStyle = surveyTableSx['& .MuiDataGrid-row.Mui-selected:hover, & .MuiDataGrid-row.Mui-selected.Mui-hovered'];
+  const selectedHoverStyle = surveyTableSx['& .MuiDataGrid-row.Mui-selected:hover'];
   const selectedFocusStyle = surveyTableSx['& .MuiDataGrid-row.Mui-selected:focus-within'];
+  const selectedCellStyle = surveyTableSx['& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell'];
   expect(selectedStyle.boxShadow(theme)).toContain('inset 4px 0 0 #333333');
   expect(selectedStyle.backgroundColor(theme)).not.toBe(selectedHoverStyle.backgroundColor(theme));
   expect(selectedFocusStyle.outline(theme)).toBe(`2px solid ${theme.palette.text.primary}`);
+  expect(selectedCellStyle.boxShadow(theme)).toBe('inset 0 2px 0 #333333, inset 0 -2px 0 #333333');
   expect(surveyTableSx['& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell[data-field="name"]']).toEqual({ fontWeight: 700 });
   expect(surveyTableSx['@media (forced-colors: active)']['& .MuiDataGrid-row.Mui-selected']).toMatchObject({
     backgroundColor: 'Canvas',
@@ -86,6 +93,11 @@ test('keeps selected-row semantics and defines visible hover, focus, and forced-
     color: 'CanvasText',
   });
   expect(surveyTableSx['@media (forced-colors: active)']['& .MuiDataGrid-row.Mui-selected:focus-within'].outline).toBe('2px solid Highlight');
+  expect(surveyTableSx['@media (forced-colors: active)']['& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell']).toMatchObject({
+    borderBlockStart: '2px solid Highlight',
+    borderBlockEnd: '2px solid Highlight',
+    boxShadow: 'none',
+  });
 });
 
 test('labels reminder campaigns separately from initial invitations', () => {

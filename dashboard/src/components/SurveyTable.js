@@ -14,7 +14,7 @@ export const surveyTableSx = {
     backgroundColor: (theme) => alpha(theme.palette.primary.dark, theme.palette.action.selectedOpacity),
     boxShadow: (theme) => `inset 4px 0 0 ${theme.palette.text.primary}`,
   },
-  '& .MuiDataGrid-row.Mui-selected:hover, & .MuiDataGrid-row.Mui-selected.Mui-hovered': {
+  '& .MuiDataGrid-row.Mui-selected:hover': {
     backgroundColor: (theme) => alpha(
       theme.palette.primary.dark,
       theme.palette.action.selectedOpacity + theme.palette.action.hoverOpacity,
@@ -23,6 +23,9 @@ export const surveyTableSx = {
   '& .MuiDataGrid-row.Mui-selected:focus-within': {
     outline: (theme) => `2px solid ${theme.palette.text.primary}`,
     outlineOffset: '-2px',
+  },
+  '& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell': {
+    boxShadow: (theme) => `inset 0 2px 0 ${theme.palette.text.primary}, inset 0 -2px 0 ${theme.palette.text.primary}`,
   },
   '& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell[data-field="name"]': {
     fontWeight: 700,
@@ -34,11 +37,17 @@ export const surveyTableSx = {
       boxShadow: 'none',
       color: 'CanvasText',
     },
-    '& .MuiDataGrid-row.Mui-selected:hover, & .MuiDataGrid-row.Mui-selected.Mui-hovered': {
+    '& .MuiDataGrid-row.Mui-selected:hover': {
       backgroundColor: 'Canvas',
     },
     '& .MuiDataGrid-row.Mui-selected:focus-within': {
       outline: '2px solid Highlight',
+    },
+    '& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell': {
+      borderBlockStart: '2px solid Highlight',
+      borderBlockEnd: '2px solid Highlight',
+      boxShadow: 'none',
+      boxSizing: 'border-box',
     },
   },
 };

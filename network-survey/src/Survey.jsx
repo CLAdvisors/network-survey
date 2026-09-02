@@ -1,18 +1,14 @@
 import React, { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { Box, Container, Typography } from '@mui/material';
 import { AppPage, Surface, appShadows } from '@network-survey/frontend-react';
 import Header from './Header';
 import SurveyComponent from './SurveyComponent';
 import Logo from './logo.svg?react';
 import { PRODUCTION_SURVEY_WRAPPER_SX } from '@network-survey/frontend-shared';
-import { instructionsForSurvey } from './surveyInstructions';
 
 const Survey = () => {
   const [title, setTitle] = useState('');
-  const [searchParams] = useSearchParams();
-  const surveyName = searchParams.get('surveyName');
-
+  const [instructions, setInstructions] = useState(undefined);
   return (
     <AppPage sx={{ pb: 4 }}>
       <Header svgComponent={<Logo />} title={title} />
@@ -32,21 +28,24 @@ const Survey = () => {
             boxShadow: { xs: 'none', sm: appShadows.surface },
           }}
         >
-          <Box
-            className="survey-instructions"
-            sx={{
-              p: { xs: 2, sm: 3 },
-              borderBottom: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500, mb: 1, color: 'primary.main' }}>
-              Survey Instructions
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5 }}>
-              {instructionsForSurvey(surveyName, title)}
-            </Typography>
-          </Box>
+          {typeof instructions === 'string' && instructions.length > 0 && (
+            <Box
+              className="survey-instructions"
+              sx={{
+                p: { xs: 2, sm: 3 },
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+                overflowWrap: 'anywhere',
+              }}
+            >
+              <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 500, mb: 1, color: 'primary.main' }}>
+                Survey Instructions
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                {instructions}
+              </Typography>
+            </Box>
+          )}
 
           <Box
             className="survey-content"
@@ -55,7 +54,7 @@ const Survey = () => {
               ...PRODUCTION_SURVEY_WRAPPER_SX,
             }}
           >
-            <SurveyComponent setTitle={setTitle} />
+            <SurveyComponent setTitle={setTitle} setInstructions={setInstructions} />
           </Box>
         </Surface>
       </Container>

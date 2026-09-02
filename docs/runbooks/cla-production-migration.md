@@ -49,7 +49,7 @@ subjects. Respondent/response payloads and legacy email bodies must reconcile.
    restore (never the live database). The historical cutover root must run the
    shared pre-lifecycle schema followed by `v1_7_cla_organization_backfill.sql`.
    Switching that same database to `master-changelog.xml` must then report only
-   the seven lifecycle, eight webhook, four bulk-reminder, and one reminder provider-binding changesets as pending. Apply them, rerun
+   the seven lifecycle, eight webhook, four bulk-reminder, one reminder provider-binding, and one editable-instructions reconciliation changesets as pending. Apply them, rerun
    master, and require a no-op. Do not continue if the include-order regression
    test or either exact pending-set check fails.
 6. Deploy the reviewed release with `CLA_PRODUCTION_CUTOVER=true`. This selects
@@ -85,9 +85,10 @@ Before releasing current main against a database that previously used
 1. Restore the latest approved snapshot into an isolated private rehearsal
    database with all writers and provider credentials disabled.
 2. Confirm `DATABASECHANGELOG` contains exactly one successful
-   `cla-organization-backfill-1` and none of the lifecycle/webhook changesets.
+   `cla-organization-backfill-1` and none of the lifecycle, webhook, bulk-reminder,
+   reminder provider-binding, or editable-instructions changesets.
 3. Run master `validate`, `status --verbose`, and `update-sql`. Require exactly
-   seven lifecycle plus eight webhook plus four bulk-reminder plus one reminder provider-binding changeset pending; the CLA backfill must
+   seven lifecycle plus eight webhook plus four bulk-reminder plus one reminder provider-binding plus one editable-instructions reconciliation changeset pending; the CLA backfill must
    not be pending.
 4. Apply master, rerun it, and require zero pending changesets. Reconcile all
    survey/respondent/template counts and stable IDs, verify existing bearer links,

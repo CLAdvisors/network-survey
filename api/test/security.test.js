@@ -1594,6 +1594,8 @@ test('signed demo links load configured questions and real respondents but canno
         assert.deepEqual(values, [surveyId, 'Survey A']);
         return { rows: [{
           title: 'Configured title',
+          name: 'Survey A',
+          instructions: 'Demo line one\n<script>literal only</script>',
           questions: { elements: [
             {
               type: 'text',
@@ -1624,6 +1626,8 @@ test('signed demo links load configured questions and real respondents but canno
   const valid = await request(app).get('/api/questions').query({ surveyName: 'Survey A', demoToken: token });
   assert.equal(valid.status, 200);
   assert.equal(valid.body.title, 'Configured title');
+  assert.equal(valid.body.instructions, 'Demo line one\n<script>literal only</script>');
+  assert.equal(valid.headers['cache-control'], 'no-store');
   assert.equal(valid.body.questions.elements[0].choicesByUrl, undefined);
   assert.deepEqual(valid.body.questions.elements[1].choices, []);
   assert.equal(valid.body.questions.elements[1].choicesLazyLoadEnabled, true);
@@ -1663,6 +1667,8 @@ test('dashboard/admin endpoints require authentication', async () => {
     ['post', '/api/testEmail', { surveyName: 'S', language: 'English', email: 'a@example.com' }],
     ['post', '/api/surveys/survey-id/demo-email', { language: 'English', email: 'a@example.com' }],
     ['post', '/api/surveys/survey-id/copy', { name: 'Copied survey' }],
+    ['get', '/api/surveys/11111111-1111-4111-8111-111111111111/instructions'],
+    ['put', '/api/surveys/11111111-1111-4111-8111-111111111111/instructions', { instructions: null }],
     ['post', '/api/startSurvey', { surveyName: 'S' }],
     ['post', '/api/updateEmails', { surveyName: 'S', csvData: 'English,Hello' }],
     ['post', '/api/updateTarget', { surveyName: 'S', csvData: 'First,Last,Email\nA,B,a@example.com' }],
@@ -1931,6 +1937,7 @@ test('CLA organization migration preserves survey data and enforces stable child
     'v1_7_email_webhook_delivery_truth.sql',
     'v1_8_bulk_survey_reminders.sql',
     'v1_9_reminder_provider_account_binding.sql',
+    'v1_10_editable_survey_instructions.sql',
   ];
   const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
 
@@ -1943,7 +1950,7 @@ test('CLA organization migration preserves survey data and enforces stable child
   assert.deepEqual(
     masterIncludes.slice(sharedPreCutoverIncludes.length),
     postCutoverMasterIncludes,
-    'switching from the recorded cutover root to master must add only the reviewed lifecycle, webhook, and reminder migrations'
+    'switching from the recorded cutover root to master must add only the reviewed lifecycle, webhook, reminder, and instructions migrations'
   );
   assert.equal(new Set(cutoverIncludes).size, cutoverIncludes.length, 'cutover includes must not be duplicated');
   assert.match(migration, /VALUES \('CLA', 'cla'\)/);
@@ -2391,7 +2398,7 @@ test('survey copy preserves questions and email templates without copying partic
         return { rows: [{
           id: '11111111-1111-4111-8111-111111111111',
           name: 'Source Survey', title: 'Configured title', questions: sourceQuestions,
-          organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'editor',
+          instructions: '', organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'editor',
         }] };
       }
       if (/SELECT 1 FROM Survey/.test(sql)) return { rows: [] };
@@ -2422,9 +2429,10 @@ test('survey copy preserves questions and email templates without copying partic
   assert.equal(calls.at(-1).sql, 'COMMIT');
 
   const surveyInsert = calls.find(({ sql }) => /INSERT INTO Survey/.test(sql));
-  assert.match(surveyInsert.sql, /VALUES \(\$1, \$2, NOW\(\), \$3, \$4, \$5, \$6, \$7\)/);
+  assert.match(surveyInsert.sql, /instructions/);
+  assert.match(surveyInsert.sql, /VALUES \(\$1, \$2, NOW\(\), \$3, \$4, \$5, \$6, \$7, \$8\)/);
   assert.deepEqual(surveyInsert.values, [
-    'CopiedSurvey', 'Configured title', sourceQuestions,
+    'CopiedSurvey', 'Configured title', sourceQuestions, '',
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 7, 'CopiedSurvey', 'copiedsurvey',
   ]);
   const emailCopy = calls.find(({ sql }) => /INSERT INTO EMAIL/.test(sql));

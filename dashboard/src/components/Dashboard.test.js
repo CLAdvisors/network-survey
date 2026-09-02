@@ -47,6 +47,9 @@ vi.mock('./SurveyLifecyclePanel', () => ({ default: () => null }));
 vi.mock('./CreateSurveyDialog', () => ({ default: () => null }));
 
 let mountSequence = 0;
+vi.mock('./SurveyInstructionsEditor', () => ({
+  default: ({ surveyId, readOnly, onDirtyChange, onOperationChange }) => <div data-testid="instructions-editor" data-survey={surveyId} data-readonly={String(readOnly)}>Survey Instructions<button onClick={() => onDirtyChange?.(surveyId, 'instructions', true)}>Dirty instructions</button><button onClick={() => onOperationChange?.(surveyId, 'instructions', true)}>Start instructions operation</button></div>,
+}));
 vi.mock('./InvitationSubjectEditor', () => ({
   default: ({ surveyId, readOnly, onDirtyChange, onOperationChange }) => {
     const mount = React.useRef(++mountSequence);
@@ -88,15 +91,16 @@ test('dirty state remains scoped to its owning survey across every editable sect
   render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
   await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
 
+  await userEvent.click(screen.getByRole('button', { name: 'Dirty instructions' }));
   await userEvent.click(screen.getByRole('button', { name: 'Dirty subject' }));
   await userEvent.click(screen.getByRole('button', { name: 'Dirty body' }));
   await userEvent.click(screen.getByRole('button', { name: 'Dirty questions' }));
   await userEvent.click(screen.getByRole('button', { name: 'Dirty respondents' }));
-  expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('invitationBody,invitationSubject,questions,respondents');
+  expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('instructions,invitationBody,invitationSubject,questions,respondents');
 
   await userEvent.click(screen.getByRole('button', { name: 'Select Gamma' }));
   expect(screen.getByTestId('dirty-survey-c')).toBeEmptyDOMElement();
-  expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('invitationBody,invitationSubject,questions,respondents');
+  expect(screen.getByTestId('dirty-survey-a')).toHaveTextContent('instructions,invitationBody,invitationSubject,questions,respondents');
 });
 
 test('surfaces respondent load failures and retries before permitting edits', async () => {

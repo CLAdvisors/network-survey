@@ -3,6 +3,14 @@
 const crypto = require('crypto');
 const { DEFAULT_SENDER, RENDERER_VERSION, normalizeTemplateText, buildInvitationPayload, payloadHash } = require('./email');
 const { displayedRespondentPredicate } = require('./respondent-utils');
+const {
+  MAX_INSTRUCTION_CHARACTERS,
+  MAX_INSTRUCTION_BYTES,
+  derivedInstructions,
+  effectiveInstructions,
+  instructionMetadata,
+  validateInstructionOverride,
+} = require('./survey-instructions');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -392,4 +400,59 @@ async function withEditableSurvey(pool,user,surveyId,mutation) {
   try {await client.query('BEGIN');const survey=await loadAuthorizedSurvey(client,user,surveyId,'editor','UPDATE');if(survey.archived_at||survey.lifecycle_status!=='draft')throw new LifecycleError(409,'survey_not_editable','Survey configuration is locked after launch.');const value=await mutation(client,survey);await client.query('COMMIT');return value;}catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}
 }
 
-module.exports={LifecycleError,publicError,environmentName,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,evaluateReminderReadiness,getReadiness,getReminderReadiness,listReminderTemplates,saveReminderTemplate,launchReminder,launchSurvey,listLaunches,listDeliveries,transitionSurvey,withEditableSurvey,aggregateSelect,setSurveyDefinitionValidator};
+function instructionResponse(survey) {
+  return {
+    surveyId: survey.id,
+    instructions: survey.instructions,
+    derivedInstructions: derivedInstructions(survey.name, survey.title, survey.display_name),
+    effectiveInstructions: effectiveInstructions(survey.instructions, survey.name, survey.title, survey.display_name),
+    mode: instructionMetadata(survey.instructions).presence,
+    lifecycleStatus: survey.lifecycle_status,
+    limits: { characters: MAX_INSTRUCTION_CHARACTERS, bytes: MAX_INSTRUCTION_BYTES },
+  };
+}
+
+async function getSurveyInstructions(pool, user, surveyId) {
+  const client = await pool.connect();
+  try {
+    return instructionResponse(await loadAuthorizedSurvey(client, user, surveyId, 'viewer'));
+  } finally {
+    client.release();
+  }
+}
+
+async function updateSurveyInstructions(pool, user, surveyId, value, expectedValue) {
+  const instructions = validateInstructionOverride(value);
+  if (expectedValue !== null && typeof expectedValue !== 'string') {
+    const error = new TypeError('Expected instructions must be a string or null.');
+    error.code = 'instructions_type';
+    throw error;
+  }
+  const expectedInstructions = expectedValue;
+  return withEditableSurvey(pool, user, surveyId, async (client, survey) => {
+    if (survey.instructions !== expectedInstructions) {
+      throw new LifecycleError(409, 'instructions_conflict', 'Survey instructions changed since you loaded them. Reload before saving your draft.');
+    }
+    const previous = instructionMetadata(survey.instructions);
+    const next = instructionMetadata(instructions);
+    await client.query('UPDATE survey SET instructions=$1 WHERE id=$2', [instructions, survey.id]);
+    await strictAudit(client, {
+      organizationId: survey.organization_id,
+      actorUserId: user.id,
+      surveyId: survey.id,
+      eventType: 'survey.instructions_updated',
+      metadata: {
+        changed: survey.instructions !== instructions,
+        previousPresence: previous.presence,
+        nextPresence: next.presence,
+        previousCharacterLength: previous.characterLength,
+        nextCharacterLength: next.characterLength,
+        previousByteLength: previous.byteLength,
+        nextByteLength: next.byteLength,
+      },
+    });
+    return instructionResponse({ ...survey, instructions });
+  });
+}
+
+module.exports={LifecycleError,publicError,environmentName,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,evaluateReminderReadiness,getReadiness,getReminderReadiness,listReminderTemplates,saveReminderTemplate,launchReminder,launchSurvey,listLaunches,listDeliveries,transitionSurvey,withEditableSurvey,getSurveyInstructions,updateSurveyInstructions,aggregateSelect,setSurveyDefinitionValidator};

@@ -46,7 +46,7 @@ const applyDefinitionEditorOptions = (editor) => {
   editor.autoGrow = true;
   editor.allowResize = true;
   editor.descriptionLocation = 'underInput';
-  editor.description = 'Optional plain text shown by the respondent information button. Line breaks are preserved and HTML is displayed literally. If any choice has a definition, every choice needs separate Value and Text strings; each ranking is limited to 100 choices and definition-enabled rankings to 1,000 choices per survey. Each definition is limited to 10,000 characters / 40,960 UTF-8 bytes, and all survey definitions together to 250,000 characters / 524,288 bytes.';
+  editor.description = 'Optional plain text shown by the respondent information button. Line breaks are preserved and HTML is displayed literally. If any choice has a definition, every choice needs separate Value and Text strings. Every draggable ranking is limited to 100 choices and all draggable rankings together to 1,000 choices per survey. Each definition is limited to 10,000 characters / 40,960 UTF-8 bytes, and all survey definitions together to 250,000 characters / 524,288 bytes.';
 };
 
 export const registerDraggableRankingDefinitionMetadata = () => {
@@ -128,13 +128,49 @@ export const normalizeDraggableRankingDefinitions = (elements) => {
       const lineNormalized = choice.definition.replace(/\r\n?/g, '\n');
       return FORBIDDEN_LITERAL_CHARACTERS.test(lineNormalized) || lineNormalized.trim().length > 0;
     });
-    if (!hasDefinitions) return element;
     if (element.choices.length > limits.choices) {
-      throw new Error(`Question ${questionIndex + 1} with definitions may contain at most ${limits.choices} choices.`);
+      throw new Error(`Question ${questionIndex + 1} may contain at most ${limits.choices} choices.`);
     }
     surveyChoices += element.choices.length;
     if (surveyChoices > limits.surveyChoices) {
-      throw new Error(`Definition-enabled rankings may contain at most ${limits.surveyChoices} choices across the survey.`);
+      throw new Error(`Draggable rankings may contain at most ${limits.surveyChoices} choices across the survey.`);
+    }
+    if (!hasDefinitions) {
+      const values = new Set();
+      const choices = element.choices.map((choice, choiceIndex) => {
+        const label = `Question ${questionIndex + 1} choice ${choiceIndex + 1}`;
+        if (typeof choice === 'string') {
+          if (choice.includes('\r') || choice.includes('\n')) {
+            throw new Error(`${label} value must be canonical and may not contain CR or LF characters.`);
+          }
+          if (choice !== choice.trim()) {
+            throw new Error(`${label} value must be canonical and may not have leading or trailing whitespace.`);
+          }
+          const valueError = boundedLiteralError(choice, `${label} value`, limits.valueCharacters, limits.valueBytes);
+          if (valueError) throw new Error(valueError);
+          if (values.has(choice)) throw new Error(`Question ${questionIndex + 1} choice values must be unique: ${choice}.`);
+          values.add(choice);
+          return choice;
+        }
+        if (!choice || typeof choice !== 'object' || Array.isArray(choice) || typeof choice.value !== 'string') {
+          throw new Error(`${label} must explicitly define string value and text properties.`);
+        }
+        const textSource = Object.prototype.hasOwnProperty.call(choice, 'text') ? choice.text : choice.value;
+        if (typeof textSource !== 'string') {
+          throw new Error(`${label} must explicitly define string value and text properties.`);
+        }
+        if (choice.value.includes('\r') || choice.value.includes('\n') || choice.value !== choice.value.trim()) {
+          throw new Error(`${label} value must be canonical and may not contain surrounding whitespace or line breaks.`);
+        }
+        const valueError = boundedLiteralError(choice.value, `${label} value`, limits.valueCharacters, limits.valueBytes);
+        if (valueError) throw new Error(valueError);
+        const textError = boundedLiteralError(textSource, `${label} text`, limits.textCharacters, limits.textBytes);
+        if (textError) throw new Error(textError);
+        if (values.has(choice.value)) throw new Error(`Question ${questionIndex + 1} choice values must be unique: ${choice.value}.`);
+        values.add(choice.value);
+        return { ...choice, text: textSource.replace(/\r\n?/g, '\n').trim() };
+      });
+      return { ...element, choices };
     }
 
     const values = new Set();

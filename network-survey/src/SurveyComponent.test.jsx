@@ -138,6 +138,26 @@ describe('SurveyComponent demo mode', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('surfaces bounded structured response validation errors', async () => {
+    fetch.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        message: 'Invalid survey responses.',
+        errors: ['Invalid response: priorities'],
+      }),
+    });
+    window.history.replaceState({}, '', '/?surveyName=SurveyA&userId=token-a');
+    render(<SurveyComponent setTitle={vi.fn()} setInstructions={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('survey-form')).toBeInTheDocument());
+
+    act(() => {
+      surveyState.model.completingHandler({ data: {}, doComplete: vi.fn() }, {});
+    });
+
+    expect(await screen.findByText(/Invalid survey responses\. Invalid response: priorities/)).toBeInTheDocument();
+  });
+
   it('does not surface an old submission failure after switching surveys', async () => {
     let rejectSubmission;
     fetch.mockReturnValue(new Promise((_resolve, reject) => { rejectSubmission = reject; }));

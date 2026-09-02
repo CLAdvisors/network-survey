@@ -54,10 +54,22 @@ test('definition-enabled rankings reject noncanonical machine IDs without mutati
   }
 });
 
-test('legacy draggable rankings without definitions retain primitive and legacy object choices', () => {
-  const choices = ['one', 2, false, { value: 'three', text: 3 }];
+test('definition-free draggable rankings retain bounded string shorthand but reject legacy value shapes', () => {
+  const choices = ['one', 'two'];
   const normalized = validateSurveyDefinition(definedRanking(choices));
   assert.deepEqual(normalized.elements[0].choices, choices);
+
+  for (const invalid of [2, false, { value: 'three', text: 3 }, { value: 'four' }]) {
+    assert.throws(() => validateSurveyDefinition(definedRanking([invalid])));
+  }
+  assert.throws(
+    () => validateSurveyDefinition(definedRanking(['v'.repeat(129)])),
+    /128-character or 512-byte limit/
+  );
+  assert.throws(
+    () => validateSurveyDefinition(definedRanking(Array.from({ length: 101 }, (_, index) => `v${index}`))),
+    /at most 100 choices/
+  );
 });
 
 test('definition is accepted only on draggable ranking choices as a literal string', () => {
@@ -94,7 +106,7 @@ test('one definition makes explicit, nonempty, unique string values and texts ma
   }
 });
 
-test('definition-enabled ranking limits enforce characters, UTF-8 bytes, count, and forbidden controls', () => {
+test('draggable ranking limits enforce characters, UTF-8 bytes, count, and forbidden controls', () => {
   assert.deepEqual(DEFINED_RANKING_LIMITS, {
     choices: 100,
     surveyChoices: 1000,
@@ -128,13 +140,13 @@ test('definition-enabled ranking limits enforce characters, UTF-8 bytes, count, 
   }
 });
 
-test('definition-enabled rankings enforce a 1000-choice survey aggregate', () => {
+test('all draggable rankings enforce a 1000-choice survey aggregate', () => {
   const schema = {
     elements: Array.from({ length: 10 }, (_, questionIndex) => ({
       type: 'draggableranking',
       name: `q${questionIndex}`,
       choices: Array.from({ length: 100 }, (_, choiceIndex) =>
-        choice(`${questionIndex}-${choiceIndex}`)),
+        `${questionIndex}-${choiceIndex}`),
     })),
   };
   assert.equal(validateSurveyDefinition(schema).elements.flatMap(element => element.choices).length, 1000);
@@ -142,7 +154,7 @@ test('definition-enabled rankings enforce a 1000-choice survey aggregate', () =>
   schema.elements.push({
     type: 'draggableranking',
     name: 'one_too_many',
-    choices: [choice('extra')],
+    choices: ['extra'],
   });
   assert.throws(() => validateSurveyDefinition(schema), /at most 1000 choices across the survey/);
 });
@@ -229,6 +241,19 @@ test('all schema strings reject characters PostgreSQL JSONB cannot store', () =>
   assert.doesNotThrow(() => validateSurveyDefinition({
     elements: [{ type: 'text', name: 'q', title: 'Valid astral text 😀' }],
   }));
+});
+
+test('route-specific JSON parsers return a stable JSON error for malformed bodies', async () => {
+  const response = await request(app)
+    .post('/api/user')
+    .set('Content-Type', 'application/json')
+    .send('{');
+  assert.equal(response.status, 400);
+  assert.equal(response.type, 'application/json');
+  assert.deepEqual(response.body, {
+    error: 'invalid_json',
+    message: 'Request body must contain valid JSON.',
+  });
 });
 
 test('/api/updateQuestions rejects unauthenticated oversized malformed bodies before parsing', async (t) => {

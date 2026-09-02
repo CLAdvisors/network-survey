@@ -156,6 +156,16 @@ describe('draggable ranking definition authoring', () => {
   });
 
   it('surfaces backend-compatible choice and aggregate constraints before save', () => {
+    expect(normalizeDraggableRankingDefinitions([{
+      type: 'draggableranking',
+      choices: ['one', 'two'],
+    }])[0].choices).toEqual(['one', 'two']);
+
+    expect(() => normalizeDraggableRankingDefinitions([{
+      type: 'draggableranking',
+      choices: Array.from({ length: 101 }, (_, index) => `v${index}`),
+    }])).toThrow('at most 100 choices');
+
     expect(() => normalizeDraggableRankingDefinitions([{
       type: 'draggableranking',
       choices: [{ value: 1, text: 'One', definition: 'Defined' }],

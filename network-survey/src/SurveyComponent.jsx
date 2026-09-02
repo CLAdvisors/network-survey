@@ -203,7 +203,20 @@ function SurveyComponent({setTitle, setInstructions}) {
           });
       
           if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
+            let message = 'Your response could not be submitted. Please try again.';
+            try {
+              const errorResponse = await response.json();
+              if (typeof errorResponse?.message === 'string' && errorResponse.message.trim()) {
+                message = errorResponse.message.trim();
+              }
+              const details = Array.isArray(errorResponse?.errors)
+                ? errorResponse.errors.filter((item) => typeof item === 'string' && item.trim()).slice(0, 3)
+                : [];
+              if (details.length > 0) message = `${message} ${details.join(' ')}`;
+            } catch {
+              // Keep the safe generic fallback for non-JSON and malformed error responses.
+            }
+            throw new Error(message);
           }
       
           const jsonResponse = await response.json();

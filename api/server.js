@@ -423,6 +423,12 @@ app.use((error, req, res, next) => {
       message: 'Request body exceeds the allowed size.',
     });
   }
+  if (error?.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      error: 'invalid_json',
+      message: 'Request body must contain valid JSON.',
+    });
+  }
   return next(error);
 });
 
@@ -1674,34 +1680,28 @@ function normalizeDraggableRankingChoices(choices, questionLabel, definitionTota
     const lineNormalized = choice.definition.replace(/\r\n?/g, '\n');
     return FORBIDDEN_LITERAL_CHARACTERS_RE.test(lineNormalized) || lineNormalized.trim().length > 0;
   });
-  if (!hasDefinition) {
-    const withoutBlankDefinitions = choices.map((choice) => {
-      if (!choice || typeof choice !== 'object' || Array.isArray(choice) ||
-          !Object.prototype.hasOwnProperty.call(choice, 'definition')) return choice;
-      const normalized = { ...choice };
-      delete normalized.definition;
-      return normalized;
-    });
-    validateItemDefinitions(withoutBlankDefinitions, `${questionLabel} choices`);
-    return withoutBlankDefinitions;
-  }
   if (choices.length > DEFINED_RANKING_LIMITS.choices) {
-    throw new Error(`${questionLabel} with definitions may contain at most ${DEFINED_RANKING_LIMITS.choices} choices.`);
+    throw new Error(`${questionLabel} may contain at most ${DEFINED_RANKING_LIMITS.choices} choices.`);
   }
   definitionTotals.choices += choices.length;
   if (definitionTotals.choices > DEFINED_RANKING_LIMITS.surveyChoices) {
-    throw new Error(`Definition-enabled rankings may contain at most ${DEFINED_RANKING_LIMITS.surveyChoices} choices across the survey.`);
+    throw new Error(`Draggable rankings may contain at most ${DEFINED_RANKING_LIMITS.surveyChoices} choices across the survey.`);
   }
 
   const values = new Set();
   return choices.map((choice, index) => {
     const label = `${questionLabel} choice ${index + 1}`;
-    if (!choice || typeof choice !== 'object' || Array.isArray(choice)) {
-      throw new Error(`${label} must explicitly define string value and text properties when any definition is present.`);
+    if (typeof choice === 'string' && !hasDefinition) {
+      const value = validateCanonicalMachineLiteral(
+        choice, `${label} value`, DEFINED_RANKING_LIMITS.valueChars, DEFINED_RANKING_LIMITS.valueBytes);
+      if (values.has(value)) throw new Error(`${questionLabel} choice values must be unique: ${value}.`);
+      values.add(value);
+      return value;
     }
-    if (!Object.prototype.hasOwnProperty.call(choice, 'value') ||
+    if (!choice || typeof choice !== 'object' || Array.isArray(choice) ||
+        !Object.prototype.hasOwnProperty.call(choice, 'value') ||
         !Object.prototype.hasOwnProperty.call(choice, 'text')) {
-      throw new Error(`${label} must explicitly define string value and text properties when any definition is present.`);
+      throw new Error(`${label} must explicitly define string value and text properties.`);
     }
     const value = validateCanonicalMachineLiteral(
       choice.value, `${label} value`, DEFINED_RANKING_LIMITS.valueChars, DEFINED_RANKING_LIMITS.valueBytes);

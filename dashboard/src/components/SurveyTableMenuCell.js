@@ -173,6 +173,11 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
 
   const handleTransition = async () => {
     if (!transition || transitioning) return;
+    if (actionBlocked) {
+      setTransition(null);
+      notify(`${blockedActionMessage} ${transition === 'close' ? 'Close' : 'Reopen'} is unavailable until then.`, 'warning');
+      return;
+    }
     setTransitioning(true);
     try {
       await api.post(`/surveys/${id}/${transition}`);
@@ -186,6 +191,15 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
     } finally {
       setTransitioning(false);
     }
+  };
+
+  const handleCloseClick = (event) => {
+    closeMenu(event);
+    if (actionBlocked) {
+      notify(`${blockedActionMessage} Close is unavailable until then.`, 'warning');
+      return;
+    }
+    setTransition('close');
   };
 
   const handleArchiveClick = (event) => {
@@ -233,7 +247,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         {canLaunch && <MenuItem onClick={openAction(setStartOpen)}><PlayCircle fontSize="small" sx={{ mr: 1 }} />Launch Survey</MenuItem>}
         {canRemind && <MenuItem onClick={openAction(setReminderOpen)}><EmailIcon fontSize="small" sx={{ mr: 1 }} />Send Bulk Reminder</MenuItem>}
         {status !== 'draft' && <MenuItem onClick={(event) => { closeMenu(event); onViewLifecycle?.(row); }}><HistoryIcon fontSize="small" sx={{ mr: 1 }} />{status === 'closed' ? 'View History' : 'View Delivery Status'}</MenuItem>}
-        {canClose && <MenuItem onClick={(event) => { closeMenu(event); setTransition('close'); }}><StopCircleIcon fontSize="small" sx={{ mr: 1 }} />Close Survey</MenuItem>}
+        {canClose && <MenuItem onClick={handleCloseClick}><StopCircleIcon fontSize="small" sx={{ mr: 1 }} />Close Survey</MenuItem>}
         {canReopen && <MenuItem onClick={(event) => { closeMenu(event); setTransition('reopen'); }}><ReplayIcon fontSize="small" sx={{ mr: 1 }} />Reopen Survey</MenuItem>}
         {canEdit && <MenuItem onClick={handleCopyClick}><ContentCopyIcon fontSize="small" sx={{ mr: 1 }} />Copy Survey</MenuItem>}
         {canEdit && <MenuItem onClick={handleDemoClick}><EmailIcon fontSize="small" sx={{ mr: 1 }} />Send Email Demo</MenuItem>}

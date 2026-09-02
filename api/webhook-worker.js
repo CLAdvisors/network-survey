@@ -560,8 +560,8 @@ class WebhookWorker {
     try {
       await client.query('BEGIN');
       // Preserve universal lock order: delivery rows are locked before the address boundary.
-      const candidates = await client.query(
-        `SELECT d.id,d.status FROM survey_email_deliveries d JOIN survey_launches l ON l.id=d.launch_id
+      const lockedCandidates = await client.query(
+        `SELECT d.id FROM survey_email_deliveries d JOIN survey_launches l ON l.id=d.launch_id
           WHERE lower(btrim(d.to_address))=$1
           AND (l.kind<>'reminder' OR l.provider_account_scope IS NULL OR l.provider_account_scope=$2)
           AND d.status IN ('pending','retry_wait','leased','reminder_pending','reminder_retry_wait','reminder_leased')
@@ -578,8 +578,25 @@ class WebhookWorker {
         await client.query('COMMIT');
         return { cancelled: 0, fenced: 0 };
       }
-      const pendingIds = candidates.rows.filter((row) => !['leased','reminder_leased'].includes(row.status)).map((row) => row.id);
-      const leasedIds = candidates.rows.filter((row) => ['leased','reminder_leased'].includes(row.status)).map((row) => row.id);
+      // Use a fresh READ COMMITTED snapshot after acquiring the row locks. A
+      // finalizer that committed while the locking SELECT waited may have added
+      // an uncertain attempt and moved the delivery into retry_wait.
+      const candidates = lockedCandidates.rowCount ? await client.query(
+        `SELECT d.id,d.status,EXISTS(SELECT 1 FROM survey_email_attempts a WHERE a.delivery_id=d.id AND a.outcome='uncertain' AND a.provider_started_at IS NOT NULL) AS unresolved_provider_outcome
+           FROM survey_email_deliveries d WHERE d.id=ANY($1::uuid[]) ORDER BY d.id`,
+        [lockedCandidates.rows.map((row)=>row.id)]
+      ) : { rows: [] };
+      const uncertainIds = candidates.rows.filter((row) => ['pending','retry_wait','reminder_pending','reminder_retry_wait'].includes(row.status) && row.unresolved_provider_outcome).map((row) => row.id);
+      const uncertainSet = new Set(uncertainIds);
+      const pendingIds = candidates.rows.filter((row) => !['leased','reminder_leased'].includes(row.status) && !uncertainSet.has(row.id)).map((row) => row.id);
+      const leasedRows = candidates.rows.filter((row) => ['leased','reminder_leased'].includes(row.status));
+      const leasedIds = leasedRows.map((row) => row.id);
+      const leasedUncertainIds = leasedRows.filter((row) => row.unresolved_provider_outcome).map((row) => row.id);
+      const uncertain = uncertainIds.length ? await client.query(
+        `UPDATE survey_email_deliveries SET status='uncertain',dispatch_failed_at=COALESCE(dispatch_failed_at,now()),
+          provider_suppressed_at=COALESCE(provider_suppressed_at,now()),lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
+         WHERE id=ANY($1::uuid[]) AND status IN ('pending','retry_wait','reminder_pending','reminder_retry_wait')`, [uncertainIds]
+      ) : { rowCount: 0 };
       const cancelled = pendingIds.length ? await client.query(
         `UPDATE survey_email_deliveries SET status='cancelled',provider_suppressed_at=COALESCE(provider_suppressed_at,now()),
           last_error_code='suppressed',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
@@ -587,11 +604,11 @@ class WebhookWorker {
       ) : { rowCount: 0 };
       const fenced = leasedIds.length ? await client.query(
         `UPDATE survey_email_deliveries SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
-          provider_suppressed_at=COALESCE(provider_suppressed_at,now()),last_error_code='suppressed',updated_at=now()
-         WHERE id=ANY($1::uuid[]) AND status IN ('leased','reminder_leased')`, [leasedIds]
+          provider_suppressed_at=COALESCE(provider_suppressed_at,now()),last_error_code=CASE WHEN id=ANY($2::uuid[]) THEN last_error_code ELSE 'suppressed' END,updated_at=now()
+         WHERE id=ANY($1::uuid[]) AND status IN ('leased','reminder_leased')`, [leasedIds,leasedUncertainIds]
       ) : { rowCount: 0 };
       await client.query('COMMIT');
-      return { cancelled: cancelled.rowCount, fenced: fenced.rowCount };
+      return { cancelled: cancelled.rowCount + uncertain.rowCount, fenced: fenced.rowCount };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;

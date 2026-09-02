@@ -10,6 +10,7 @@ const { Pool } = apiRequire('pg');
 const { Webhook } = apiRequire('standardwebhooks');
 const lifecycle = require('../../api/lifecycle');
 const { DeliveryWorker } = require('../../api/email-worker');
+const { ProviderError } = require('../../api/email');
 const { ResendWebhookIngress } = require('../../api/webhooks');
 const { WebhookWorker, effectiveProviderOutcome } = require('../../api/webhook-worker');
 
@@ -99,7 +100,7 @@ async function waitForAdvisoryWaiters(minimum) {
   const duplicate = await ingress.ingest(suppression.rawBody, suppression.headers);
   assert.equal(duplicate.duplicate, true, 'same svix-id must be acknowledged once');
 
-  await pool.query(`UPDATE survey_email_deliveries SET status='cancelled',last_error_code='ci_phase2_isolation' WHERE id<>$1 AND status IN ('pending','retry_wait')`, [delivery.id]);
+  await pool.query(`UPDATE survey_email_deliveries SET next_attempt_at='1970-01-01' WHERE id=$1`, [delivery.id]);
   const claimed = await deliveryWorker.claim();
   assert.equal(claimed.id,delivery.id);
   const blocker = await pool.connect();
@@ -146,6 +147,52 @@ async function waitForAdvisoryWaiters(minimum) {
   assert.ok(complained.provider_complained_at);
   assert.equal(effectiveProviderOutcome(complained),'complained');
   assert.equal((await pool.query(`SELECT count(*)::int AS count FROM email_webhook_events WHERE provider_account_scope=$1`,[providerAccountScope])).rows[0].count,3);
+
+  // Persist the opposite suppression ordering: an ambiguous attempt first
+  // enters retry_wait, then reconciliation must terminalize it as uncertain.
+  // Refresh readiness after the preceding lock/race checks so this launch does
+  // not depend on an earlier heartbeat remaining inside the freshness window.
+  deliveryWorker.claiming=true;
+  await deliveryWorker.heartbeat();
+  webhookWorker.processing=true;
+  await webhookWorker.heartbeat();
+  const retrySurvey=(await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id,lifecycle_status) SELECT 'CIWebhookRetrySuppression','Retry suppression',now(),'{"elements":[{"type":"text","name":"question_1"}]}'::jsonb,organization_id,'draft' FROM survey WHERE id=$1 RETURNING *`,[survey.id])).rows[0];
+  await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES('Retry Suppression Person','retry-suppression@example.test',$1,$2,true,'ci-retry-suppression-token','English',false)`,[retrySurvey.name,retrySurvey.id]);
+  await pool.query(`INSERT INTO email(survey_name,survey_id,lang,text) VALUES($1,$2,'English','Retry suppression invitation')`,[retrySurvey.name,retrySurvey.id]);
+  const retryLaunch=await lifecycle.launchSurvey(pool,actor,retrySurvey.id,{kind:'initial',idempotencyKey:'abababab-abab-4bab-8bab-abababababab'},{NODE_ENV:'test',EMAIL_WORKER_ENV:environment,SURVEY_URL:process.env.SURVEY_URL,RESEND_API_KEY:'ci-key',SURVEY_DELIVERY_V2_ENABLED:'true',RESEND_PROVIDER_ACCOUNT_SCOPE:providerAccountScope});
+  const retryDelivery=(await pool.query(`SELECT * FROM survey_email_deliveries WHERE launch_id=$1`,[retryLaunch.id])).rows[0];
+  await pool.query(`UPDATE survey_email_deliveries SET next_attempt_at='1970-01-01' WHERE id=$1`,[retryDelivery.id]);
+  const retryWorker=new DeliveryWorker({pool,provider:{send:async()=>{throw new ProviderError('CI suppression retry response was lost',{code:'ci_suppression_timeout',uncertain:true});}},env:deliveryWorker.env,instanceId:'ci-retry-suppression-worker'});
+  const retryClaim=await retryWorker.claim();
+  assert.equal(retryClaim.id,retryDelivery.id);
+  const retryStarted=await retryWorker.startProviderRequest(retryClaim);
+  assert.equal(retryStarted.action,'send');
+  assert.ok(retryStarted.providerResult.error?.uncertain);
+
+  // Force the ambiguous finalizer to queue for the delivery row before
+  // suppression reconciliation. Once released, reconciliation's locking SELECT
+  // must wait for that commit and its subsequent fresh snapshot must observe the
+  // newly persisted uncertain attempt rather than cancelling the delivery.
+  const deliveryBlocker=await pool.connect();
+  await deliveryBlocker.query('BEGIN');
+  await deliveryBlocker.query('SELECT id FROM survey_email_deliveries WHERE id=$1 FOR UPDATE',[retryDelivery.id]);
+  const finalizing=retryWorker.finalizeFailure(retryStarted.row,retryStarted.providerResult.error);
+  await new Promise(resolve=>setTimeout(resolve,100));
+  const lateSuppression=signedEvent('suppression.added',{id:'supp_ci_retry',email:retryDelivery.to_address,origin:'manual',source_id:null,created_at:new Date().toISOString()});
+  await ingress.ingest(lateSuppression.rawBody,lateSuppression.headers);
+  const reconciling=webhookWorker.processOne();
+  await new Promise(resolve=>setTimeout(resolve,100));
+  await deliveryBlocker.query('COMMIT');
+  deliveryBlocker.release();
+  await Promise.all([finalizing,reconciling]);
+  const retryScheduled=(await pool.query(`SELECT d.status,d.last_error_code,a.outcome,a.provider_started_at FROM survey_email_deliveries d JOIN survey_email_attempts a ON a.delivery_id=d.id WHERE d.id=$1`,[retryDelivery.id])).rows[0];
+  assert.equal(retryScheduled.outcome,'uncertain');
+  assert.ok(retryScheduled.provider_started_at);
+  const retrySuppressed=(await pool.query(`SELECT status,last_error_code,dispatch_failed_at,provider_suppressed_at FROM survey_email_deliveries WHERE id=$1`,[retryDelivery.id])).rows[0];
+  assert.equal(retrySuppressed.status,'uncertain');
+  assert.equal(retrySuppressed.last_error_code,'ci_suppression_timeout');
+  assert.ok(retrySuppressed.dispatch_failed_at);
+  assert.ok(retrySuppressed.provider_suppressed_at);
 
   await pool.end();
   console.log('Phase 2 webhook PostgreSQL smoke passed');

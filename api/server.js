@@ -359,10 +359,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Large request parsers are mounted only after session loading and trusted-origin
-// enforcement. A valid-looking session is required before Express allocates and
-// parses these route-specific request budgets; requireAuth still performs the
-// authoritative user/status lookup in each route handler.
+const respondentRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.RESPONDENT_RATE_LIMIT_MAX) || 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+
+// Large request parsers are mounted only on the routes that need them. Authoring
+// routes require a valid-looking session before allocation. The public response
+// route is rate-limited before parsing its larger bounded body.
 function requireAuthenticatedSession(req, res, next) {
   if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });
   next();
@@ -370,12 +377,14 @@ function requireAuthenticatedSession(req, res, next) {
 const rosterJsonParser = express.json({ limit: '3mb' });
 const QUESTION_DEFINITION_JSON_LIMIT = '3mb';
 const questionDefinitionJsonParser = express.json({ limit: QUESTION_DEFINITION_JSON_LIMIT });
+const RESPONSE_JSON_LIMIT = '1mb';
+const responseJsonParser = express.json({ limit: RESPONSE_JSON_LIMIT });
 app.patch('/api/surveys/:surveyId/respondents', requireAuthenticatedSession, rosterJsonParser);
 app.post('/api/updateTargets', requireAuthenticatedSession, rosterJsonParser);
 app.delete('/api/user', requireAuthenticatedSession, rosterJsonParser);
-// Only definition authoring receives this larger budget. All unrelated routes
-// retain Express's 100 KiB default JSON limit.
 app.post('/api/updateQuestions', requireAuthenticatedSession, questionDefinitionJsonParser);
+app.post('/api/user', respondentRateLimiter, responseJsonParser);
+// All other JSON routes retain Express's 100 KiB default limit.
 app.use(express.json());
 app.use((error, req, res, next) => {
   if (error?.type === 'entity.too.large') {
@@ -396,14 +405,6 @@ const authRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many attempts, please try again later.' },
-});
-
-const respondentRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: Number(process.env.RESPONDENT_RATE_LIMIT_MAX) || 120,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' },
 });
 
 const demoEmailRateLimiter = rateLimit({
@@ -2810,7 +2811,7 @@ app.post('/api/updateQuestions', express.json(), requireAuth, async (req, res) =
 });
 
 // PUT API endpoint for answer submission
-app.post('/api/user', express.json(), respondentRateLimiter, async (req, res) => {
+app.post('/api/user', async (req, res) => {
   let client;
   let committed = false;
   try {
@@ -3516,6 +3517,7 @@ module.exports = {
   SUPPORTED_QUESTION_TYPES,
   DEFINED_RANKING_LIMITS,
   QUESTION_DEFINITION_JSON_LIMIT,
+  RESPONSE_JSON_LIMIT,
   SURVEY_SCHEMA_MAX_BYTES,
   validateSurveyDefinition,
   validateRequiredAnswers,

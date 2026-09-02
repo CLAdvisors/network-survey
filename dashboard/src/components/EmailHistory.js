@@ -65,17 +65,21 @@ const DesktopHistory = ({ messages }) => (
 
 const MobileHistory = ({ messages }) => (
   <Stack spacing={1.5} sx={{ display: { xs: 'flex', md: 'none' } }} aria-label="Email message history cards" data-testid="email-history-card-view">
-    {messages.map((message, index) => (
-      <Paper component="article" variant="outlined" key={`${message.campaign?.launchId || 'legacy'}-${message.recipient?.address || 'unknown'}-${message.timestamps?.queuedAt || 'unknown'}-${index}`} sx={{ p: 1.5, minWidth: 0 }}>
+    {messages.map((message, index) => {
+      const headingId = `email-history-message-${index}`;
+      const recipientLabel = message.recipient?.displayName || message.recipient?.address || 'recipient unavailable';
+      return (
+      <Paper component="article" aria-labelledby={headingId} variant="outlined" key={`${message.campaign?.launchId || 'legacy'}-${message.recipient?.address || 'unknown'}-${message.timestamps?.queuedAt || 'unknown'}-${index}`} sx={{ p: 1.5, minWidth: 0 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
-          <Typography component="h3" variant="subtitle2">{typeLabel(message.messageType)}</Typography>
+          <Typography id={headingId} component="h3" variant="subtitle2">Message {index + 1}: {typeLabel(message.messageType)} for {recipientLabel}</Typography>
           <Typography variant="body2" aria-label={`${Number(message.attempts || 0)} attempt${Number(message.attempts || 0) === 1 ? '' : 's'}`}>{Number(message.attempts || 0)} attempt{Number(message.attempts || 0) === 1 ? '' : 's'}</Typography>
         </Stack>
         <Box sx={{ mt: 1 }}><Recipient recipient={message.recipient} /></Box>
         <Box sx={{ mt: 1.25 }}><Outcome status={message.status} /></Box>
         <Box sx={{ mt: 1.25 }}><TimeList timestamps={message.timestamps} /></Box>
       </Paper>
-    ))}
+      );
+    })}
   </Stack>
 );
 
@@ -174,14 +178,14 @@ const EmailHistoryView = ({ survey, sessionKey }) => {
         <Button onClick={refresh} startIcon={loading ? <CircularProgress size={16} /> : <RefreshIcon />} disabled={loading} aria-label={`Refresh email history for ${survey.name || 'selected survey'}`}>Refresh</Button>
       </Stack>
 
-      {loading && visibleMessages.length === 0 && <Box role="status" sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /><Typography variant="body2" sx={{ mt: 1 }}>Loading email history…</Typography></Box>}
+      {loading && visibleMessages.length === 0 && <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} aria-hidden="true" /><Typography variant="body2" sx={{ mt: 1 }}>Loading email history…</Typography></Box>}
       {error && <Alert severity="error" sx={{ mt: 2 }} action={<Button color="inherit" onClick={retryCurrentPage} aria-label={`Retry email history page ${pageIndex + 1}`}>Retry page</Button>}>{error}</Alert>}
       {!loading && !error && visibleMessages.length === 0 && <Typography sx={{ py: 4 }} color="text.secondary">No invitation or reminder messages have been queued for this survey.</Typography>}
       {visibleMessages.length > 0 && <Box sx={{ mt: 2 }}><DesktopHistory messages={visibleMessages} /><MobileHistory messages={visibleMessages} /></Box>}
 
       {(visibleMessages.length > 0 || pageIndex > 0) && <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 2 }}>
         <Button onClick={previousPage} disabled={loading || pageIndex === 0} aria-label="Previous email history page">Previous</Button>
-        <Typography variant="body2" color="text.secondary" aria-live="polite">Page {pageIndex + 1}</Typography>
+        <Typography variant="body2" color="text.secondary">Page {pageIndex + 1}</Typography>
         <Button onClick={nextPage} disabled={loading || Boolean(error) || !pageInfo?.hasMore || !pageInfo?.nextCursor} aria-label="Next email history page">Next</Button>
       </Stack>}
       <Box role="status" aria-live="polite" aria-atomic="true" sx={{ position: 'absolute', width: 1, height: 1, p: 0, m: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>

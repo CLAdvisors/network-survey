@@ -1,4 +1,5 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider as EmotionThemeProvider } from '@emotion/react';
@@ -87,6 +88,13 @@ beforeEach(() => {
     if (url.startsWith('/listQuestions')) return Promise.resolve({ data: { questions: [] } });
     return Promise.resolve({ data: [] });
   });
+});
+
+test('keeps dashboard spacing bounded on narrow viewports', () => {
+  const source = readFileSync('src/components/Dashboard.js', 'utf8');
+  expect(source).toMatch(/px: \{ xs: 1\.5, sm: 3, md: 5 \}/);
+  expect(source).toMatch(/mx: \{ xs: 1, sm: 2, md: '13%' \}/);
+  expect(source).not.toMatch(/padding: "40px"|marginLeft: "13%"/);
 });
 
 test('shows email history only to users already authorized for the selected survey roster', async () => {

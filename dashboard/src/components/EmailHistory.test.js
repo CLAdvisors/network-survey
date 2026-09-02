@@ -48,6 +48,8 @@ test('renders semantic desktop table and responsive cards with privacy-safe stat
   expect(within(table).getByRole('columnheader', { name: 'Attempts' })).toBeInTheDocument();
   expect(screen.getByTestId('email-history-table-view')).toBeInTheDocument();
   expect(screen.getByTestId('email-history-card-view')).toHaveAttribute('aria-label', 'Email message history cards');
+  expect(screen.getByRole('article', { name: /Message 1: Invitation for A Recipient With A Very Long Name/ })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 3, name: /Message 1: Invitation for A Recipient With A Very Long Name/ })).toBeInTheDocument();
   expect(screen.getAllByText('Provider accepted').length).toBeGreaterThanOrEqual(2);
   expect(screen.getAllByText(/Outcome reported/).length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText(/only “Delivered” confirms receipt/i)).toBeInTheDocument();
@@ -58,11 +60,19 @@ test('renders semantic desktop table and responsive cards with privacy-safe stat
   expect(document.body.textContent).not.toMatch(/respondent[_ -]?token|message body|provider[_ -]?message[_ -]?id|lease[_ -]?token/i);
 });
 
+test('gives repeated messages for the same recipient distinct mobile article names', async () => {
+  api.get.mockResolvedValueOnce(response('survey-1', [message(), message({ campaign: { launchId: 'launch-two', kind: 'initial' } })]));
+  render(<EmailHistory survey={{ id: 'survey-1', name: 'Lifecycle survey' }} />);
+  expect(await screen.findByRole('article', { name: /Message 1: Invitation for A Recipient/ })).toBeInTheDocument();
+  expect(screen.getByRole('article', { name: /Message 2: Invitation for A Recipient/ })).toBeInTheDocument();
+});
+
 test('shows bounded loading, empty, error/retry, and explicit refresh states', async () => {
   const first = deferred();
   api.get.mockReturnValueOnce(first.promise);
   const { rerender } = render(<EmailHistory survey={{ id: 'survey-1', name: 'Lifecycle survey' }} />);
   expect(screen.getByText('Loading email history…')).toBeInTheDocument();
+  expect(screen.getAllByRole('status')).toHaveLength(1);
   await act(async () => { first.resolve(response('survey-1', [])); await first.promise; });
   expect(await screen.findByText(/No invitation or reminder messages/)).toBeInTheDocument();
 

@@ -1669,6 +1669,7 @@ test('dashboard/admin endpoints require authentication', async () => {
     ['post', '/api/surveys/survey-id/copy', { name: 'Copied survey' }],
     ['get', '/api/surveys/11111111-1111-4111-8111-111111111111/instructions'],
     ['get', '/api/surveys/11111111-1111-4111-8111-111111111111/email-history'],
+    ['get', '/api/surveys/11111111-1111-4111-8111-111111111111/deliveries'],
     ['put', '/api/surveys/11111111-1111-4111-8111-111111111111/instructions', { instructions: null }],
     ['post', '/api/startSurvey', { surveyName: 'S' }],
     ['post', '/api/updateEmails', { surveyName: 'S', csvData: 'English,Hello' }],

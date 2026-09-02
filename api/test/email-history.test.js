@@ -185,5 +185,6 @@ test('history route is authenticated/no-store and v1_11 is additive in the maste
   assert.doesNotMatch(migration, /DELETE|TRUNCATE|DROP TABLE|DROP COLUMN/i);
   assert.match(ci, /db-pre-lifecycle[\s\S]+v1_11_survey_email_history_pagination\.sql\/d/);
   assert.match(ci, /db-capability1[\s\S]+v1_11_survey_email_history_pagination\.sql\/d/);
-  assert.match(ci, /email history pagination index missing or invalid/);
+  assert.match(ci, /email history pagination index missing, invalid, or incorrectly defined/);
+  assert.match(ci, /CREATE INDEX delivery_survey_history_page ON survey_email_deliveries\(id\)/);
 });

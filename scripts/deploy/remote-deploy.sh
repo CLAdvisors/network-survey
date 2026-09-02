@@ -120,7 +120,8 @@ case "$WORKER_ENV" in
   *) echo "EMAIL_WORKER_ENV must be explicitly configured as staging or prod" >&2; exit 1 ;;
 esac
 
-echo "==> Running database migrations"
+# Resolve migration connection details before the handoff. The migration itself
+# runs only after old dispatch and projector workers are quiesced below.
 # Liquibase runs from this host because the database only accepts
 # connections from the backend security group.
 read_runtime_env() {
@@ -144,19 +145,18 @@ CHANGELOG_FILE=changelogs/master-changelog.xml
 if [ "$(get_env_value CLA_PRODUCTION_CUTOVER)" = "true" ]; then
   CHANGELOG_FILE=changelogs/cla-production-cutover.xml
 fi
-liquibase \
-  --url="jdbc:postgresql://$DB_HOST:$DB_PORT/${DB_NAME:-ONA}?sslmode=verify-full&sslrootcert=$SERVICE_DIR/certs/rds-global-bundle.pem" \
-  --username="$DB_USER" \
-  --password="$DB_PASSWORD" \
-  --changeLogFile="$CHANGELOG_FILE" \
-  --searchPath="$RELEASE_DIR/db" \
-  update
+run_database_migrations() {
+  echo "==> Running database migrations after worker quiescence"
+  liquibase \
+    --url="jdbc:postgresql://$DB_HOST:$DB_PORT/${DB_NAME:-ONA}?sslmode=verify-full&sslrootcert=$SERVICE_DIR/certs/rds-global-bundle.pem" \
+    --username="$DB_USER" \
+    --password="$DB_PASSWORD" \
+    --changeLogFile="$CHANGELOG_FILE" \
+    --searchPath="$RELEASE_DIR/db" \
+    update
+}
 
-# Registration/suppression activation can raise the rollback floor. Validate
-# the artifact marker against durable controls before any process or symlink is
-# changed.
-node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$RELEASE_DIR" --database
-
+ensure_bootstrap_administrator() {
 if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
   echo "==> Ensuring bootstrap dashboard administrator"
   BOOTSTRAP_ADMIN_PASSWORD=$(get_secret_from_ssm BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)
@@ -172,6 +172,7 @@ if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
     node "$RELEASE_DIR/deploy/bootstrap-admin.js"
   unset BOOTSTRAP_ADMIN_PASSWORD
 fi
+}
 
 CLAIMING_WAS_ENABLED=false
 WEBHOOK_PROCESSING_WAS_ENABLED=false
@@ -179,12 +180,17 @@ SENDING_WAS_ENABLED=false
 SENDING_CONTROL_REVISION=0
 WEBHOOK_CONTROL_REVISION=0
 PREVIOUS_WEBHOOK_DEPLOYMENT_ID=""
+MIGRATION_STARTED=false
 restore_pre_activation_handoff() {
   local status=$?
   if [ "$status" -ne 0 ] && { [ "$CLAIMING_WAS_ENABLED" = true ] || [ "$SENDING_WAS_ENABLED" = true ] || [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ]; } && [ -n "$PREVIOUS_RELEASE" ]; then
     local previous_revision
     previous_revision=$(cat "$PREVIOUS_RELEASE/REVISION" 2>/dev/null || true)
     if [ -n "$previous_revision" ]; then
+      if [ "$MIGRATION_STARTED" = true ] && ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database; then
+        echo "Previous release is below the post-migration database floor; leaving email controls paused" >&2
+        return
+      fi
       set +e
       if [ "$CLAIMING_WAS_ENABLED" = true ]; then
         (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" EXPECTED_RELEASE_REVISION="$previous_revision" NODE_ENV=prod node ../deploy/set-email-claiming.js true failed-pre-activation-handoff)
@@ -205,7 +211,7 @@ SENDING_CONTROL=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
 require('dotenv').config({path:'.env.prod'});
 const {Pool}=require('pg');
 const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
-pool.query('SELECT sending_enabled,control_revision FROM email_sending_control WHERE environment=$1',[process.env.EMAIL_WORKER_ENV]).then(r=>process.stdout.write(`${r.rows[0]?.sending_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}`)).finally(()=>pool.end());
+(async()=>{const exists=(await pool.query(`SELECT to_regclass('email_sending_control') AS table_name`)).rows[0]?.table_name;if(!exists)return process.stdout.write('false:0');const r=await pool.query('SELECT sending_enabled,control_revision FROM email_sending_control WHERE environment=$1',[process.env.EMAIL_WORKER_ENV]);process.stdout.write(`${r.rows[0]?.sending_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}`);})().finally(()=>pool.end());
 NODE
 )
 SENDING_WAS_ENABLED=${SENDING_CONTROL%%:*}
@@ -220,7 +226,7 @@ CLAIMING_WAS_ENABLED=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
 require('dotenv').config({path:'.env.prod'});
 const {Pool}=require('pg');
 const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
-pool.query('SELECT claiming_enabled FROM email_worker_control WHERE environment=$1',[process.env.EMAIL_WORKER_ENV]).then((r)=>process.stdout.write(r.rows[0]?.claiming_enabled?'true':'false')).finally(()=>pool.end());
+(async()=>{const exists=(await pool.query(`SELECT to_regclass('email_worker_control') AS table_name`)).rows[0]?.table_name;if(!exists)return process.stdout.write('false');const r=await pool.query('SELECT claiming_enabled FROM email_worker_control WHERE environment=$1',[process.env.EMAIL_WORKER_ENV]);process.stdout.write(r.rows[0]?.claiming_enabled?'true':'false');})().finally(()=>pool.end());
 NODE
 )
 if [ "$CLAIMING_WAS_ENABLED" = true ]; then
@@ -232,7 +238,7 @@ WEBHOOK_CONTROL=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
 require('dotenv').config({path:'.env.prod'});
 const {Pool}=require('pg');
 const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
-pool.query(`SELECT c.processing_enabled,c.control_revision,(SELECT split_part(h.worker_instance,'/',1) FROM email_webhook_worker_heartbeats h WHERE h.environment=c.environment AND h.heartbeat_at>now()-interval '45 seconds' ORDER BY h.heartbeat_at DESC LIMIT 1) AS deployment_id FROM email_webhook_worker_control c WHERE c.environment=$1`,[process.env.EMAIL_WORKER_ENV]).then(r=>process.stdout.write(`${r.rows[0]?.processing_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}:${r.rows[0]?.deployment_id??''}`)).finally(()=>pool.end());
+(async()=>{const exists=(await pool.query(`SELECT to_regclass('email_webhook_worker_control') AS table_name`)).rows[0]?.table_name;if(!exists)return process.stdout.write('false:0:');const r=await pool.query(`SELECT c.processing_enabled,c.control_revision,(SELECT split_part(h.worker_instance,'/',1) FROM email_webhook_worker_heartbeats h WHERE h.environment=c.environment AND h.heartbeat_at>now()-interval '45 seconds' ORDER BY h.heartbeat_at DESC LIMIT 1) AS deployment_id FROM email_webhook_worker_control c WHERE c.environment=$1`,[process.env.EMAIL_WORKER_ENV]);process.stdout.write(`${r.rows[0]?.processing_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}:${r.rows[0]?.deployment_id??''}`);})().finally(()=>pool.end());
 NODE
 )
 WEBHOOK_PROCESSING_WAS_ENABLED=${WEBHOOK_CONTROL%%:*}
@@ -244,6 +250,36 @@ if [ "$WEBHOOK_PROCESSING_WAS_ENABLED" = true ]; then
   (cd "$RELEASE_DIR/api" && EMAIL_WORKER_ENV="$WORKER_ENV" NODE_ENV=prod node ../deploy/set-webhook-processing.js false "$WEBHOOK_CONTROL_REVISION" deploy release-handoff)
   WEBHOOK_CONTROL_REVISION=$((WEBHOOK_CONTROL_REVISION + 1))
 fi
+
+echo "==> Waiting for dispatch and webhook workers to observe disabled controls"
+WORKERS_QUIESCED=false
+for _ in $(seq 1 90); do
+  ACTIVE_WORKERS=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
+require('dotenv').config({path:'.env.prod'});
+const fs=require('fs');const {Pool}=require('pg');
+const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+(async()=>{const tables=(await pool.query(`SELECT to_regclass('email_worker_heartbeats') AS email,to_regclass('email_webhook_worker_heartbeats') AS webhook`)).rows[0];let active=0;if(tables.email)active+=Number((await pool.query(`SELECT count(*)::int AS count FROM email_worker_heartbeats WHERE environment=$1 AND claiming=true AND heartbeat_at>now()-interval '45 seconds'`,[process.env.EMAIL_WORKER_ENV])).rows[0].count);if(tables.webhook)active+=Number((await pool.query(`SELECT count(*)::int AS count FROM email_webhook_worker_heartbeats WHERE environment=$1 AND processing=true AND heartbeat_at>now()-interval '45 seconds'`,[process.env.EMAIL_WORKER_ENV])).rows[0].count);process.stdout.write(String(active));})().finally(()=>pool.end());
+NODE
+)
+  if [ "$ACTIVE_WORKERS" = 0 ]; then WORKERS_QUIESCED=true; break; fi
+  sleep 1
+done
+if [ "$WORKERS_QUIESCED" != true ]; then
+  echo "Workers did not quiesce before the migration deadline; refusing schema state conversion" >&2
+  exit 1
+fi
+
+# Apply state-converting migrations only after capability-1 workers can no
+# longer finalize or project rows using the old status vocabulary. Mark the
+# database as potentially changed before invoking Liquibase because an update
+# can commit earlier changesets before a later one fails.
+MIGRATION_STARTED=true
+run_database_migrations
+
+# Registration/suppression activation can raise the rollback floor. Validate
+# after migrations and quiescence, before changing any process or symlink.
+node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$RELEASE_DIR" --database
+ensure_bootstrap_administrator
 
 echo "==> Activating release"
 chown -R ubuntu:ubuntu "$RELEASE_DIR"

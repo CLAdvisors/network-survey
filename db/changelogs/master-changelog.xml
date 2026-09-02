@@ -15,4 +15,6 @@
     <include file="v1_6_survey_invitation_subject.sql" relativeToChangelogFile="true" />
     <include file="v1_6_survey_lifecycle_email_delivery.sql" relativeToChangelogFile="true" />
     <include file="v1_7_email_webhook_delivery_truth.sql" relativeToChangelogFile="true" />
+    <include file="v1_8_bulk_survey_reminders.sql" relativeToChangelogFile="true" />
+    <include file="v1_9_reminder_provider_account_binding.sql" relativeToChangelogFile="true" />
 </databaseChangeLog>

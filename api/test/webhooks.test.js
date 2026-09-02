@@ -142,17 +142,90 @@ test('delivery projection preserves earliest facts and only event-specific evide
   const queries = [];
   const client = { async query(sql, values = []) { queries.push({ sql, values }); return { rowCount: 1, rows: [] }; } };
   const worker = new WebhookWorker({ pool: {}, env: { NODE_ENV: 'test', RESEND_PROVIDER_ACCOUNT_SCOPE: 'scope' } });
-  const delivery = { id: 'd', status: 'uncertain', respondent_id: 4, survey_id: 's' };
+  const delivery = { id: 'd', launch_id: 'launch-reminder', status: 'uncertain', respondent_id: 4, survey_id: 's' };
   const event = { event_type: 'email.delivered', event_created_at: '2026-08-05T00:00:00Z' };
   await worker.projectDelivery(client, event, deliveryEvent('email.delivered'), delivery);
   assert.match(queries[0].sql, /LEAST\(provider_delivered_at,\$2\)/);
   assert.ok(queries.some(({ sql }) => /SET status='accepted'/.test(sql)));
-  assert.ok(queries.some(({ sql }) => /UPDATE respondent SET email_sent=true/.test(sql)));
+  const legacyFlag=queries.find(({ sql }) => /UPDATE respondent SET email_sent=true/.test(sql));
+  assert.match(legacyFlag.sql,/l\.kind='initial'/);
+  assert.equal(legacyFlag.values[2],'launch-reminder');
+  assert.ok(queries.some(({sql})=>/reminder_pending.*reminder_retry_wait.*reminder_leased/.test(sql)));
 
   queries.length = 0;
   await worker.projectDelivery(client, { ...event, event_type: 'email.failed' }, deliveryEvent('email.failed'), delivery);
   assert.match(queries[0].sql, /provider_failed_at/);
   assert.equal(queries.some(({ sql }) => /SET status='accepted'/.test(sql)), false);
+});
+
+test('webhook correlation exact-matches bound reminders while allowing legacy null reminders to reconcile', async () => {
+  const calls=[];
+  const delivery={id:'11111111-1111-4111-8111-111111111111',provider_message_id:'provider-1'};
+  const client={async query(sql,values){calls.push({sql,values});return{rows:[delivery],rowCount:1};}};
+  const worker=new WebhookWorker({pool:{},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  const correlated=await worker.correlate(client,{provider_account_scope:'scope-a',provider_message_id:'provider-1'},{data:{email_id:'provider-1',tags:{app:'network_survey',environment:'test',delivery_id:delivery.id}}});
+  assert.equal(correlated.id,delivery.id);
+  assert.equal(calls.length,2);
+  for(const call of calls){
+    assert.equal(call.values[1],'scope-a');
+    assert.match(call.sql,/JOIN survey_launches/);
+    assert.match(call.sql,/l\.kind<>'reminder' OR l\.provider_account_scope IS NULL OR l\.provider_account_scope=\$2/);
+  }
+});
+
+test('suppression reconciliation cannot cancel reminders bound to another provider account', async () => {
+  const calls=[];
+  const deliveryId='11111111-1111-4111-8111-111111111111';
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT d\.id FROM survey_email_deliveries/.test(sql))return{rowCount:1,rows:[{id:deliveryId}]};
+    if(/SELECT d\.id,d\.status,EXISTS/.test(sql))return{rows:[{id:deliveryId,status:'reminder_pending'}]};
+    if(/SELECT EXISTS\(SELECT 1 FROM email_suppressions/.test(sql))return{rows:[{suppressed:true}]};
+    if(/UPDATE survey_email_deliveries SET status='cancelled'/.test(sql))return{rowCount:values[0].length,rows:[]};
+    return{rowCount:0,rows:[]};
+  }};
+  const worker=new WebhookWorker({pool:{connect:async()=>client},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  const result=await worker.reconcileAddress('Person@Example.test');
+  assert.deepEqual(result,{cancelled:1,fenced:0});
+  const selection=calls.find(({sql})=>/SELECT d\.id FROM survey_email_deliveries/.test(sql));
+  assert.deepEqual(selection.values,['person@example.test','scope-a']);
+  assert.match(selection.sql,/JOIN survey_launches l ON l\.id=d\.launch_id/);
+  assert.match(selection.sql,/l\.kind<>'reminder' OR l\.provider_account_scope IS NULL OR l\.provider_account_scope=\$2/);
+});
+
+test('suppression after ambiguous retry scheduling preserves terminal uncertain', async () => {
+  const calls=[];
+  const deliveryId='22222222-2222-4222-8222-222222222222';
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT d\.id FROM survey_email_deliveries/.test(sql))return{rowCount:1,rows:[{id:deliveryId}]};
+    if(/SELECT d\.id,d\.status,EXISTS/.test(sql))return{rows:[{id:deliveryId,status:'reminder_pending',unresolved_provider_outcome:true}]};
+    if(/SELECT EXISTS\(SELECT 1 FROM email_suppressions/.test(sql))return{rows:[{suppressed:true}]};
+    if(/UPDATE survey_email_deliveries SET status='uncertain'/.test(sql))return{rowCount:1,rows:[]};
+    return{rowCount:0,rows:[]};
+  }};
+  const worker=new WebhookWorker({pool:{connect:async()=>client},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  assert.deepEqual(await worker.reconcileAddress('Person@Example.test'),{cancelled:1,fenced:0});
+  const preserved=calls.find(({sql})=>/SET status='uncertain'/.test(sql));
+  assert.deepEqual(preserved.values,[[deliveryId]]);
+  assert.match(preserved.sql,/dispatch_failed_at=COALESCE/);
+  assert.equal(calls.some(({sql})=>/SET status='cancelled'/.test(sql)),false);
+  assert.match(calls.find(({sql})=>/SELECT d\.id,d\.status,/.test(sql)).sql,/a\.outcome='uncertain'.*a\.provider_started_at IS NOT NULL/);
+});
+
+test('suppression fencing preserves the provider error on a claimed ambiguous retry', async () => {
+  const calls=[];
+  const deliveryId='33333333-3333-4333-8333-333333333333';
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT d\.id FROM survey_email_deliveries/.test(sql))return{rowCount:1,rows:[{id:deliveryId}]};
+    if(/SELECT d\.id,d\.status,EXISTS/.test(sql))return{rows:[{id:deliveryId,status:'reminder_leased',unresolved_provider_outcome:true}]};
+    if(/SELECT EXISTS\(SELECT 1 FROM email_suppressions/.test(sql))return{rows:[{suppressed:true}]};
+    if(/cancellation_requested_at=COALESCE/.test(sql))return{rowCount:1,rows:[]};
+    return{rowCount:0,rows:[]};
+  }};
+  const worker=new WebhookWorker({pool:{connect:async()=>client},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  assert.deepEqual(await worker.reconcileAddress('Person@Example.test'),{cancelled:0,fenced:1});
+  const fenced=calls.find(({sql})=>/cancellation_requested_at=COALESCE/.test(sql));
+  assert.deepEqual(fenced.values,[[deliveryId],[deliveryId]]);
+  assert.match(fenced.sql,/last_error_code=CASE WHEN id=ANY\(\$2::uuid\[\]\) THEN last_error_code ELSE 'suppressed'/);
 });
 
 test('claim, replay, purge, and canary primitives use fenced v1_7 contracts', async () => {

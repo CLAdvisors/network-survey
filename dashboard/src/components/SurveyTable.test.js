@@ -44,8 +44,8 @@ test('keeps survey dispatch acceptance separate from provider outcomes', () => {
     },
   }]} selectRow={() => {}} />);
 
-  const dispatch = screen.getByRole('region', { name: 'Invitation dispatch' });
-  expect(dispatch).toHaveTextContent('4 / 4 submitted');
+  const dispatch = screen.getByRole('region', { name: 'Email dispatch' });
+  expect(dispatch).toHaveTextContent('Invitation: 4 / 4 submitted');
   expect(dispatch).toHaveTextContent('Complete');
 
   const provider = screen.getByRole('region', { name: 'Provider outcomes' });
@@ -55,6 +55,18 @@ test('keeps survey dispatch acceptance separate from provider outcomes', () => {
   const details = screen.getByLabelText(/2 delivery confirmations, 3 awaiting a final result, 1 invitation with delivery problems/);
   expect(details).toBeInTheDocument();
   expect(details).toHaveAttribute('tabindex', '0');
+});
+
+test('labels reminder campaigns separately from initial invitations', () => {
+  render(<SurveyTable rows={[{
+    id: 'survey-reminder', name: 'Reminder survey', latestLaunch: {
+      kind: 'reminder', targetCount: 2, acceptedCount: 1,
+      providerOutcomeCounts: { providerProblemCount: 1, bouncedCount: 1 },
+    },
+  }]} selectRow={() => {}} />);
+
+  expect(screen.getByRole('region', { name: 'Email dispatch' })).toHaveTextContent('Reminder: 1 / 2 submitted');
+  expect(screen.getByLabelText(/1 reminder with delivery problems/)).toBeInTheDocument();
 });
 
 test('does not promise provider outcomes when no invitations were accepted', () => {

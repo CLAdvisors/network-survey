@@ -9,6 +9,7 @@ import QuestionTable from "./QuestionTable";
 import CreateSurveyDialog from "./CreateSurveyDialog";
 import EmailNotificationEditor from "./EmailNotificationEditor";
 import InvitationSubjectEditor from "./InvitationSubjectEditor";
+import ReminderTemplateEditor from "./ReminderTemplateEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
@@ -34,7 +35,7 @@ const Dashboard = () => {
   const surveyRequest = React.useRef(0);
   const pendingSelectionId = React.useRef(null);
   const relatedRequest = React.useRef(0);
-  const { memberships, canViewSensitiveSurveyData, canEditSurvey } = useAuth();
+  const { memberships, canViewSensitiveSurveyData, canEditSurvey, hasSurveyRole } = useAuth();
 
   const fetchSurveyData = React.useCallback(async () => {
     const request = ++surveyRequest.current;
@@ -251,10 +252,15 @@ const Dashboard = () => {
   const selectedIsLifecycleLocked = Boolean(selectSurvey) && lifecycleStatus(selectSurvey) !== 'draft';
   const selectedCanEdit = canEditSurvey(selectSurvey);
   const selectedCanViewRespondents = canViewSensitiveSurveyData(selectSurvey);
+  const selectedCanAdminister = typeof hasSurveyRole === 'function'
+    ? hasSurveyRole(selectSurvey, 'admin')
+    : selectedCanEdit;
   const selectedReadOnly = !selectedCanEdit || selectedIsLifecycleLocked;
-  const hasInvitationDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.invitationSubject || dirty.invitationBody);
+  const hasReminderDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.reminderTemplate);
+  const hasInvitationDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.invitationSubject || dirty.invitationBody || dirty.reminderTemplate);
   const hasRespondentDrafts = Object.values(dirtyBySurvey).some((dirty) => dirty.respondents);
-  const hasInvitationOperations = Object.values(operationsBySurvey).some((pending) => pending.invitationSubject || pending.invitationBody);
+  const hasReminderOperations = Object.values(operationsBySurvey).some((pending) => pending.reminderTemplate);
+  const hasInvitationOperations = Object.values(operationsBySurvey).some((pending) => pending.invitationSubject || pending.invitationBody || pending.reminderTemplate);
   const hasRespondentOperations = Object.values(operationsBySurvey).some((pending) => pending.respondents);
 
   return (
@@ -356,6 +362,16 @@ const Dashboard = () => {
               onDirtyChange={handleDirtyChange}
               onOperationChange={handleOperationChange}
             />
+            {(selectedCanAdminister || hasReminderDrafts || hasReminderOperations) && (
+              <Box sx={{display:selectedCanAdminister && lifecycleStatus(selectSurvey) !== 'draft' ? 'block' : 'none'}} aria-hidden={!(selectedCanAdminister && lifecycleStatus(selectSurvey) !== 'draft')}>
+                <ReminderTemplateEditor
+                  surveyId={selectedCanAdminister ? surveyId(selectSurvey) : null}
+                  editable={selectedCanAdminister && lifecycleStatus(selectSurvey) === 'active'}
+                  onDirtyChange={handleDirtyChange}
+                  onOperationChange={handleOperationChange}
+                />
+              </Box>
+            )}
           </CollapsibleSection>
         </Box>
       )}

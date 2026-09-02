@@ -38,17 +38,21 @@ describe('attachDraggableRankingRenderer', () => {
       value: [],
       getType: () => 'draggableranking',
     };
+    const surveyRoot = document.createElement('main');
+    surveyRoot.className = 'sd-root-modern';
     const element = document.createElement('section');
     element.className = 'sd-question';
     element.innerHTML = '<div class="sd-question__content"><span>SurveyJS fallback</span></div>';
-    document.body.appendChild(element);
+    surveyRoot.appendChild(element);
+    document.body.appendChild(surveyRoot);
 
     const dispose = attachDraggableRankingRenderer(survey);
     expect(onAfterRenderQuestion.size()).toBe(1);
     onAfterRenderQuestion.emit({ question, htmlElement: element });
 
     const info = await screen.findByRole('button', { name: 'Info: Stable label' });
-    expect(element.querySelector('.cla-survey-runtime > .draggable-ranking-host')).toBeInTheDocument();
+    expect(surveyRoot).toHaveClass('cla-survey-runtime');
+    expect(element.querySelector('.sd-question__content > .draggable-ranking-host')).toBeInTheDocument();
     fireEvent.click(info);
     expect(screen.getByRole('region', { name: 'Definition: Stable label' })).toHaveTextContent('Literal definition.');
     expect(question.value).toEqual([]);
@@ -56,7 +60,38 @@ describe('attachDraggableRankingRenderer', () => {
     dispose();
     expect(onAfterRenderQuestion.size()).toBe(0);
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Info: Stable label' })).not.toBeInTheDocument());
-    element.remove();
+    expect(surveyRoot).not.toHaveClass('cla-survey-runtime');
+    surveyRoot.remove();
+  });
+
+  it('reference-counts a shared Creator Preview runtime scope across renderers', () => {
+    const firstEvent = surveyEvent();
+    const secondEvent = surveyEvent();
+    const surveyRoot = document.createElement('main');
+    surveyRoot.className = 'sd-root-modern';
+    const element = document.createElement('section');
+    element.className = 'sd-question';
+    element.innerHTML = '<div class="sd-question__content"></div>';
+    surveyRoot.appendChild(element);
+    document.body.appendChild(surveyRoot);
+    const question = {
+      name: 'shared',
+      choices: [{ value: 'one', text: 'One', definition: 'Definition.' }],
+      value: [],
+      getType: () => 'draggableranking',
+    };
+
+    const disposeFirst = attachDraggableRankingRenderer({ onAfterRenderQuestion: firstEvent });
+    const disposeSecond = attachDraggableRankingRenderer({ onAfterRenderQuestion: secondEvent });
+    firstEvent.emit({ question, htmlElement: element });
+    secondEvent.emit({ question, htmlElement: element });
+    expect(surveyRoot).toHaveClass('cla-survey-runtime');
+
+    disposeFirst();
+    expect(surveyRoot).toHaveClass('cla-survey-runtime');
+    disposeSecond();
+    expect(surveyRoot).not.toHaveClass('cla-survey-runtime');
+    surveyRoot.remove();
   });
 
   it('unmounts roots and document listeners when SurveyJS detaches a question host', async () => {

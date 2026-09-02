@@ -13,6 +13,7 @@ const {
   SURVEY_SCHEMA_MAX_BYTES,
   validateSurveyDefinition,
   validateRequiredAnswers,
+  normalizeQuestionNames,
 } = require('../server');
 
 function definedRanking(choices, name = 'values') {
@@ -186,6 +187,39 @@ test('the schema budget guarantees validator-approved JSON fits the authoring pa
   assert.doesNotThrow(() => validateSurveyDefinition(accepted));
   accepted.elements[0].description += 'x'.repeat(200);
   assert.throws(() => validateSurveyDefinition(accepted), /Questions schema exceeds the .*byte limit/);
+});
+
+test('canonical reference expansion cannot exceed the persisted schema budget', () => {
+  const schema = {
+    elements: [{
+      type: 'text',
+      name: 'q',
+      visibleIf: '{q}'.repeat(250_000),
+    }],
+  };
+  assert.doesNotThrow(() => validateSurveyDefinition(schema));
+  assert.throws(
+    () => normalizeQuestionNames(schema, { currentCanonicalNames: new Set() }),
+    /Questions schema exceeds the .*byte limit/
+  );
+});
+
+test('all schema strings reject characters PostgreSQL JSONB cannot store', () => {
+  for (const element of [
+    { type: 'text', name: 'q', title: 'before\0after' },
+    { type: 'text', name: 'q', description: 'before\uD800after' },
+    { type: 'text', name: 'q', metadata: { nested: 'before\uDFFFafter' } },
+    { type: 'text', name: 'q', metadata: { ['bad\0key']: 'value' } },
+    { type: 'text', name: 'q', metadata: { nested: { ['bad\uD800key']: 'value' } } },
+  ]) {
+    assert.throws(
+      () => validateSurveyDefinition({ elements: [element] }),
+      /PostgreSQL JSONB cannot store/
+    );
+  }
+  assert.doesNotThrow(() => validateSurveyDefinition({
+    elements: [{ type: 'text', name: 'q', title: 'Valid astral text 😀' }],
+  }));
 });
 
 test('/api/updateQuestions rejects unauthenticated oversized malformed bodies before parsing', async (t) => {

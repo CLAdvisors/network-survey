@@ -7,9 +7,15 @@ const source = readFileSync(resolve(process.cwd(), 'src/components/SurveyEditor.
 describe('Survey Editor definition runtime integration', () => {
   it('routes both Creator Preview and custom Demo Survey through the production renderer', () => {
     expect(source.match(/attachDraggableRankingRenderer\(surveyModel\)/g)).toHaveLength(1);
+    expect(source).toContain('configureProductionSurveyPresentation(options.survey)');
     expect(source).toContain("configureSurveyModel(options.survey, 'preview')");
+    expect(source).toContain('configureProductionSurveyPresentation(model)');
     expect(source).toContain("configureSurveyModel(model, 'preview-runtime')");
     expect(source).toContain('replaceSurveyContextModel(');
+    expect(source).toContain("{ disposePrevious: context === 'preview-runtime' }");
+    expect(source).toContain('dashboardOwnedModels.forEach((survey) => survey?.dispose?.())');
+    expect(source).toContain('cancelDeferredResourceDisposal(creatorDisposeTimerRef)');
+    expect(source).toContain('deferOwnedResourceDisposal(creatorDisposeTimerRef, creatorRef, creator)');
     expect(source).not.toContain('ReactDOM.createRoot');
   });
 

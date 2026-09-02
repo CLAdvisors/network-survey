@@ -35,12 +35,24 @@ import {
   validateDraggableRankingDefinitionProperty,
 } from '../utils/draggableRankingDefinitions';
 import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
-import { releaseSurveyModel, replaceSurveyContextModel } from '../utils/surveyModelLifecycle';
+import {
+  cancelDeferredResourceDisposal,
+  deferOwnedResourceDisposal,
+  releaseSurveyModel,
+  replaceSurveyContextModel,
+} from '../utils/surveyModelLifecycle';
 import { lifecycleLabel, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
 // ItemValue metadata must exist before Survey Creator constructs any choices.
 registerDraggableRankingDefinitionMetadata();
+
+export const configureProductionSurveyPresentation = (surveyModel) => {
+  applyProductionSurveyTheme(surveyModel);
+  surveyModel.showQuestionNumbers = false;
+  surveyModel.showProgressBar = 'bottom';
+  surveyModel.progressBarType = 'questions';
+};
 
 // Define and register custom question class for draggableranking
 class QuestionDraggableRankingModel extends Question {
@@ -238,6 +250,7 @@ const SurveyEditor = () => {
   const [previewSurveyModel, setPreviewSurveyModel] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const creatorRef = useRef(null);
+  const creatorDisposeTimerRef = useRef(null);
   const surveyHooksRef = useRef(new Map());
   const surveyContextModelsRef = useRef(new Map());
   const selectedSurveyRef = useRef(null);
@@ -289,7 +302,8 @@ const SurveyEditor = () => {
       surveyHooksRef.current,
       context,
       surveyModel,
-      cleanupDraggableSurveyRoots
+      cleanupDraggableSurveyRoots,
+      { disposePrevious: context === 'preview-runtime' }
     );
 
     const existing = surveyHooksRef.current.get(surveyModel);
@@ -457,7 +471,7 @@ const SurveyEditor = () => {
         configureSurveyModel(options.survey, 'designer');
       }
       if (options.area === 'preview-tab') {
-        applyProductionSurveyTheme(options.survey);
+        configureProductionSurveyPresentation(options.survey);
         configureSurveyModel(options.survey, 'preview');
       }
     };
@@ -473,17 +487,27 @@ const SurveyEditor = () => {
 
   useEffect(() => {
     const hooksMap = surveyHooksRef.current;
+    const contextModels = surveyContextModelsRef.current;
+    cancelDeferredResourceDisposal(creatorDisposeTimerRef);
     return () => {
+      const dashboardOwnedModels = new Set(
+        [...contextModels.entries()]
+          .filter(([context]) => context === 'preview-runtime')
+          .map(([, survey]) => survey)
+      );
       hooksMap.forEach((hooks, survey) => {
-        if (hooks?.cleanup) {
-          hooks.cleanup();
-        }
+        hooks?.cleanup?.();
         cleanupDraggableSurveyRoots(survey);
       });
       hooksMap.clear();
-      surveyContextModelsRef.current.clear();
+      contextModels.clear();
+      dashboardOwnedModels.forEach((survey) => survey?.dispose?.());
+      // React 18 development Strict Mode immediately replays effects without
+      // recreating refs. Defer Creator disposal so replay can cancel it, while
+      // a real unmount still releases the dashboard-owned Creator instance.
+      deferOwnedResourceDisposal(creatorDisposeTimerRef, creatorRef, creator);
     };
-  }, []);
+  }, [creator]);
 
   // Normalize the one logical editor page while rejecting unsupported layouts
   // before Survey Creator can silently discard them in single-page mode.
@@ -562,10 +586,7 @@ const SurveyEditor = () => {
     try {
       const questions = buildNormalizedSurveySchema();
       const model = new Model(questions);
-      applyProductionSurveyTheme(model);
-      model.showQuestionNumbers = false;
-      model.showProgressBar = 'bottom';
-      model.progressBarType = 'questions';
+      configureProductionSurveyPresentation(model);
 
       configureSurveyModel(model, 'preview-runtime');
       setPreviewSurveyModel(model);

@@ -57,11 +57,14 @@ function DefinitionControl({ item, state, choiceAction }) {
     };
     const handleKeyDown = (event) => {
       if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      // Hover is progressive enhancement and may open while keyboard focus is
-      // elsewhere. Never steal that unrelated focus when Escape dismisses it.
-      close(isWithinFocusPath(document.activeElement));
+      const focusIsWithinControl = isWithinFocusPath(document.activeElement);
+      // Hover is progressive enhancement and may open while an unrelated
+      // control owns focus. Dismiss without consuming that control's Escape.
+      if (focusIsWithinControl) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      close(focusIsWithinControl);
     };
     document.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
@@ -73,12 +76,13 @@ function DefinitionControl({ item, state, choiceAction }) {
 
   if (!definition) return null;
 
-  const openTransient = () => state.openTransient(key);
-  const closeTransientOnPointerExit = (event) => {
-    if (!isWithinPopover(event.relatedTarget)) state.closeTransient(key);
+  const openOnHover = () => state.openHover(key);
+  const closeOnPointerExit = (event) => {
+    if (!isWithinPopover(event.relatedTarget)) state.closeHover(key);
   };
-  const closeTransientOnFocusExit = (event) => {
-    if (!isWithinFocusPath(event.relatedTarget)) state.closeTransient(key);
+  const openOnFocus = () => state.openFocus(key);
+  const closeOnFocusExit = (event) => {
+    if (!isWithinFocusPath(event.relatedTarget)) state.closeFocus(key);
   };
   const handleControlKeyDown = (event) => {
     event.stopPropagation();
@@ -86,6 +90,12 @@ function DefinitionControl({ item, state, choiceAction }) {
       event.preventDefault();
       close(true);
     }
+  };
+  const handleActionKeyDown = (event) => {
+    if (event.key !== 'Escape' || !expanded) return;
+    event.preventDefault();
+    event.stopPropagation();
+    close(true);
   };
 
   return (
@@ -102,16 +112,16 @@ function DefinitionControl({ item, state, choiceAction }) {
         onTouchStart={stopAnswerEvent}
         onDragStart={stopAnswerEvent}
         onKeyDown={handleControlKeyDown}
-        onMouseEnter={openTransient}
-        onMouseLeave={closeTransientOnPointerExit}
+        onMouseEnter={openOnHover}
+        onMouseLeave={closeOnPointerExit}
         onFocus={() => {
           if (suppressNextFocusOpenRef.current) {
             suppressNextFocusOpenRef.current = false;
             return;
           }
-          openTransient();
+          openOnFocus();
         }}
-        onBlur={closeTransientOnFocusExit}
+        onBlur={closeOnFocusExit}
         onClick={(event) => {
           stopAnswerEvent(event);
           state.togglePinned(key);
@@ -119,7 +129,13 @@ function DefinitionControl({ item, state, choiceAction }) {
       >
         Info
       </button>
-      <span ref={actionRef} className="cla-choice-definition__action">
+      <span
+        ref={actionRef}
+        className="cla-choice-definition__action"
+        onFocus={openOnFocus}
+        onBlur={closeOnFocusExit}
+        onKeyDown={handleActionKeyDown}
+      >
         {choiceAction}
       </span>
       {expanded && (
@@ -133,9 +149,10 @@ function DefinitionControl({ item, state, choiceAction }) {
           onTouchStart={stopAnswerEvent}
           onDragStart={stopAnswerEvent}
           onKeyDown={handleControlKeyDown}
-          onMouseEnter={openTransient}
-          onMouseLeave={closeTransientOnPointerExit}
-          onBlur={closeTransientOnFocusExit}
+          onMouseEnter={openOnHover}
+          onMouseLeave={closeOnPointerExit}
+          onFocus={openOnFocus}
+          onBlur={closeOnFocusExit}
         >
           <strong>{label}</strong>
           <DefinitionText text={definition} />
@@ -162,27 +179,36 @@ DefinitionControl.rendersChoiceAction = true;
 
 /** Production Option 1: explicit Info-button definitions for draggable ranking. */
 export function DraggableRankingWithDefinitions(props) {
-  const [transientKey, setTransientKey] = React.useState('');
+  const [hoveredKey, setHoveredKey] = React.useState('');
+  const [focusedKey, setFocusedKey] = React.useState('');
   const [pinnedKey, setPinnedKey] = React.useState('');
-  const openKey = pinnedKey || transientKey;
+  const openKey = pinnedKey || focusedKey || hoveredKey;
 
   const definitionState = React.useMemo(() => ({
     openKey,
-    openTransient(key) {
-      if (!pinnedKey) setTransientKey(key);
+    openHover(key) {
+      if (!pinnedKey) setHoveredKey(key);
     },
-    closeTransient(key) {
-      setTransientKey((current) => current === key ? '' : current);
+    closeHover(key) {
+      setHoveredKey((current) => current === key ? '' : current);
+    },
+    openFocus(key) {
+      if (!pinnedKey) setFocusedKey(key);
+    },
+    closeFocus(key) {
+      setFocusedKey((current) => current === key ? '' : current);
     },
     togglePinned(key) {
-      setTransientKey('');
+      setHoveredKey('');
+      setFocusedKey('');
       setPinnedKey((current) => current === key ? '' : key);
     },
     close(key) {
-      setTransientKey((current) => current === key ? '' : current);
+      setHoveredKey((current) => current === key ? '' : current);
+      setFocusedKey((current) => current === key ? '' : current);
       setPinnedKey((current) => current === key ? '' : current);
     },
-  }), [openKey, pinnedKey]);
+  }), [focusedKey, hoveredKey, openKey, pinnedKey]);
 
   return (
     <DraggableRankingQuestion

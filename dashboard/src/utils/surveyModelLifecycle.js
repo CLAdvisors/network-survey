@@ -1,3 +1,19 @@
+export function cancelDeferredResourceDisposal(timerRef) {
+  if (timerRef.current === null) return;
+  clearTimeout(timerRef.current);
+  timerRef.current = null;
+}
+
+export function deferOwnedResourceDisposal(timerRef, ownerRef, resource) {
+  timerRef.current = setTimeout(() => {
+    if (ownerRef.current === resource) {
+      resource?.dispose?.();
+      ownerRef.current = null;
+    }
+    timerRef.current = null;
+  }, 0);
+}
+
 /**
  * Releases hooks owned by one configured SurveyJS model and removes every
  * context reference to it. Survey Creator owns model disposal; this helper
@@ -19,11 +35,13 @@ export function replaceSurveyContextModel(
   hooksBySurvey,
   context,
   survey,
-  cleanupSurvey
+  cleanupSurvey,
+  { disposePrevious = false } = {}
 ) {
   const previous = contextModels.get(context);
   if (previous && previous !== survey) {
     releaseSurveyModel(contextModels, hooksBySurvey, previous, cleanupSurvey);
+    if (disposePrevious && typeof previous.dispose === 'function') previous.dispose();
   }
   if (survey) contextModels.set(context, survey);
 }

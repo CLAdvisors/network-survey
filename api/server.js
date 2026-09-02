@@ -366,23 +366,46 @@ const respondentRateLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
 });
+const authoringRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.AUTHORING_RATE_LIMIT_MAX) || 120,
+  keyGenerator: (req) => `user:${req.user.id}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authoring requests, please try again later.' },
+});
 
-// Large request parsers are mounted only on the routes that need them. Authoring
-// routes require a valid-looking session before allocation. The public response
-// route is rate-limited before parsing its larger bounded body.
-function requireAuthenticatedSession(req, res, next) {
-  if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });
-  next();
+// Authoritative middleware for protected routes.
+async function requireAuth(req, res, next) {
+  if (!req.session?.userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const user = await getUserById(req.session.userId);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if ((user.status || 'active') === 'disabled') {
+      return res.status(403).json({ error: 'Account is disabled' });
+    }
+    req.user = toSafeUser(user);
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(500).json({ error: 'Authentication check failed' });
+  }
 }
+
+// Large parsers are mounted only on routes that need them. Authoring requests
+// are authoritatively authenticated and rate-limited before larger allocation;
+// the public response route is IP-rate-limited before its bounded parser.
 const rosterJsonParser = express.json({ limit: '3mb' });
 const QUESTION_DEFINITION_JSON_LIMIT = '3mb';
 const questionDefinitionJsonParser = express.json({ limit: QUESTION_DEFINITION_JSON_LIMIT });
 const RESPONSE_JSON_LIMIT = '1mb';
 const responseJsonParser = express.json({ limit: RESPONSE_JSON_LIMIT });
-app.patch('/api/surveys/:surveyId/respondents', requireAuthenticatedSession, rosterJsonParser);
-app.post('/api/updateTargets', requireAuthenticatedSession, rosterJsonParser);
-app.delete('/api/user', requireAuthenticatedSession, rosterJsonParser);
-app.post('/api/updateQuestions', requireAuthenticatedSession, questionDefinitionJsonParser);
+app.patch('/api/surveys/:surveyId/respondents', requireAuth, authoringRateLimiter, rosterJsonParser);
+app.post('/api/updateTargets', requireAuth, authoringRateLimiter, rosterJsonParser);
+app.delete('/api/user', requireAuth, authoringRateLimiter, rosterJsonParser);
+app.post('/api/updateQuestions', requireAuth, authoringRateLimiter, questionDefinitionJsonParser);
 app.post('/api/user', respondentRateLimiter, responseJsonParser);
 // All other JSON routes retain Express's 100 KiB default limit.
 app.use(express.json());
@@ -773,31 +796,6 @@ app.get('/api/check-auth', async (req, res) => {
     res.status(500).json({ error: 'Failed to check authentication' });
   }
 });
-
-// Auth middleware for protected routes
-const requireAuth = async (req, res, next) => {
-  if (!req.session?.userId) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  try {
-    const user = await getUserById(req.session.userId);
-
-    if (!user) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    if ((user.status || 'active') === 'disabled') {
-      return res.status(403).json({ error: 'Account is disabled' });
-    }
-
-    req.user = toSafeUser(user);
-    next();
-  } catch (error) {
-    console.error('Auth middleware error:', error);
-    res.status(500).json({ error: 'Authentication check failed' });
-  }
-};
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -1539,7 +1537,38 @@ const DEFINED_RANKING_LIMITS = Object.freeze({
   surveyDefinitionBytes: 512 * 1024,
 });
 const FORBIDDEN_LITERAL_CHARACTERS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\uD800-\uDFFF]/u;
+const JSONB_INCOMPATIBLE_CHARACTERS_RE = /[\u0000\uD800-\uDFFF]/u;
 const SURVEY_SCHEMA_MAX_BYTES = Math.floor(2.5 * 1024 * 1024);
+
+function assertSurveySchemaSize(json) {
+  let serializedBytes;
+  try {
+    serializedBytes = Buffer.byteLength(JSON.stringify(json), 'utf8');
+  } catch {
+    throw new Error('Questions schema must be JSON-serializable.');
+  }
+  if (serializedBytes > SURVEY_SCHEMA_MAX_BYTES) {
+    throw new Error(`Questions schema exceeds the ${SURVEY_SCHEMA_MAX_BYTES}-byte limit.`);
+  }
+}
+
+function rejectJsonbIncompatibleStrings(node, label = 'Questions schema') {
+  if (typeof node === 'string') {
+    if (JSONB_INCOMPATIBLE_CHARACTERS_RE.test(node)) {
+      throw new Error(`${label} contains a NUL or malformed Unicode surrogate that PostgreSQL JSONB cannot store.`);
+    }
+    return;
+  }
+  if (Array.isArray(node)) {
+    node.forEach((item, index) => rejectJsonbIncompatibleStrings(item, `${label} item ${index + 1}`));
+    return;
+  }
+  if (!node || typeof node !== 'object') return;
+  Object.entries(node).forEach(([property, value]) => {
+    rejectJsonbIncompatibleStrings(property, `${label} property name`);
+    rejectJsonbIncompatibleStrings(value, `${label} ${property}`);
+  });
+}
 
 function normalizeBoundedLiteral(value, label, maxChars, maxBytes) {
   if (typeof value !== 'string') throw new Error(`${label} must be an explicit string.`);
@@ -1734,15 +1763,7 @@ function validateSurveyDefinition(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     throw new Error('Questions must be a SurveyJS schema object.');
   }
-  let serializedBytes;
-  try {
-    serializedBytes = Buffer.byteLength(JSON.stringify(json), 'utf8');
-  } catch {
-    throw new Error('Questions schema must be JSON-serializable.');
-  }
-  if (serializedBytes > SURVEY_SCHEMA_MAX_BYTES) {
-    throw new Error(`Questions schema exceeds the ${SURVEY_SCHEMA_MAX_BYTES}-byte limit.`);
-  }
+  assertSurveySchemaSize(json);
   if (json.claNextQuestionNumber !== undefined &&
       (!Number.isSafeInteger(json.claNextQuestionNumber) || json.claNextQuestionNumber < 1)) {
     throw new Error('claNextQuestionNumber must be a positive safe integer.');
@@ -1879,6 +1900,7 @@ function validateSurveyDefinition(json) {
       definitionTotals.bytes > DEFINED_RANKING_LIMITS.surveyDefinitionBytes) {
     throw new Error(`Survey choice definitions exceed the ${DEFINED_RANKING_LIMITS.surveyDefinitionChars}-character or ${DEFINED_RANKING_LIMITS.surveyDefinitionBytes}-byte aggregate limit.`);
   }
+  rejectJsonbIncompatibleStrings(normalized);
   return normalized;
 }
 
@@ -2538,7 +2560,7 @@ app.post('/api/updateEmails', express.json(), requireAuth, async (req, res) => {
     res.status(500).json({ message: 'Failed to update email data.' });
   } 
 });
-app.patch('/api/surveys/:surveyId/respondents', express.json(), requireAuth, async (req, res) => {
+app.patch('/api/surveys/:surveyId/respondents', async (req, res) => {
   try {
     const result = await respondentRoster.mutateRoster(pool, req.user, req.params.surveyId, req.body || {});
     res.set('X-Roster-Revision', String(result.revision));
@@ -2631,7 +2653,7 @@ app.get('/api/survey-notifications/:surveyId', requireAuth, async (req, res) => 
 
 // CSV imports are additions only: mutable names must never select an existing
 // respondent. Occupied names are rejected by complete-roster validation.
-app.post('/api/updateTargets', express.json(), requireAuth, async (req, res) => {
+app.post('/api/updateTargets', async (req, res) => {
   try {
     const { surveyName, csvData, expectedRevision } = req.body || {};
     if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });
@@ -2749,7 +2771,7 @@ function normalizeQuestionNames(json, {
   if (nextQuestionNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new Error('claNextQuestionNumber exceeds the supported safe integer range.');
   }
-  return {
+  const normalized = {
     ...rewriteSurveyExpressions(validated, nameMap),
     claNextQuestionNumber: Number(nextQuestionNumber),
     elements: validated.elements.map((element) => ({
@@ -2757,9 +2779,13 @@ function normalizeQuestionNames(json, {
       name: nameMap.get(element.name)
     }))
   };
+  // Canonical names can expand repeated expression references substantially.
+  // Enforce the persistence budget on the final object, not only its input.
+  assertSurveySchemaSize(normalized);
+  return normalized;
 }
 
-app.post('/api/updateQuestions', express.json(), requireAuth, async (req, res) => {
+app.post('/api/updateQuestions', async (req, res) => {
   const data  = req.body;
   const surveyQuestions = data.questions;
   const surveyName = data.surveyName;
@@ -3400,7 +3426,7 @@ app.delete('/api/survey/:surveyName', requireAuth, async (req, res) => {
 
 // Delete a respondent by stable identity through the same serialized/versioned
 // roster transaction used by edits and imports.
-app.delete('/api/user', requireAuth, async (req, res) => {
+app.delete('/api/user', async (req, res) => {
   try {
     const { respondentId, surveyName, expectedRevision } = req.body || {};
     if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });

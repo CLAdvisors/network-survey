@@ -95,9 +95,27 @@ describe('production draggable-ranking Info definitions', () => {
     expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
     expect(input).toHaveFocus();
 
-    fireEvent.keyDown(document, { key: 'Escape' });
+    const escapeWasNotCancelled = fireEvent.keyDown(input, { key: 'Escape' });
+    expect(escapeWasNotCancelled).toBe(true);
     expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
     expect(input).toHaveFocus();
+  });
+
+  it('keeps focus and hover disclosure state independent for mixed-input users', () => {
+    render(<Fixture />);
+    const info = screen.getByRole('button', { name: 'Info: Beta' });
+
+    fireEvent.mouseEnter(info);
+    fireEvent.focus(info);
+    expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
+    fireEvent.mouseLeave(info, { relatedTarget: document.body });
+    expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
+
+    fireEvent.mouseEnter(info);
+    fireEvent.blur(info, { relatedTarget: document.body });
+    expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
+    fireEvent.mouseLeave(info, { relatedTarget: document.body });
+    expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
   });
 
   it('uses explicit-button-only hover and closes at the actual control boundary', () => {
@@ -142,6 +160,17 @@ describe('production draggable-ranking Info definitions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Rank: Beta' }));
     expect(onChange).toHaveBeenCalledWith(['stable-beta']);
+
+    const currentInfo = screen.getByRole('button', { name: 'Info: Beta' });
+    const currentAction = screen.getByRole('button', { name: 'Unrank: Beta' });
+    fireEvent.focus(currentInfo);
+    expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
+    fireEvent.blur(currentInfo, { relatedTarget: currentAction });
+    fireEvent.focus(currentAction);
+    fireEvent.keyDown(currentAction, { key: 'Escape' });
+    expect(currentInfo).toHaveFocus();
+    expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
+    expect(parentEvents.onKeyDown).not.toHaveBeenCalled();
   });
 
   it('gives rendered callouts unique ARIA targets and keeps DOM, visual, and focus action order coherent', async () => {

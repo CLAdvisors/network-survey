@@ -47,7 +47,7 @@ No DNS, ACM certificate, Resend API key, webhook endpoint, source snapshot, sour
 
 ## Runtime deployment evidence
 
-- immutable release `de44efeaa44e5e6a082415ca66bffdd36ede501c` is installed on both private ASG instances
+- immutable release `7349c3c272e5391e1863c18bccfe9fa32783002d` is installed on both private ASG instances
 - both ALB targets are healthy; local API health reports database connectivity healthy
 - API, delivery worker, and webhook worker run the exact release on both instances
 - migration `prod-secondary-disabled-controls-1` ran exactly once
@@ -60,6 +60,8 @@ No DNS, ACM certificate, Resend API key, webhook endpoint, source snapshot, sour
 - API, dashboard, and survey CloudFront distributions retain their default domains during the agreed transition window
 - ACM DNS validation succeeded for the three custom names, each CloudFront alias is deployed, and public HTTPS verification returns HTTP 200 with valid certificates
 - dashboard-to-API CORS preflight returns the exact custom dashboard origin with credentials enabled
+- CloudFront forwards its viewer protocol through the managed origin request policy; the API trusts that header only behind an explicit target runtime gate, allowing secure host-only session cookies over the HTTPS edge
+- authenticated owner and platform-administrator smoke tests can retrieve the survey list; platform-administrator organization listing also succeeds
 - both frontend bundles reference the custom API hostname; the dashboard bundle references the plural custom survey hostname
 
 Current canonical endpoints:

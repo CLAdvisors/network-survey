@@ -2,7 +2,7 @@ import React from 'react';
 import { DefinitionExperience } from './DefinitionExperience';
 import { extractLongValueChoices } from './longValueSchema';
 
-export default function LongValueRadiogroup({ question, definitionVariant }) {
+export default function LongValueRadiogroup({ question, definitionVariant, popoverHoverTarget }) {
   const choices = React.useMemo(() => extractLongValueChoices(question), [question, question?.choices]);
   const [value, setValue] = React.useState(question?.value);
   const groupName = React.useId();
@@ -21,8 +21,8 @@ export default function LongValueRadiogroup({ question, definitionVariant }) {
   };
 
   return (
-    <DefinitionExperience variant={definitionVariant} choices={choices}>
-      {({ renderControl }) => (
+    <DefinitionExperience variant={definitionVariant} choices={choices} popoverHoverTarget={popoverHoverTarget}>
+      {({ renderControl, getItemProps }) => (
         <fieldset className="lv-choice-fieldset">
           <legend className="lv-visually-hidden">{question?.title || question?.name}</legend>
           <p className="lv-task-instruction">Choose one option. Use each information button to inspect a definition without changing your answer.</p>
@@ -31,7 +31,7 @@ export default function LongValueRadiogroup({ question, definitionVariant }) {
               const selected = Object.is(value, choice.value);
               const inputId = `${groupName}-${index}`;
               return (
-                <div key={String(choice.value)} className={`lv-choice${selected ? ' is-selected' : ''}`}>
+                <div key={String(choice.value)} className={`lv-choice${selected ? ' is-selected' : ''}`} {...getItemProps(choice)}>
                   <input
                     id={inputId}
                     type="radio"

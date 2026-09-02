@@ -12,12 +12,12 @@ const choices = [
   { value: 'stable-beta', label: 'Beta', definition: 'A short second definition.' },
 ];
 
-function Fixture({ variant = 'popover', parentEvents = {} }) {
+function Fixture({ variant = 'popover', parentEvents = {}, popoverHoverTarget = 'button' }) {
   return (
-    <DefinitionExperience variant={variant} choices={choices}>
-      {({ renderControl }) => (
+    <DefinitionExperience variant={variant} choices={choices} popoverHoverTarget={popoverHoverTarget}>
+      {({ renderControl, getItemProps }) => (
         <div data-testid="answer-control" {...parentEvents}>
-          {choices.map((choice) => <div key={choice.value}>{choice.label}{renderControl(choice)}</div>)}
+          {choices.map((choice) => <div key={choice.value} {...getItemProps(choice)}>{choice.label}{renderControl(choice)}</div>)}
         </div>
       )}
     </DefinitionExperience>
@@ -36,6 +36,20 @@ describe('DefinitionExperience', () => {
     expect(details).toHaveTextContent('<img src=x onerror="alert(1)">');
     expect(container.querySelector('img')).toBeNull();
     expect(details.querySelector('.lv-definition-text')).toHaveClass('lv-definition-text');
+  });
+
+  it('compares explicit-button and whole-row hover targets', () => {
+    const buttonView = render(<Fixture popoverHoverTarget="button" />);
+    fireEvent.mouseEnter(screen.getByText('Beta').closest('div'));
+    expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
+    buttonView.unmount();
+
+    render(<Fixture popoverHoverTarget="row" />);
+    const row = screen.getByText('Beta').closest('div');
+    fireEvent.mouseEnter(row);
+    expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
+    fireEvent.mouseLeave(row);
+    expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
   });
 
   it('supports hover, click pinning, Escape, and outside close', () => {

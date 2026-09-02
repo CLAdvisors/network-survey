@@ -20,7 +20,7 @@ function stopDefinitionEvent(event) {
   event.stopPropagation();
 }
 
-export function DefinitionExperience({ variant, choices, children }) {
+export function DefinitionExperience({ variant, choices, children, popoverHoverTarget = 'button' }) {
   const availableChoices = React.useMemo(
     () => choices.filter((choice) => definitionFor(choice)),
     [choices]
@@ -112,6 +112,20 @@ export function DefinitionExperience({ variant, choices, children }) {
     setPinnedKey((current) => current === key ? '' : key);
   };
 
+  const getItemProps = (choice) => {
+    if (variant !== 'popover' || popoverHoverTarget !== 'row' || !definitionFor(choice)) return {};
+    const key = keyFor(choice);
+    return {
+      onMouseEnter: (event) => {
+        lastOpenerRef.current = event.currentTarget.querySelector?.('.lv-definition-button') || event.currentTarget;
+        openTransient(key);
+      },
+      onMouseLeave: (event) => {
+        if (pinnedKey !== key && !event.currentTarget.contains(document.activeElement)) setOpenKeys(new Set());
+      },
+    };
+  };
+
   const renderControl = (choice) => {
     const key = keyFor(choice);
     const label = labelFor(choice);
@@ -145,7 +159,7 @@ export function DefinitionExperience({ variant, choices, children }) {
           onMouseEnter={(event) => {
             lastOpenerRef.current = event.currentTarget;
             setActiveKey(key);
-            if (variant === 'popover') openTransient(key);
+            if (variant === 'popover' && popoverHoverTarget === 'button') openTransient(key);
           }}
           onFocus={(event) => {
             lastOpenerRef.current = event.currentTarget;
@@ -201,7 +215,7 @@ export function DefinitionExperience({ variant, choices, children }) {
             <DefinitionText text={definitionFor(activeChoice)} />
           </aside>
         )}
-        {children({ renderControl, activeKey })}
+        {children({ renderControl, getItemProps, activeKey })}
       </div>
       {variant === 'panel' && activeChoice && (
         <aside id={`${instanceId}-lv-panel-details-desktop`} className="lv-detail-panel lv-detail-panel--desktop" aria-live="polite" aria-label="Selected value definition">

@@ -89,13 +89,15 @@ function Item({
   actionButtonRef,
   actionDisabled = false,
   supplement,
-  stateLabel
+  stateLabel,
+  choiceContainerProps
 }) {
   const text = item.text ?? (item.value !== undefined ? String(item.value) : "");
   return (
     <div
       ref={provided.innerRef}
       {...provided.draggableProps}
+      {...choiceContainerProps}
       style={{
         userSelect: "none",
         margin: "0 0 8px 0",
@@ -157,7 +159,8 @@ export default function DraggableRankingQuestion({
   onChange,
   availableDirection = "horizontal",
   valueSource = "prop",
-  renderChoiceSupplement
+  renderChoiceSupplement,
+  getChoiceContainerProps
 }) {
   const [ranked, setRanked] = React.useState([]);
   const [available, setAvailable] = React.useState([]);
@@ -374,6 +377,11 @@ export default function DraggableRankingQuestion({
                           isAssigned: true,
                           position: index + 1
                         })}
+                        choiceContainerProps={getChoiceContainerProps?.(item, {
+                          list: "ranked",
+                          isAssigned: true,
+                          position: index + 1
+                        })}
                       />
                     )}
                   </Draggable>
@@ -425,6 +433,11 @@ export default function DraggableRankingQuestion({
                         onAction={() => rankAvailableItem(index)}
                         stateLabel="Available, not ranked"
                         supplement={renderChoiceSupplement?.(item, {
+                          list: "available",
+                          isAssigned: false,
+                          position: null
+                        })}
+                        choiceContainerProps={getChoiceContainerProps?.(item, {
                           list: "available",
                           isAssigned: false,
                           position: null

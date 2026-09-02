@@ -28,7 +28,8 @@
 }
 
 .lv-variant-tabs,
-.lv-frame-controls {
+.lv-frame-controls,
+.lv-hover-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -36,8 +37,10 @@
 }
 
 .lv-variant-tabs { margin-bottom: 12px; }
-.lv-frame-controls { margin-top: 12px; }
-.lv-frame-controls > span { font-size: 0.85rem; font-weight: 700; }
+.lv-frame-controls,
+.lv-hover-controls { margin-top: 12px; }
+.lv-frame-controls > span,
+.lv-hover-controls > span { font-size: 0.85rem; font-weight: 700; }
 
 .lv-preview-scroll {
   overflow-x: auto;

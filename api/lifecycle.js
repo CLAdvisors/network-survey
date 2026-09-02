@@ -421,9 +421,18 @@ async function getSurveyInstructions(pool, user, surveyId) {
   }
 }
 
-async function updateSurveyInstructions(pool, user, surveyId, value) {
+async function updateSurveyInstructions(pool, user, surveyId, value, expectedValue) {
   const instructions = validateInstructionOverride(value);
+  if (expectedValue !== null && typeof expectedValue !== 'string') {
+    const error = new TypeError('Expected instructions must be a string or null.');
+    error.code = 'instructions_type';
+    throw error;
+  }
+  const expectedInstructions = expectedValue;
   return withEditableSurvey(pool, user, surveyId, async (client, survey) => {
+    if (survey.instructions !== expectedInstructions) {
+      throw new LifecycleError(409, 'instructions_conflict', 'Survey instructions changed since you loaded them. Reload before saving your draft.');
+    }
     const previous = instructionMetadata(survey.instructions);
     const next = instructionMetadata(instructions);
     await client.query('UPDATE survey SET instructions=$1 WHERE id=$2', [instructions, survey.id]);

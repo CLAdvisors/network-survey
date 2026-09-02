@@ -2161,6 +2161,7 @@ function launchResponse(res, launch) {
 }
 
 app.get('/api/surveys/:surveyId/instructions', requireAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
     res.json(await lifecycle.getSurveyInstructions(pool, req.user, req.params.surveyId));
   } catch (error) {
@@ -2168,11 +2169,15 @@ app.get('/api/surveys/:surveyId/instructions', requireAuth, async (req, res) => 
   }
 });
 app.put('/api/surveys/:surveyId/instructions', express.json(), requireAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'instructions')) {
     return res.status(400).json({ error: 'instructions_required', message: 'Instructions must be provided explicitly as a string or null.' });
   }
+  if (!Object.prototype.hasOwnProperty.call(req.body, 'expectedInstructions')) {
+    return res.status(400).json({ error: 'expected_instructions_required', message: 'The previously loaded instructions must be provided explicitly as a string or null.' });
+  }
   try {
-    res.json(await lifecycle.updateSurveyInstructions(pool, req.user, req.params.surveyId, req.body.instructions));
+    res.json(await lifecycle.updateSurveyInstructions(pool, req.user, req.params.surveyId, req.body.instructions, req.body.expectedInstructions));
   } catch (error) {
     if (error instanceof TypeError && error.code) return res.status(400).json({ error: error.code, message: error.message });
     sendLifecycleError(res, error);

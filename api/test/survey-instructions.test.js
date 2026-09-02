@@ -65,7 +65,7 @@ test('tenant-safe role authorization is non-enumerating', async () => {
   for (const role of [null, 'analyst']) {
     const { pool } = clientPool({ role });
     await assert.rejects(
-      lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, 'private'),
+      lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, 'private', null),
       (error) => error.status === 404 && error.code === 'survey_not_found'
     );
   }
@@ -74,7 +74,7 @@ test('tenant-safe role authorization is non-enumerating', async () => {
 test('draft update and strict audit commit atomically without instruction content in audit metadata', async () => {
   const privateValue = 'Private <script>literal</script>\nsecond line';
   const { pool, calls } = clientPool({ instructions: null });
-  const result = await lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, privateValue);
+  const result = await lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, privateValue, null);
   assert.equal(result.instructions, privateValue);
   assert.equal(calls.some(({ sql }) => sql === 'COMMIT'), true);
   const audit = calls.find(({ sql }) => /INSERT INTO audit_events/.test(sql));
@@ -85,6 +85,26 @@ test('draft update and strict audit commit atomically without instruction conten
     'changed', 'nextByteLength', 'nextCharacterLength', 'nextPresence',
     'previousByteLength', 'previousCharacterLength', 'previousPresence',
   ]);
+});
+
+test('oversized preserved legacy content can be replaced using exact expected-state comparison', async () => {
+  const legacyValue = 'x'.repeat(MAX_INSTRUCTION_CHARACTERS + 2000);
+  const { pool, calls } = clientPool({ instructions: legacyValue });
+  const result = await lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, null, legacyValue);
+  assert.equal(result.instructions, null);
+  assert.equal(calls.some(({ sql, values }) => /UPDATE survey SET instructions/.test(sql) && values[0] === null), true);
+  assert.equal(calls.some(({ sql }) => sql === 'COMMIT'), true);
+});
+
+test('stale instruction updates fail without overwriting or auditing a newer value', async () => {
+  const { pool, calls } = clientPool({ instructions: 'newer value' });
+  await assert.rejects(
+    lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, 'stale draft', 'older value'),
+    (error) => error.status === 409 && error.code === 'instructions_conflict'
+  );
+  assert.equal(calls.some(({ sql }) => /UPDATE survey SET instructions/.test(sql)), false);
+  assert.equal(calls.some(({ sql }) => /INSERT INTO audit_events/.test(sql)), false);
+  assert.equal(calls.some(({ sql }) => sql === 'ROLLBACK'), true);
 });
 
 test('launched survey rejects mutation and audit failure rolls back the content write', async () => {
@@ -98,12 +118,12 @@ test('launched survey rejects mutation and audit failure rolls back the content 
       : query(sql, values);
     return client;
   };
-  await assert.rejects(lifecycle.updateSurveyInstructions(locked.pool, { id: 9 }, surveyId, 'new'), (error) => error.status === 409 && error.code === 'survey_not_editable');
+  await assert.rejects(lifecycle.updateSurveyInstructions(locked.pool, { id: 9 }, surveyId, 'new', null), (error) => error.status === 409 && error.code === 'survey_not_editable');
   assert.equal(locked.calls.some(({ sql }) => /UPDATE survey SET instructions/.test(sql)), false);
   assert.equal(locked.calls.some(({ sql }) => sql === 'ROLLBACK'), true);
 
   const failed = clientPool({ auditFailure: true });
-  await assert.rejects(lifecycle.updateSurveyInstructions(failed.pool, { id: 9 }, surveyId, 'new'), /audit unavailable/);
+  await assert.rejects(lifecycle.updateSurveyInstructions(failed.pool, { id: 9 }, surveyId, 'new', null), /audit unavailable/);
   assert.equal(failed.calls.some(({ sql }) => /UPDATE survey SET instructions/.test(sql)), true);
   assert.equal(failed.calls.some(({ sql }) => sql === 'ROLLBACK'), true);
   assert.equal(failed.calls.some(({ sql }) => sql === 'COMMIT'), false);

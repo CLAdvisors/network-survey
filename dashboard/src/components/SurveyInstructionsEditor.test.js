@@ -63,6 +63,10 @@ test('retains drafts on save errors and ignores stale save completion after a su
   const field = await screen.findByDisplayValue('Original A');
   fireEvent.change(field, { target: { value: 'Draft A' } });
   await userEvent.click(screen.getByRole('button', { name: /save instructions/i }));
+  expect(api.put).toHaveBeenCalledWith('/surveys/survey-a/instructions', {
+    instructions: 'Draft A',
+    expectedInstructions: 'Original A',
+  });
   rerender(<SurveyInstructionsEditor surveyId="survey-b" onDirtyChange={dirty} />);
   expect(await screen.findByDisplayValue('Original B')).toBeInTheDocument();
   persistedA = 'Draft A';
@@ -78,11 +82,50 @@ test('retains drafts on save errors and ignores stale save completion after a su
   expect(screen.getByDisplayValue('Draft A retained after error')).toBeInTheDocument();
 });
 
-test('shows read-only messaging and disables updates', async () => {
-  render(<SurveyInstructionsEditor surveyId="survey-a" readOnly readOnlyMessage="Instructions are read-only while this survey is active." />);
+test('shows read-only messaging, disables updates, and reloads authoritative content when discarding a locked draft', async () => {
+  api.get
+    .mockResolvedValueOnce(response(null))
+    .mockResolvedValueOnce(response('Latest locked value'));
+  const dirty = vi.fn();
+  const { rerender } = render(<SurveyInstructionsEditor surveyId="survey-a" onDirtyChange={dirty} />);
+  expect(await screen.findByText(/Current derived default: Derived default/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('radio', { name: /hide the instruction block/i }));
+
+  rerender(<SurveyInstructionsEditor surveyId="survey-a" readOnly readOnlyMessage="Instructions are read-only while this survey is active." onDirtyChange={dirty} />);
   expect(await screen.findByText(/read-only while this survey is active/i)).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: /use the derived default/i })).toBeDisabled();
   expect(screen.getByRole('button', { name: /save instructions/i })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /undo changes/i })).toBeEnabled();
+  await userEvent.click(screen.getByRole('button', { name: /undo changes/i }));
+  expect(await screen.findByDisplayValue('Latest locked value')).toBeInTheDocument();
+  expect(dirty).toHaveBeenLastCalledWith('survey-a', 'instructions', false);
+});
+
+test('retains a stale draft and reloads the latest value before allowing an explicit retry', async () => {
+  api.get
+    .mockResolvedValueOnce(response('Original'))
+    .mockResolvedValueOnce(response('Newer value'));
+  api.put.mockRejectedValueOnce({ response: { data: { error: 'instructions_conflict', message: 'Instructions changed.' } } });
+  render(<SurveyInstructionsEditor surveyId="survey-a" />);
+  const field = await screen.findByDisplayValue('Original');
+  fireEvent.change(field, { target: { value: 'Stale draft' } });
+  await userEvent.click(screen.getByRole('button', { name: /save instructions/i }));
+
+  expect(await screen.findByText('Instructions changed.')).toBeInTheDocument();
+  expect(screen.getByDisplayValue('Stale draft')).toBeInTheDocument();
+  expect(api.put).toHaveBeenLastCalledWith('/surveys/survey-a/instructions', {
+    instructions: 'Stale draft',
+    expectedInstructions: 'Original',
+  });
+
+  await userEvent.click(screen.getByRole('button', { name: 'Reload latest' }));
+  await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+  expect(screen.getByDisplayValue('Stale draft')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /save instructions/i }));
+  expect(api.put).toHaveBeenLastCalledWith('/surveys/survey-a/instructions', {
+    instructions: 'Stale draft',
+    expectedInstructions: 'Newer value',
+  });
 });
 
 test('automatically reloads when an in-flight response becomes stale by generation', async () => {

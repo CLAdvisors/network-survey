@@ -8,7 +8,7 @@
 - `''` explicitly hides the respondent instruction block.
 - Any nonempty string is an administrator override rendered as plain text.
 
-The database has no content default and no blanket backfill. Authenticated dashboard clients use stable survey UUID routes `GET/PUT /api/surveys/:surveyId/instructions`. PUT accepts only an explicit `instructions` property containing `null` or a string, is editor-only and draft-only, and runs under the shared Survey lifecycle row lock. It permits tabs and line breaks, rejects other C0/C1 controls, and enforces 5,000 Unicode code points plus 16,000 UTF-8 bytes.
+The database has no content default and no blanket backfill. Authenticated dashboard clients use stable survey UUID routes `GET/PUT /api/surveys/:surveyId/instructions`; both responses use `Cache-Control: no-store`. PUT requires explicit `instructions` and `expectedInstructions` properties containing `null` or strings, is editor-only and draft-only, and runs under the shared Survey lifecycle row lock. The expected value provides compare-and-set protection against stale editors; conflicts preserve the draft and require loading the latest persisted value before retrying. Validation permits tabs and line breaks, rejects other C0/C1 controls, and enforces 5,000 Unicode code points plus 16,000 UTF-8 bytes.
 
 Each successful update writes `survey.instructions_updated` in the same transaction. Audit metadata contains only derived/hidden/override presence, character/byte lengths, and whether the value changed; instruction text is never copied into audit metadata.
 

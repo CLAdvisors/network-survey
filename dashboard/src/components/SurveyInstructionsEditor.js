@@ -90,6 +90,15 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
     else if (mode === 'custom') setDraft(value && value !== '' ? value : effectiveDefault);
   };
 
+  const discardDraft = () => {
+    if (!surveyId || loading || saving || !loaded) return;
+    if (readOnly) setReloadToken((value) => value + 1);
+    else setValue(original);
+    draftsRef.current.delete(surveyId);
+    advanceGeneration(surveyId);
+    onDirtyChange?.(surveyId, 'instructions', false);
+  };
+
   const handleSave = async () => {
     if (readOnly || loading || !loaded || value === original || !begin(surveyId)) return;
     const targetId = surveyId;
@@ -98,7 +107,10 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
     const savedGeneration = generation(targetId);
     setNotice(null);
     try {
-      const { data } = await api.put(`/surveys/${targetId}/instructions`, { instructions: targetValue });
+      const { data } = await api.put(`/surveys/${targetId}/instructions`, {
+        instructions: targetValue,
+        expectedInstructions: original,
+      });
       const unchanged = draftsRef.current.get(targetId) === savedDraft && generation(targetId) === savedGeneration;
       advanceGeneration(targetId);
       if (unchanged) {
@@ -113,7 +125,11 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
       setNotice({ severity: 'success', message: 'Survey instructions saved.' });
     } catch (error) {
       if (surveyIdRef.current !== targetId) return;
-      setNotice({ severity: 'error', message: errorMessage(error, 'Unable to save survey instructions. Your draft has been retained.') });
+      setNotice({
+        severity: 'error',
+        message: errorMessage(error, 'Unable to save survey instructions. Your draft has been retained.'),
+        reload: error.response?.data?.error === 'instructions_conflict',
+      });
     } finally {
       end(targetId);
     }
@@ -137,7 +153,11 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
         tabIndex={-1}
         severity={notice.severity}
         sx={{ mb: 2 }}
-        action={notice.severity === 'error' && !loaded ? <Button color="inherit" onClick={() => setReloadToken((value) => value + 1)}>Retry</Button> : undefined}
+        action={notice.severity === 'error' && (!loaded || notice.reload) ? (
+          <Button color="inherit" onClick={() => setReloadToken((value) => value + 1)}>
+            {notice.reload ? 'Reload latest' : 'Retry'}
+          </Button>
+        ) : undefined}
       >{notice.message}</Alert>}
       <FormControl disabled={readOnly || loading || saving || !loaded}>
         <FormLabel id="survey-instructions-mode-label">Instruction display</FormLabel>
@@ -172,7 +192,7 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
       )}
       <Box sx={{ mt: 2 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="flex-end">
-          <Button variant="outlined" onClick={() => setDraft(original)} disabled={readOnly || loading || saving || !loaded || !dirty}>Undo changes</Button>
+          <Button variant="outlined" onClick={discardDraft} disabled={loading || saving || !loaded || !dirty}>Undo changes</Button>
           <Button variant="contained" onClick={handleSave} disabled={readOnly || loading || saving || !loaded || !dirty || tooLarge}>
             {saving ? 'Saving…' : 'Save instructions'}
           </Button>

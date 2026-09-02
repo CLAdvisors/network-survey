@@ -16,6 +16,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_LAUNCH_RECIPIENTS = 1000;
 const MAX_LAUNCH_TEMPLATES = 100;
+const DEFAULT_EMAIL_HISTORY_PAGE_SIZE = 50;
+const MAX_EMAIL_HISTORY_PAGE_SIZE = 100;
+const MAX_EMAIL_HISTORY_CURSOR_LENGTH = 1024;
 const ROLE_RANK = { viewer: 10, analyst: 20, editor: 30, admin: 40, owner: 50 };
 let authoritativeSurveyValidator = null;
 const setSurveyDefinitionValidator = (validator) => { authoritativeSurveyValidator = validator; };
@@ -366,13 +369,159 @@ async function listLaunches(pool,user,surveyId,launchId) {
   try { await loadAuthorizedSurvey(client,user,surveyId,'viewer'); const params=[surveyId]; let where='WHERE l.survey_id=$1'; if(launchId){params.push(launchId);where+=' AND l.id=$2';} const result=await client.query(aggregateSelect(where),params); if(launchId&&!result.rows[0]) throw new LifecycleError(404,'launch_not_found','Launch not found.'); return launchId?result.rows[0]:result.rows; } finally { client.release(); }
 }
 
-async function listDeliveries(pool,user,surveyId,{status,cursor,limit=50}={}) {
-  const client=await pool.connect();
-  try { await loadAuthorizedSurvey(client,user,surveyId,'analyst'); const values=[surveyId]; const clauses=['d.survey_id=$1'];
-    if(status){values.push(status);clauses.push(`d.status=$${values.length}`);} if(cursor){values.push(cursor);clauses.push(`d.id < $${values.length}`);} values.push(Math.min(100,Math.max(1,Number(limit)||50)));
-    const result=await client.query(`SELECT d.id,d.launch_id,d.respondent_id,d.recipient_display_name,d.to_address,d.language,d.status,d.attempt_count,d.dispatch_accepted_at,d.dispatch_failed_at,d.provider_sent_at,d.provider_delivered_at,d.provider_delayed_at,d.provider_bounced_at,d.provider_complained_at,d.provider_suppressed_at,d.provider_failed_at,CASE WHEN d.provider_complained_at IS NOT NULL THEN 'complained' WHEN d.provider_bounced_at IS NOT NULL THEN 'bounced' WHEN d.provider_suppressed_at IS NOT NULL THEN 'suppressed' WHEN d.provider_failed_at IS NOT NULL THEN 'failed' WHEN d.provider_delivered_at IS NOT NULL THEN 'delivered' WHEN d.provider_delayed_at IS NOT NULL THEN 'delayed' WHEN d.provider_sent_at IS NOT NULL THEN 'sent' WHEN d.status='accepted' THEN 'accepted_unverified' ELSE NULL END AS provider_outcome,d.last_error_code,d.last_error_message,d.created_at,d.updated_at,(SELECT max(started_at) FROM survey_email_attempts WHERE delivery_id=d.id) AS last_attempt_at FROM survey_email_deliveries d WHERE ${clauses.join(' AND ')} ORDER BY d.id DESC LIMIT $${values.length}`,values);
-    return {deliveries:result.rows,nextCursor:result.rows.length===values[values.length-1]?result.rows.at(-1).id:null};
-  } finally {client.release();}
+function emailHistoryCursorSecret(config = process.env) {
+  const secret = String(config.EMAIL_HISTORY_CURSOR_SECRET || config.SESSION_SECRET || '');
+  if (!secret) throw new LifecycleError(503, 'email_history_unavailable', 'Email history is temporarily unavailable.');
+  return secret;
+}
+
+function emailHistoryCursorKey(config = process.env) {
+  return crypto.createHmac('sha256', emailHistoryCursorSecret(config))
+    .update('email-history-cursor-encryption-v1')
+    .digest();
+}
+
+function encodeEmailHistoryCursor({ surveyId, organizationId, createdAt, id }, config = process.env) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(String(createdAt || ''))) throw new LifecycleError(500, 'email_history_cursor_failed', 'Email history pagination could not be created.');
+  const plaintext = Buffer.from(JSON.stringify({
+    v: 1,
+    surveyId: String(surveyId),
+    organizationId: String(organizationId),
+    createdAt: String(createdAt),
+    id: String(id),
+  }));
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', emailHistoryCursorKey(config), nonce);
+  cipher.setAAD(Buffer.from('email-history-cursor:v1'));
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return `v1.${nonce.toString('base64url')}.${ciphertext.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}`;
+}
+
+function decodeEmailHistoryCursor(cursor, survey, config = process.env) {
+  const invalid = () => { throw new LifecycleError(400, 'email_history_cursor_invalid', 'Email history cursor is invalid or expired.'); };
+  if (typeof cursor !== 'string' || cursor.length < 40 || cursor.length > MAX_EMAIL_HISTORY_CURSOR_LENGTH) invalid();
+  const parts = cursor.split('.');
+  if (parts.length !== 4 || parts[0] !== 'v1' || !/^[A-Za-z0-9_-]{16}$/.test(parts[1])
+      || !/^[A-Za-z0-9_-]+$/.test(parts[2]) || !/^[A-Za-z0-9_-]{22}$/.test(parts[3])) invalid();
+  let value;
+  try {
+    const nonce = Buffer.from(parts[1], 'base64url');
+    const ciphertext = Buffer.from(parts[2], 'base64url');
+    const tag = Buffer.from(parts[3], 'base64url');
+    if (nonce.toString('base64url') !== parts[1] || ciphertext.toString('base64url') !== parts[2] || tag.toString('base64url') !== parts[3]) invalid();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', emailHistoryCursorKey(config), nonce);
+    decipher.setAAD(Buffer.from('email-history-cursor:v1'));
+    decipher.setAuthTag(tag);
+    value = JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
+  } catch { invalid(); }
+  if (value?.v !== 1 || value?.surveyId !== String(survey.id) || value?.organizationId !== String(survey.organization_id)
+      || !UUID_RE.test(String(value?.id || '')) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(String(value?.createdAt || ''))) invalid();
+  return { createdAt: value.createdAt, id: value.id };
+}
+
+function emailHistoryOutcome(row) {
+  const outcome = (code, label, explanation, occurredAt = null) => ({ code, label, explanation, occurredAt });
+  const suppressionIsAmbiguous = row.provider_suppressed_at && ['uncertain', 'leased', 'reminder_leased'].includes(row.status);
+  if (row.provider_complained_at) return outcome('complained', 'Complaint reported', 'The recipient reported this message as spam.', row.provider_complained_at);
+  if (row.provider_bounced_at) return outcome('bounced', 'Bounced', "The recipient's mail server rejected the message.", row.provider_bounced_at);
+  if (row.provider_suppressed_at && !suppressionIsAmbiguous) return outcome('suppressed', 'Suppressed', 'The message was blocked for this address and was not sent again.', row.provider_suppressed_at);
+  if (row.provider_failed_at) return outcome('provider_failed', 'Delivery failed', 'The email provider reported that delivery failed.', row.provider_failed_at);
+  if (row.provider_delivered_at) return outcome('delivered', 'Delivered', "The recipient's mail server confirmed delivery.", row.provider_delivered_at);
+  if (row.provider_delayed_at) return outcome('delayed', 'Delayed', 'The email provider reported a delivery delay; a final result is not yet available.', row.provider_delayed_at);
+  if (row.provider_sent_at || row.dispatch_accepted_at || row.status === 'accepted') return outcome('provider_accepted', 'Provider accepted', 'The email provider accepted the message for delivery; recipient delivery is not confirmed.', row.provider_sent_at || row.dispatch_accepted_at);
+  if (row.status === 'failed') return outcome('failed', 'Sending failed', 'Sending failed before provider acceptance could be confirmed.', row.dispatch_failed_at || row.updated_at);
+  if (row.status === 'uncertain') return outcome('unknown', 'Outcome unknown', 'The provider request may have started, but its result could not be safely confirmed.', row.dispatch_failed_at || row.updated_at);
+  if (row.status === 'cancelled' && Number(row.attempt_count || 0) === 0) return outcome('skipped', 'Skipped', 'Sending was stopped before an attempt began.', row.updated_at);
+  if (row.status === 'cancelled') return outcome('cancelled', 'Cancelled', 'Sending was stopped after an attempt began but before provider acceptance was confirmed.', row.updated_at);
+  if (['leased', 'retry_wait', 'reminder_leased', 'reminder_retry_wait'].includes(row.status)) return outcome('processing', 'Processing', 'The message is being attempted or is waiting for another safe attempt.', row.last_attempt_at || row.updated_at);
+  if (['pending', 'reminder_pending'].includes(row.status)) return outcome('queued', 'Queued', 'The message is queued and has not yet been accepted by the email provider.', row.created_at);
+  return outcome('unknown', 'Status unknown', 'This historical record does not contain enough information to determine the current outcome.', row.updated_at || row.created_at);
+}
+
+function emailHistoryItem(row) {
+  const outcome = emailHistoryOutcome(row);
+  return {
+    messageType: row.kind === 'reminder' ? 'reminder' : 'invitation',
+    campaign: {
+      launchId: row.launch_id,
+      kind: row.kind || 'unknown',
+      queuedAt: row.launch_created_at || null,
+    },
+    recipient: {
+      displayName: row.recipient_display_name || null,
+      address: row.to_address || null,
+    },
+    status: outcome,
+    attempts: Number(row.attempt_count || 0),
+    timestamps: {
+      queuedAt: row.created_at || null,
+      firstAttemptedAt: row.first_attempt_at || null,
+      lastAttemptedAt: row.last_attempt_at || null,
+      providerAcceptedAt: row.provider_sent_at || row.dispatch_accepted_at || null,
+      deliveredAt: row.provider_delivered_at || null,
+      lastUpdatedAt: row.updated_at || row.created_at || null,
+    },
+  };
+}
+
+async function listEmailHistory(pool, user, surveyId, params = {}, config = process.env) {
+  const client = await pool.connect();
+  try {
+    const survey = await loadAuthorizedSurvey(client, user, surveyId, 'analyst');
+    const unsupported = Object.keys(params).filter((key) => !['cursor', 'limit'].includes(key));
+    if (unsupported.length) throw new LifecycleError(400, 'email_history_parameter_invalid', 'Email history contains an unsupported query parameter.');
+    const { cursor, limit } = params;
+    let pageSize = DEFAULT_EMAIL_HISTORY_PAGE_SIZE;
+    if (limit !== undefined) {
+      if (typeof limit !== 'string' || !/^[1-9][0-9]{0,3}$/.test(limit)) throw new LifecycleError(400, 'email_history_limit_invalid', 'Email history limit must be a positive integer.');
+      pageSize = Math.min(MAX_EMAIL_HISTORY_PAGE_SIZE, Number(limit));
+    }
+    const boundary = cursor ? decodeEmailHistoryCursor(cursor, survey, config) : null;
+    const values = [survey.id, survey.organization_id];
+    let keyset = '';
+    if (boundary) {
+      values.push(boundary.createdAt, boundary.id);
+      keyset = `AND (d.created_at,d.id) < ($3::timestamptz,$4::uuid)`;
+    }
+    values.push(pageSize + 1);
+    const result = await client.query(
+      `SELECT d.id,d.launch_id,l.kind,l.created_at AS launch_created_at,
+              d.recipient_display_name,d.to_address,d.status,
+              GREATEST(d.attempt_count,COALESCE(a.recorded_attempt_count,0))::int AS attempt_count,
+              d.dispatch_accepted_at,d.dispatch_failed_at,d.provider_sent_at,d.provider_delivered_at,
+              d.provider_delayed_at,d.provider_bounced_at,d.provider_complained_at,
+              d.provider_suppressed_at,d.provider_failed_at,d.created_at,d.updated_at,
+              to_char(d.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor,
+              a.first_attempt_at,a.last_attempt_at
+         FROM survey_email_deliveries d
+         JOIN survey_launches l ON l.id=d.launch_id AND l.survey_id=d.survey_id AND l.organization_id=d.organization_id
+         LEFT JOIN LATERAL (
+           SELECT count(*)::int AS recorded_attempt_count,min(started_at) AS first_attempt_at,max(started_at) AS last_attempt_at
+             FROM survey_email_attempts WHERE delivery_id=d.id
+         ) a ON true
+        WHERE d.survey_id=$1 AND d.organization_id=$2 ${keyset}
+        ORDER BY d.created_at DESC,d.id DESC
+        LIMIT $${values.length}`,
+      values
+    );
+    const hasMore = result.rows.length > pageSize;
+    const rows = result.rows.slice(0, pageSize);
+    const last = rows.at(-1);
+    return {
+      surveyId: survey.id,
+      messages: rows.map(emailHistoryItem),
+      pageInfo: {
+        limit: pageSize,
+        hasMore,
+        nextCursor: hasMore && last ? encodeEmailHistoryCursor({
+          surveyId: survey.id,
+          organizationId: survey.organization_id,
+          createdAt: last.created_at_cursor,
+          id: last.id,
+        }, config) : null,
+      },
+    };
+  } finally { client.release(); }
 }
 
 async function transitionSurvey(pool,user,surveyId,action) {
@@ -455,4 +604,4 @@ async function updateSurveyInstructions(pool, user, surveyId, value, expectedVal
   });
 }
 
-module.exports={LifecycleError,publicError,environmentName,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,evaluateReminderReadiness,getReadiness,getReminderReadiness,listReminderTemplates,saveReminderTemplate,launchReminder,launchSurvey,listLaunches,listDeliveries,transitionSurvey,withEditableSurvey,getSurveyInstructions,updateSurveyInstructions,aggregateSelect,setSurveyDefinitionValidator};
+module.exports={LifecycleError,publicError,environmentName,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,evaluateReminderReadiness,getReadiness,getReminderReadiness,listReminderTemplates,saveReminderTemplate,launchReminder,launchSurvey,listLaunches,listEmailHistory,transitionSurvey,withEditableSurvey,getSurveyInstructions,updateSurveyInstructions,aggregateSelect,emailHistoryOutcome,emailHistoryItem,encodeEmailHistoryCursor,decodeEmailHistoryCursor,setSurveyDefinitionValidator};

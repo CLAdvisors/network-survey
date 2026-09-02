@@ -14,6 +14,7 @@ import ReminderTemplateEditor from "./ReminderTemplateEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
+import EmailHistory from "./EmailHistory";
 import { lifecycleLabel, lifecycleStatus, surveyId } from "./surveyLifecycle";
 import { surveyOperationGeneration } from "./useSurveyOperationState";
 
@@ -266,11 +267,12 @@ const Dashboard = () => {
 
   return (
     <Box
+      data-testid="dashboard-shell"
       sx={{
-        marginTop: "20px",
-        padding: "40px",
-        marginLeft: "13%",
-        marginRight: "13%",
+        mt: '20px',
+        px: { xs: 1.5, sm: 3, md: 5 },
+        py: { xs: 2, sm: 3, md: 5 },
+        mx: { xs: 1, sm: 2, md: '13%' },
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: "8px",
         boxShadow: theme.palette.mode === "light"
@@ -330,6 +332,7 @@ const Dashboard = () => {
       />
 
       {selectSurvey && <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} />}
+      {selectSurvey && selectedCanViewRespondents && <EmailHistory survey={selectSurvey} />}
 
       {selectSurvey && (
         <CollapsibleSection title="Survey Instructions">

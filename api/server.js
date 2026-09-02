@@ -2227,10 +2227,15 @@ app.get('/api/surveys/:surveyId/launches/:launchId', requireAuth, async (req, re
   try { res.json({ launch: await lifecycle.listLaunches(pool, req.user, req.params.surveyId, req.params.launchId) }); }
   catch (error) { sendLifecycleError(res, error); }
 });
-app.get('/api/surveys/:surveyId/deliveries', requireAuth, async (req, res) => {
-  try { res.json(await lifecycle.listDeliveries(pool, req.user, req.params.surveyId, req.query)); }
+const sendEmailHistory = async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(await lifecycle.listEmailHistory(pool, req.user, req.params.surveyId, req.query)); }
   catch (error) { sendLifecycleError(res, error); }
-});
+};
+app.get('/api/surveys/:surveyId/email-history', requireAuth, sendEmailHistory);
+// Retire the early raw-delivery response while keeping its URL as a redacted alias.
+// Old raw UUID cursors/status filters are intentionally not accepted.
+app.get('/api/surveys/:surveyId/deliveries', requireAuth, sendEmailHistory);
 app.post('/api/surveys/:surveyId/close', express.json(), requireAuth, async (req, res) => {
   try { res.json(await lifecycle.transitionSurvey(pool, req.user, req.params.surveyId, 'close')); }
   catch (error) { sendLifecycleError(res, error); }

@@ -1668,6 +1668,8 @@ test('dashboard/admin endpoints require authentication', async () => {
     ['post', '/api/surveys/survey-id/demo-email', { language: 'English', email: 'a@example.com' }],
     ['post', '/api/surveys/survey-id/copy', { name: 'Copied survey' }],
     ['get', '/api/surveys/11111111-1111-4111-8111-111111111111/instructions'],
+    ['get', '/api/surveys/11111111-1111-4111-8111-111111111111/email-history'],
+    ['get', '/api/surveys/11111111-1111-4111-8111-111111111111/deliveries'],
     ['put', '/api/surveys/11111111-1111-4111-8111-111111111111/instructions', { instructions: null }],
     ['post', '/api/startSurvey', { surveyName: 'S' }],
     ['post', '/api/updateEmails', { surveyName: 'S', csvData: 'English,Hello' }],
@@ -1938,6 +1940,7 @@ test('CLA organization migration preserves survey data and enforces stable child
     'v1_8_bulk_survey_reminders.sql',
     'v1_9_reminder_provider_account_binding.sql',
     'v1_10_editable_survey_instructions.sql',
+    'v1_11_survey_email_history_pagination.sql',
   ];
   const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
 

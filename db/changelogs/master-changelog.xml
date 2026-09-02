@@ -18,4 +18,5 @@
     <include file="v1_8_bulk_survey_reminders.sql" relativeToChangelogFile="true" />
     <include file="v1_9_reminder_provider_account_binding.sql" relativeToChangelogFile="true" />
     <include file="v1_10_editable_survey_instructions.sql" relativeToChangelogFile="true" />
+    <include file="v1_11_survey_email_history_pagination.sql" relativeToChangelogFile="true" />
 </databaseChangeLog>

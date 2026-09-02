@@ -1,4 +1,5 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider as EmotionThemeProvider } from '@emotion/react';
@@ -44,6 +45,7 @@ vi.mock('./RespondentTable', () => ({
   </>,
 }));
 vi.mock('./SurveyLifecyclePanel', () => ({ default: () => null }));
+vi.mock('./EmailHistory', () => ({ default: ({ survey }) => <div data-testid="email-history" data-survey={survey?.id}>Email history</div> }));
 vi.mock('./CreateSurveyDialog', () => ({ default: () => null }));
 
 let mountSequence = 0;
@@ -78,12 +80,30 @@ const surveys = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authAccess.canEditSurvey = (survey) => Boolean(survey) && survey.role !== 'viewer';
+  authAccess.canViewSensitiveSurveyData = (survey) => Boolean(survey) && survey.role !== 'viewer';
   mountSequence = 0;
   api.get.mockImplementation((url) => {
     if (url === '/surveys') return Promise.resolve({ data: { surveys } });
     if (url.startsWith('/listQuestions')) return Promise.resolve({ data: { questions: [] } });
     return Promise.resolve({ data: [] });
   });
+});
+
+test('keeps dashboard spacing bounded on narrow viewports', () => {
+  const source = readFileSync('src/components/Dashboard.js', 'utf8');
+  expect(source).toMatch(/px: \{ xs: 1\.5, sm: 3, md: 5 \}/);
+  expect(source).toMatch(/mx: \{ xs: 1, sm: 2, md: '13%' \}/);
+  expect(source).not.toMatch(/padding: "40px"|marginLeft: "13%"/);
+});
+
+test('shows email history only to users already authorized for the selected survey roster', async () => {
+  const theme = createTheme();
+  render(<ThemeProvider theme={theme}><EmotionThemeProvider theme={theme}><Dashboard /></EmotionThemeProvider></ThemeProvider>);
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
+  expect(screen.getByTestId('email-history')).toHaveAttribute('data-survey', 'survey-a');
+  await userEvent.click(screen.getByRole('button', { name: 'Select Delta' }));
+  expect(screen.queryByTestId('email-history')).not.toBeInTheDocument();
 });
 
 test('dirty state remains scoped to its owning survey across every editable section', async () => {

@@ -70,19 +70,10 @@ The target-only bootstrap password remains in its operator-managed SecureString 
 
 Post-build read-only verification in source account `438465164125` confirmed the existing production and staging instances remain running, both RDS instances remain available, and both public API health endpoints return healthy. No source-account mutation command or source Terraform provider/backend was used.
 
+## GitHub environment
+
+The protected GitHub environment `prod-secondary` is configured with required reviewer `ttenneb`. Its reviewer, self-review, wait-timer, and deployment-branch policy match the existing `production` environment. All eight target-only workflow variables are configured, including account `710054969994`, `TF_ENV=prod-secondary`, and the target plan/apply/deploy OIDC role ARNs. It contains no static AWS credentials.
+
 ## Remaining blockers
-
-The authenticated `gh` identity lacks repository administration permission. Creation/protection of the `prod-secondary` GitHub environment returned HTTP 403. A repository administrator must create it with the current production reviewer and configure:
-
-- `AWS_ACCOUNT_ID=710054969994`
-- `AWS_REGION=us-east-1`
-- `TF_ENV=prod-secondary`
-- `API_ASG_NAME=network-survey-prod-secondary-app`
-- `AWS_RESOURCE_TAGGING_REGION=us-east-1`
-- `AWS_TERRAFORM_PLAN_ROLE_ARN=arn:aws:iam::710054969994:role/network-survey-prod-secondary-terraform-plan`
-- `AWS_TERRAFORM_ROLE_ARN=arn:aws:iam::710054969994:role/network-survey-prod-secondary-terraform-apply`
-- `AWS_DEPLOY_ROLE_ARN=arn:aws:iam::710054969994:role/network-survey-prod-secondary-deploy`
-
-Do not configure source-account role ARNs or `TF_ENV=prod` in this environment.
 
 Custom production hostnames/ACM remain deferred by decision. The current CloudFront default domains are suitable for endpoint validation, but custom same-site domains should be established before relying on browser session behavior for real users. The root dependency install also reports existing package vulnerabilities, including two critical findings; triage is required before declaring the environment ready for live production traffic.

@@ -59,19 +59,20 @@ const SurveyTable = ({
     { field: 'questions', headerName: 'Questions', width: 110 },
     {
       field: 'invitationSummary',
-      headerName: 'Invitation dispatch',
+      headerName: 'Email dispatch',
       width: 190,
       sortable: false,
       renderCell: ({ row, hasFocus }) => {
         const latest = row.latestLaunch || row.latest_launch;
         if (!latest) return <Typography variant="body2" color="text.secondary">Not launched</Typography>;
         const counts = launchCounts(latest);
+        const campaignName = latest.kind === 'reminder' ? 'Reminder' : 'Invitation';
         const processing = counts.pending + counts.leased + counts.retryWait;
         const notConfirmed = counts.failed + counts.uncertain + counts.cancelled;
         const details = `${counts.target} targets: ${counts.pending} pending, ${counts.leased} sending, ${counts.retryWait} retrying, ${counts.accepted} accepted, ${counts.failed} failed, ${counts.uncertain} uncertain, ${counts.cancelled} cancelled.`;
         return <Tooltip title={details} arrow>
           <Stack spacing={0.25} justifyContent="center" aria-label={details} tabIndex={hasFocus ? 0 : -1} sx={{ minWidth: 0 }}>
-            <Typography variant="body2" fontWeight={600} noWrap>{counts.accepted} / {counts.target} submitted</Typography>
+            <Typography variant="body2" fontWeight={600} noWrap>{campaignName}: {counts.accepted} / {counts.target} submitted</Typography>
             <Stack direction="row" spacing={0.5}>
               {processing > 0 && <Chip size="small" variant="outlined" color="info" label={`${processing} processing`} sx={{ height: 20 }} />}
               {notConfirmed > 0 && <Chip size="small" variant="outlined" color="warning" label={`${notConfirmed} not confirmed`} sx={{ height: 20 }} />}
@@ -92,7 +93,8 @@ const SurveyTable = ({
         const counts = providerCounts(latest);
         const dispatch = launchCounts(latest);
         const adverse = counts.problems;
-        const details = `${counts.delivered} delivery confirmations, ${counts.waiting} awaiting a final result, ${counts.problems} ${counts.problems === 1 ? 'invitation' : 'invitations'} with delivery problems; ${counts.sent} provider accepted, ${counts.delayed} delayed, ${counts.delayed} delayed, ${counts.bounced} bounced, ${counts.complained} complained, ${counts.suppressed} suppressed, ${counts.providerFailed} provider failed, ${counts.acceptedUnverified} accepted and unverified.`;
+        const emailKind = latest.kind === 'reminder' ? 'reminder' : 'invitation';
+        const details = `${counts.delivered} delivery confirmations, ${counts.waiting} awaiting a final result, ${counts.problems} ${counts.problems === 1 ? emailKind : `${emailKind}s`} with delivery problems; ${counts.sent} provider accepted, ${counts.delayed} delayed, ${counts.bounced} bounced, ${counts.complained} complained, ${counts.suppressed} suppressed, ${counts.providerFailed} provider failed, ${counts.acceptedUnverified} accepted and unverified.`;
         return <Tooltip title={details} arrow>
           <Stack spacing={0.25} justifyContent="center" aria-label={details} tabIndex={hasFocus ? 0 : -1} sx={{ minWidth: 0 }}>
             <Typography variant="body2" fontWeight={600} noWrap>{counts.delivered} confirmed delivered</Typography>

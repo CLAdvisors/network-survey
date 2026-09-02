@@ -6,16 +6,17 @@ const { createRequire } = require('node:module');
 const apiRequire = createRequire(path.resolve(process.cwd(), 'api/package.json'));
 const { Pool } = apiRequire('pg');
 const { DeliveryWorker } = require('../../api/email-worker');
-const { reserveProviderRate } = require('../../api/email');
+const { ProviderError, reserveProviderRate } = require('../../api/email');
 const lifecycle = require('../../api/lifecycle');
 
-const pool = new Pool({
+const poolConfig = {
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT),
   database: process.env.DB_NAME,
-});
+};
+const pool = new Pool(poolConfig);
 
 (async () => {
   const actor = (await pool.query("SELECT id FROM users WHERE username='ci-smoke'")).rows[0];
@@ -43,6 +44,7 @@ const pool = new Pool({
       RELEASE_REVISION: 'local',
       SURVEY_URL: process.env.SURVEY_URL,
       EMAIL_RATE_PER_SECOND: '5',
+      RESEND_PROVIDER_ACCOUNT_SCOPE: 'ci-test',
     },
   });
 
@@ -104,4 +106,94 @@ const pool = new Pool({
   assert.equal(new Set(launches.map(({ value }) => value.id)).size, 1, 'concurrent initial launches must converge on one launch');
   assert.equal(launches.filter(({ value }) => value.replayed).length, 1);
   assert.equal((await pool.query('SELECT count(*)::int AS count FROM survey_launches WHERE survey_id=$1', [concurrentSurvey.id])).rows[0].count, 1);
+
+  // Real PostgreSQL reminder races: reject overlapping campaigns and let a
+  // completion holding the shared survey boundary cancel before provider I/O.
+  await pool.query(`UPDATE survey_email_deliveries SET status='cancelled',last_error_code='ci_cleanup' WHERE status IN ('pending','retry_wait','reminder_pending','reminder_retry_wait')`);
+  const reminderSurvey=(await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id,lifecycle_status,started_at) SELECT 'CI Reminder Race','Reminder',now(),'{}'::jsonb,organization_id,'active',now() FROM survey WHERE id=$1 RETURNING *`,[process.env.SURVEY_ID])).rows[0];
+  const reminderRespondent=(await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES('Reminder Person','reminder@example.test',$1,$2,true,'ci-existing-reminder-token','English',true) RETURNING respondent_id`,[reminderSurvey.name,reminderSurvey.id])).rows[0];
+  await pool.query(`INSERT INTO survey_reminder_templates(survey_id,language,subject,body_text,updated_by_user_id) VALUES($1,'english','Reminder','Please complete the survey.',$2)`,[reminderSurvey.id,actor.id]);
+  worker.claiming=true;
+  await worker.heartbeat();
+  const reminderConfig={NODE_ENV:'test',SURVEY_DELIVERY_V2_ENABLED:'true',SURVEY_URL:process.env.SURVEY_URL,RESEND_API_KEY:'fake-only',RESEND_PROVIDER_ACCOUNT_SCOPE:'ci-test'};
+  await assert.rejects(
+    lifecycle.launchReminder(pool,actor,reminderSurvey.id,{idempotencyKey:'66666666-6666-4666-8666-666666666666'},{...reminderConfig,RESEND_PROVIDER_ACCOUNT_SCOPE:'wrong-scope'}),
+    error=>error.code==='survey_not_ready'&&error.details?.blockers?.some(({code})=>code==='worker_unavailable'),
+    'a heartbeat for another provider account must not make reminder launch ready'
+  );
+  const reminder=await lifecycle.launchReminder(pool,actor,reminderSurvey.id,{idempotencyKey:'44444444-4444-4444-8444-444444444444'},reminderConfig);
+  assert.equal(reminder.target_count,1);
+  const legacyVisible=await pool.query(`SELECT id FROM survey_email_deliveries WHERE launch_id=$1 AND ((status IN ('pending','retry_wait') AND next_attempt_at<=now()) OR (status='leased' AND lease_expires_at<=now()))`,[reminder.id]);
+  assert.equal(legacyVisible.rowCount,0,'legacy worker claim SQL must not see reminder queue states');
+  await assert.rejects(
+    lifecycle.launchReminder(pool,actor,reminderSurvey.id,{idempotencyKey:'55555555-5555-4555-8555-555555555555'},reminderConfig),
+    error=>error.code==='reminder_in_progress'
+  );
+  let reminderProviderCalls=0;
+  const reminderWorker=new DeliveryWorker({pool,provider:{send:async()=>{reminderProviderCalls+=1;return{id:'must-not-send'};}},env:worker.env,instanceId:'ci-reminder-worker'});
+  const completion=await pool.connect();
+  await completion.query('BEGIN');
+  await completion.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,[`survey-provider-boundary:${reminderSurvey.id}`]);
+  await completion.query(`UPDATE respondent SET response='{}'::jsonb WHERE respondent_id=$1`,[reminderRespondent.respondent_id]);
+  const reminderProcessing=reminderWorker.processOne();
+  await new Promise(resolve=>setTimeout(resolve,100));
+  await completion.query('COMMIT');
+  completion.release();
+  await reminderProcessing;
+  assert.equal(reminderProviderCalls,0,'completion before provider boundary must prevent provider I/O');
+  const cancelled=(await pool.query(`SELECT status,last_error_code FROM survey_email_deliveries WHERE launch_id=$1`,[reminder.id])).rows[0];
+  assert.deepEqual(cancelled,{status:'cancelled',last_error_code:'response_completed'});
+
+  // If close fences a leased reminder after provider I/O has begun, an
+  // ambiguous provider result must remain terminal uncertain, never cancelled
+  // or retryable. This preserves the recipient quarantine for future reminders.
+  const ambiguousSurvey=(await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id,lifecycle_status,started_at) SELECT 'CI Ambiguous Close Race','Ambiguous close',now(),'{}'::jsonb,organization_id,'active',now() FROM survey WHERE id=$1 RETURNING *`,[process.env.SURVEY_ID])).rows[0];
+  await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES('Ambiguous Person','ambiguous@example.test',$1,$2,true,'ci-ambiguous-token','English',true)`,[ambiguousSurvey.name,ambiguousSurvey.id]);
+  await pool.query(`INSERT INTO survey_reminder_templates(survey_id,language,subject,body_text,updated_by_user_id) VALUES($1,'english','Reminder','Please complete the survey.',$2)`,[ambiguousSurvey.id,actor.id]);
+  const ambiguousLaunch=await lifecycle.launchReminder(pool,actor,ambiguousSurvey.id,{idempotencyKey:'88888888-8888-4888-8888-888888888888'},reminderConfig);
+  let signalAmbiguousProvider;
+  const ambiguousProviderStarted=new Promise(resolve=>{signalAmbiguousProvider=resolve;});
+  let rejectAmbiguousProvider;
+  const ambiguousProviderResult=new Promise((resolve,reject)=>{rejectAmbiguousProvider=reject;});
+  const ambiguousWorker=new DeliveryWorker({pool,provider:{send:async()=>{signalAmbiguousProvider();return ambiguousProviderResult;}},env:worker.env,instanceId:'ci-ambiguous-worker'});
+  const ambiguousDelivery=await ambiguousWorker.claim();
+  assert.equal(ambiguousDelivery.launch_id,ambiguousLaunch.id);
+  const providerRequest=ambiguousWorker.startProviderRequest(ambiguousDelivery);
+  await ambiguousProviderStarted;
+  let ambiguousCloseResolved=false;
+  const ambiguousClose=lifecycle.transitionSurvey(pool,actor,ambiguousSurvey.id,'close').then(value=>{ambiguousCloseResolved=true;return value;});
+  await new Promise(resolve=>setTimeout(resolve,250));
+  assert.equal(ambiguousCloseResolved,false,'close must not resolve while the provider boundary is active');
+  rejectAmbiguousProvider(new ProviderError('CI provider response was lost',{code:'ci_provider_timeout',uncertain:true}));
+  const ambiguousStarted=await providerRequest;
+  assert.equal(ambiguousStarted.action,'send');
+  const ambiguousFinalization=ambiguousWorker.finalizeFailure(ambiguousStarted.row,ambiguousStarted.providerResult.error);
+  await Promise.all([ambiguousClose,ambiguousFinalization]);
+  const ambiguousState=(await pool.query(`SELECT d.status,d.cancellation_requested_at,d.last_error_code,a.outcome FROM survey_email_deliveries d JOIN survey_email_attempts a ON a.delivery_id=d.id WHERE d.id=$1`,[ambiguousDelivery.id])).rows[0];
+  assert.equal(ambiguousState.status,'uncertain');
+  // Scheduling determines whether close records a cancellation request before
+  // or after the ambiguous finalizer, but neither ordering may erase ambiguity.
+  assert.equal(ambiguousState.last_error_code,'ci_provider_timeout');
+  assert.equal(ambiguousState.outcome,'uncertain');
+
+  // Exercise the opposite serialization order: the ambiguous finalizer wins,
+  // schedules an idempotent retry, and close runs afterward.
+  const retryFirstSurvey=(await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id,lifecycle_status,started_at) SELECT 'CI Ambiguous Retry Then Close','Retry then close',now(),'{}'::jsonb,organization_id,'active',now() FROM survey WHERE id=$1 RETURNING *`,[process.env.SURVEY_ID])).rows[0];
+  await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES('Retry First Person','retry-first@example.test',$1,$2,true,'ci-retry-first-token','English',true)`,[retryFirstSurvey.name,retryFirstSurvey.id]);
+  await pool.query(`INSERT INTO survey_reminder_templates(survey_id,language,subject,body_text,updated_by_user_id) VALUES($1,'english','Reminder','Please complete the survey.',$2)`,[retryFirstSurvey.id,actor.id]);
+  const retryFirstLaunch=await lifecycle.launchReminder(pool,actor,retryFirstSurvey.id,{idempotencyKey:'99999999-9999-4999-8999-999999999999'},reminderConfig);
+  const retryFirstWorker=new DeliveryWorker({pool,provider:{send:async()=>{throw new ProviderError('CI retry-first response was lost',{code:'ci_retry_first_timeout',uncertain:true});}},env:worker.env,instanceId:'ci-retry-first-worker'});
+  await retryFirstWorker.processOne();
+  const scheduled=(await pool.query(`SELECT d.id,d.status,d.last_error_code,a.outcome,a.provider_started_at FROM survey_email_deliveries d JOIN survey_email_attempts a ON a.delivery_id=d.id WHERE d.launch_id=$1`,[retryFirstLaunch.id])).rows[0];
+  assert.equal(scheduled.status,'reminder_retry_wait');
+  assert.equal(scheduled.outcome,'uncertain');
+  assert.ok(scheduled.provider_started_at);
+  await lifecycle.transitionSurvey(pool,actor,retryFirstSurvey.id,'close');
+  const closedRetry=(await pool.query(`SELECT status,last_error_code,dispatch_failed_at FROM survey_email_deliveries WHERE id=$1`,[scheduled.id])).rows[0];
+  assert.equal(closedRetry.status,'uncertain');
+  assert.equal(closedRetry.last_error_code,'ci_retry_first_timeout');
+  assert.ok(closedRetry.dispatch_failed_at);
+  await lifecycle.transitionSurvey(pool,actor,retryFirstSurvey.id,'reopen');
+  const retryFirstReadiness=await lifecycle.getReminderReadiness(pool,actor,retryFirstSurvey.id,reminderConfig);
+  assert.equal(retryFirstReadiness.uncertainExcludedCount,1,'later reminders must exclude the unresolved recipient');
 })().finally(() => pool.end());

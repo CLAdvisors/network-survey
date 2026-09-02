@@ -7,8 +7,8 @@ Durable launch rows may be created only when `SURVEY_DELIVERY_V2_ENABLED=true`. 
 ## Deployment order
 
 1. Take or confirm the final database snapshot.
-2. Apply Liquibase migrations.
-3. Deploy the API and `ona-email-worker` from the same release artifact.
+2. Start the release handoff: pause sending, claiming, and webhook projection, then wait until fresh worker heartbeats report no active dispatch or projection. `remote-deploy.sh` performs this before Liquibase. If migration fails, it restores previous controls only when the trusted current validator confirms the previous artifact still satisfies the resulting database floor; otherwise controls remain paused.
+3. Apply Liquibase migrations, then deploy the API and workers from the same release artifact.
 4. Confirm `/health`, worker heartbeat freshness, readiness output, and the release revision while both rollout gates remain disabled.
 5. Set the staging Terraform `survey_delivery_v2_enabled` input to true and apply; keep legacy start and claiming disabled. Redeploy the current API artifact so it downloads the updated S3 runtime config, then verify the flag in `/opt/service/current/api/.env.prod`.
 6. Enable claiming with the fenced operator command below, then immediately launch a controlled one-recipient staging survey.
@@ -47,6 +47,19 @@ Use `prod` only on the production instance. Never update the control row manuall
 
 Before Phase 2 activation, the rollback workflow validates the target artifact before disabling claiming. Once webhook registration or suppression is active, only a capability-compatible artifact is allowed: pause projection, keep ingestion and suppression active, verify both worker heartbeats, and follow `resend-webhook-operations.md`. A Phase 1 artifact must never be restored after that floor is raised.
 
+## Bulk reminder rollout and rollback floor
+
+Bulk reminders use the same `SURVEY_DELIVERY_V2_ENABLED`, claiming, sending, rate, suppression, and release-fence controls; this change does not enable any hosted gate. Before allowing an administrator to launch the first reminder:
+
+1. Quiesce sending, claiming, and webhook projection before applying `v1_8_bulk_survey_reminders.sql`; verify a second Liquibase update is a no-op.
+2. Deploy the API and worker from the same release and pin both sending/claiming controls to that exact revision.
+3. Confirm the release marker reports `reminder_provider_boundary >= 3` and a fresh compatible worker heartbeat exists for the exact configured `RESEND_PROVIDER_ACCOUNT_SCOPE`.
+4. Exercise readiness with fakes or a provider-disabled environment first. Do not use `/api/testEmail`; it remains gone.
+
+Every reminder snapshots its localized template, sender, renderer, base URL, payload hash, and existing respondent link. Reminder work uses `reminder_pending`, `reminder_leased`, and `reminder_retry_wait` queue states that invitation-only worker SQL cannot claim. Provider-boundary processing takes the survey boundary lock and a respondent row lock, then cancels reminders for completed/ineligible respondents or inactive surveys before provider I/O. Suppressions are enforced for reminders even if general suppression rollout is not activated, and reminder-capable heartbeats are accepted only when their provider-account scope exactly matches the API.
+
+An older artifact without reminder-launch support may coexist with the additive schema before reminder work exists; the transitional shared-queue reminder capability (`reminder_provider_boundary: 1`) is explicitly rejected. Once any reminder campaign has been created, `validate-release-capabilities.js --database` permanently requires capability 2 because delayed or replayed reminder webhooks must remain kind-aware even after dispatch becomes terminal. New campaigns snapshot their exact provider-account scope; once any provider-bound reminder exists, the permanent floor rises to capability 3 so claims, final provider checks, and webhook correlation remain account-bound. Before reminder history exists, an artifact without reminder-launch support remains a valid emergency rollback target. To roll back after provider-bound reminder history exists, stop claiming and sending, let no provider call remain in flight, and use only a capability-3-or-newer artifact.
+
 ## Ambiguous provider calls
 
-A leased attempt recovered inside the configured provider-idempotency window reuses its durable provider key. Once that boundary has expired, the worker marks the delivery `uncertain` rather than risking a duplicate send. Do not manually retry uncertain deliveries in Phase 1.
+A leased attempt recovered inside the configured provider-idempotency window reuses its durable provider key. Once that boundary has expired, the worker marks the delivery `uncertain` rather than risking a duplicate send. Respondents with an unresolved uncertain reminder are excluded from later reminder campaigns until reconciliation. Do not manually retry or override uncertain deliveries in Phase 1.

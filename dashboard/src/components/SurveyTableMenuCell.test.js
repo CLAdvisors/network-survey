@@ -199,6 +199,23 @@ test('passes only this row’s unsaved sections into the launch blocker', async 
   expect(screen.getByRole('button', { name: 'Queue invitations' })).toBeDisabled();
 });
 
+test('blocks Close Survey from the menu while this survey is dirty or pending', async () => {
+  const row={ id: 'survey-1', name: 'Leadership Survey', lifecycleStatus: 'active' };
+  const view=render(<SurveyTableMenuCell row={row} unsavedChanges={{reminderTemplate:true}} />);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Close Survey'));
+  expect(await screen.findByText(/Save or undo changes to “Leadership Survey” before continuing.*Close is unavailable/)).toBeInTheDocument();
+  expect(screen.queryByRole('dialog',{name:'Close survey'})).not.toBeInTheDocument();
+  expect(api.post).not.toHaveBeenCalled();
+
+  view.rerender(<SurveyTableMenuCell row={row} pendingOperations={{reminderTemplate:true}} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Actions for Leadership Survey' }));
+  await userEvent.click(screen.getByText('Close Survey'));
+  expect(await screen.findByText(/Wait for the current update to “Leadership Survey” to finish.*Close is unavailable/)).toBeInTheDocument();
+  expect(api.post).not.toHaveBeenCalled();
+});
+
 test('an active survey offers status and close, but no launch or reminder bypass', async () => {
   api.post.mockResolvedValue({ status: 200, data: {} });
   const changed = vi.fn();

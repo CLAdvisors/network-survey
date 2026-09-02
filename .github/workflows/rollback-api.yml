@@ -122,8 +122,11 @@ jobs:
           BUCKET="${{ steps.env.outputs.ARTIFACTS_BUCKET }}"
           INSTANCE="${{ steps.env.outputs.INSTANCE_ID }}"
           SHA="${{ inputs.artifact_sha }}"
+          # The validator is supplied by this trusted workflow revision, not by
+          # either the currently installed or rollback-target artifact.
+          TRUSTED_VALIDATOR_B64=$(base64 -w0 scripts/deploy/validate-release-capabilities.js)
 
-          jq -n --arg bucket "$BUCKET" --arg sha "$SHA" --arg region "$AWS_REGION" '{
+          jq -n --arg bucket "$BUCKET" --arg sha "$SHA" --arg region "$AWS_REGION" --arg validator "$TRUSTED_VALIDATOR_B64" '{
             commands: [
               "set -eu",
               "export AWS_DEFAULT_REGION=\($region)",
@@ -131,9 +134,10 @@ jobs:
               "aws s3 cp s3://\($bucket)/api/\($sha).tar.gz /tmp/ona-deploy/release.tar.gz",
               "tar -xzf /tmp/ona-deploy/release.tar.gz -C /tmp/ona-deploy",
               "test -f /tmp/ona-deploy/api/lifecycle.js && test -f /tmp/ona-deploy/api/email-worker.js && test -f /tmp/ona-deploy/api/webhook-worker.js && test -f /tmp/ona-deploy/deploy/ecosystem.config.js && test -f /tmp/ona-deploy/deploy/set-email-claiming.js && test -f /tmp/ona-deploy/deploy/CAPABILITIES.json && test -f /tmp/ona-deploy/deploy/validate-release-capabilities.js || { echo Refusing rollback to an invalid or capability-incompatible artifact >&2; exit 1; }",
-              "node /tmp/ona-deploy/deploy/validate-release-capabilities.js /tmp/ona-deploy",
+              "printf %s \($validator) | base64 -d > /tmp/ona-trusted-release-validator.js",
+              "node /tmp/ona-trusted-release-validator.js /tmp/ona-deploy --database --runtime-api-dir /opt/service/current/api",
               "bash /tmp/ona-deploy/deploy/remote-deploy.sh /tmp/ona-deploy",
-              "rm -rf /tmp/ona-deploy"
+              "rm -rf /tmp/ona-deploy /tmp/ona-trusted-release-validator.js"
             ]
           }' > /tmp/ssm-params.json
 

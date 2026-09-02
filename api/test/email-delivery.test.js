@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
-const { evaluateReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
+const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
 test('invitation rendering escapes templates and emits equivalent accessible HTML/text', () => {
@@ -157,11 +157,56 @@ test('readiness validates the entire audience and exact normalized template cove
   assert.equal(manyInvalid.blockers.at(-1).code, 'blockers_truncated');
 });
 
+test('reminder readiness handles zero, one, 1,000, localization, and privacy-safe blockers', () => {
+  const survey={lifecycle_status:'active',archived_at:null};
+  const config={SURVEY_URL:'https://survey.test',RESEND_API_KEY:'fake',RESEND_PROVIDER_ACCOUNT_SCOPE:'test'};
+  const template={language:'english',subject:'Reminder',body_text:'Please complete the survey.',configuration_version:1};
+  const recipient=index=>({respondent_id:index,contact_info:`person${index}@example.test`,uuid:`existing-token-${index}`,lang:'English'});
+  const zero=evaluateReminderReadiness(survey,{recipients:[],templates:[template]},config);
+  assert.equal(zero.canLaunch,false);assert.ok(zero.blockers.some(item=>item.code==='recipients_missing'));
+  const one=evaluateReminderReadiness(survey,{recipients:[recipient(1)],templates:[template]},config);
+  assert.equal(one.canLaunch,true);assert.equal(one.targetCount,1);
+  const thousand=evaluateReminderReadiness(survey,{recipients:Array.from({length:1000},(_,index)=>recipient(index+1)),templates:[template]},config);
+  assert.equal(thousand.canLaunch,true);assert.equal(thousand.targetCount,1000);
+  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:1001},(_,index)=>recipient(index+1)),templates:[template]},config);
+  assert.ok(over.blockers.some(item=>item.code==='recipients_limit_exceeded'));
+  const localized=evaluateReminderReadiness(survey,{recipients:[{...recipient(2),lang:'French'},{...recipient(3),lang:'Klingon'}],templates:[template]},config);
+  assert.ok(localized.blockers.some(item=>item.code==='template_missing'&&item.language==='french'));
+  assert.ok(localized.blockers.some(item=>item.code==='recipient_language_unsupported'));
+  assert.equal(JSON.stringify(localized.blockers).includes('existing-token'),false);
+  assert.equal(JSON.stringify(localized.blockers).includes('person2@example.test'),false);
+});
+
+test('reminder readiness requires survey-admin tenant access before recipient queries', async () => {
+  for (const surveyRow of [
+    {id:'11111111-1111-4111-8111-111111111111',role:'editor'},
+    undefined,
+  ]) {
+    const calls=[];const client={release(){},async query(sql){calls.push(sql);if(/SELECT s\.\*, om\.role/.test(sql))return{rows:surveyRow?[surveyRow]:[]};throw new Error('recipient query must not run');}};
+    await assert.rejects(()=>getReminderReadiness({connect:async()=>client},{id:5},'11111111-1111-4111-8111-111111111111',{NODE_ENV:'test'}),error=>error.code==='survey_not_found'&&error.status===404);
+    assert.equal(calls.length,1);
+  }
+});
+
+test('reminder implementation selects and rechecks only incomplete eligible respondents', () => {
+  const lifecycleSource=fs.readFileSync(path.join(__dirname,'../lifecycle.js'),'utf8');
+  const workerSource=fs.readFileSync(path.join(__dirname,'../email-worker.js'),'utf8');
+  assert.match(lifecycleSource,/can_respond=true AND r\.response IS NULL/);
+  assert.match(lifecycleSource,/displayedRespondentPredicate\('r'\)/);
+  assert.match(lifecycleSource,/kind:'reminder'/);
+  assert.match(lifecycleSource,/prior_launch\.kind='reminder' AND \(prior\.status='uncertain' OR \(prior_launch\.provider_account_scope IS NULL/);
+  assert.match(lifecycleSource,/INSERT INTO survey_launches\(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id,provider_account_scope\)/);
+  assert.match(lifecycleSource,/status\) VALUES[\s\S]*'reminder_pending'/);
+  assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
+  assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
+  assert.match(workerSource,/row\.launch_kind!=='reminder'.*email_sent/s);
+});
+
 test('launch fingerprint is canonical and aggregate SQL derives dispatch and distinct provider summary counts', () => {
   assert.equal(fingerprint({targets:[1,2]}), fingerprint({targets:[1,2]}));
   assert.notEqual(fingerprint({targets:[1,2]}), fingerprint({targets:[2,1]}));
   const sql = aggregateSelect('WHERE l.survey_id=$1');
-  for (const state of ['pending','leased','retry_wait','accepted','failed','uncertain','cancelled']) assert.match(sql, new RegExp(state));
+  for (const state of ['pending','leased','retry_wait','reminder_pending','reminder_leased','reminder_retry_wait','accepted','failed','uncertain','cancelled']) assert.match(sql, new RegExp(state));
   assert.match(sql, /count\(DISTINCT d\.id\)/);
   assert.match(sql, /AS provider_problem_count/);
   assert.match(sql, /AS provider_waiting_count/);
@@ -178,6 +223,95 @@ test('expired ambiguous attempts never cross the provider idempotency boundary',
   assert.equal(canRetryAmbiguous({...base,now:new Date('2026-08-04T12:00:02Z')}), false, 'retry_wait cannot cross the anchored provider window');
   assert.equal(canRetryAmbiguous({...base,providerAttemptCount:6}), false);
   assert.equal(canRetryAmbiguous({...base,firstProviderStartedAt:null}), false);
+});
+
+test('worker capability is fail-closed and bound to the suppression scope', async () => {
+  const heartbeatCalls=[];
+  const scoped=new DeliveryWorker({pool:{query:async(sql,values)=>{heartbeatCalls.push({sql,values});return{rows:[],rowCount:1};}},provider:{},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  scoped.claiming=true;
+  await scoped.heartbeat();
+  assert.equal(scoped.reminderCapable,true);
+  assert.equal(heartbeatCalls[0].values[4],true);
+  assert.equal(heartbeatCalls[0].values[5],'scope-a');
+
+  const claimCalls=[];
+  const client={release(){},async query(sql,values=[]){claimCalls.push({sql,values});if(/email_worker_control/.test(sql))return{rows:[{claiming_enabled:true,minimum_release:''}]};return{rows:[],rowCount:0};}};
+  const unscoped=new DeliveryWorker({pool:{connect:async()=>client},provider:{},env:{NODE_ENV:'test'}});
+  assert.equal(unscoped.reminderCapable,false);
+  assert.equal(await unscoped.claim(),null);
+  const selection=claimCalls.find(({sql})=>/JOIN survey_launches/.test(sql));
+  assert.equal(selection.values[0],false);
+  assert.equal(selection.values[1],'');
+  assert.match(selection.sql,/\$1::boolean OR l\.kind<>'reminder'/);
+  assert.match(selection.sql,/l\.kind<>'reminder' OR l\.provider_account_scope=\$2/);
+  assert.match(selection.sql,/\$1::boolean AND d\.status IN \('reminder_pending','reminder_retry_wait'\)/);
+});
+
+test('provider boundary releases a reminder whose immutable launch scope mismatches the worker', async () => {
+  const calls=[];
+  const row={id:'delivery-1',survey_id:'11111111-1111-4111-8111-111111111111',lease_token:'lease-1',launch_kind:'reminder',launch_provider_account_scope:'scope-b'};
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT id,name,lifecycle_status/.test(sql))return{rows:[{id:row.survey_id,name:'Scoped survey',lifecycle_status:'active',archived_at:null}]};
+    if(/SELECT d\.\*,r\.uuid/.test(sql))return{rows:[row]};
+    return{rows:[],rowCount:1};
+  }};
+  let providerCalls=0;
+  const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{send:async()=>{providerCalls+=1;}},env:{NODE_ENV:'test',RESEND_PROVIDER_ACCOUNT_SCOPE:'scope-a'}});
+  const result=await worker.startProviderRequest({id:row.id,survey_id:row.survey_id,lease_token:row.lease_token});
+  assert.equal(result.action,'disabled');
+  assert.equal(providerCalls,0);
+  assert.ok(calls.some(({sql,values})=>/UPDATE survey_email_deliveries d SET status=CASE/.test(sql)&&values[2]==='provider_scope_mismatch'));
+  assert.equal(calls.some(({sql})=>/email_suppressions|reserve_provider_rate/.test(sql)),false);
+});
+
+test('cancellation after an ambiguous provider result stays terminal uncertain while definitive errors cancel', async () => {
+  const runFailure=async(error)=>{
+    const calls=[];
+    const current={id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1',status:'reminder_leased',attempt_count:1,created_at:'2026-08-04T11:00:00Z',cancellation_requested_at:'2026-08-04T12:00:01Z'};
+    const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+      if(/SELECT \* FROM survey_email_deliveries/.test(sql))return{rows:[current],rowCount:1};
+      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
+      return{rows:[],rowCount:1};
+    }};
+    const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},clock:()=>new Date('2026-08-04T12:00:02Z'),env:{NODE_ENV:'test'}});
+    await worker.finalizeFailure({id:current.id,survey_id:current.survey_id,lease_token:current.lease_token},error);
+    return calls;
+  };
+
+  const ambiguousCalls=await runFailure(new ProviderError('Provider response was lost',{code:'provider_timeout',uncertain:true}));
+  const uncertainAttempt=ambiguousCalls.find(({sql})=>/UPDATE survey_email_attempts SET outcome=\$3/.test(sql));
+  const uncertainDelivery=ambiguousCalls.find(({sql})=>/UPDATE survey_email_deliveries SET status=\$3/.test(sql));
+  assert.equal(uncertainAttempt.values[2],'uncertain');
+  assert.equal(uncertainDelivery.values[2],'uncertain');
+  assert.equal(uncertainDelivery.values[3],'provider_timeout');
+  assert.ok(ambiguousCalls.some(({values})=>values.includes('survey-provider-boundary:survey-1')),'ambiguous finalization must serialize with survey cancellation');
+  assert.equal(ambiguousCalls.some(({sql})=>/reminder_retry_wait|cancelled_after_provider_failure/.test(sql)),false,'cancellation must terminate rather than erase or retry an ambiguous result');
+
+  const definitiveCalls=await runFailure(new ProviderError('Recipient rejected',{code:'invalid_recipient',status:422}));
+  assert.ok(definitiveCalls.some(({sql,values})=>/UPDATE survey_email_attempts SET outcome='cancelled'/.test(sql)&&values[2]==='cancelled_after_provider_failure'));
+  assert.ok(definitiveCalls.some(({sql,values})=>/UPDATE survey_email_deliveries d SET status=CASE/.test(sql)&&/ELSE 'cancelled' END/.test(sql)&&values[2]==='cancelled_after_provider_failure'));
+});
+
+test('worker cancellation helpers cannot erase a previously ambiguous provider attempt', async () => {
+  for(const suppressed of [false,true]){
+    const calls=[];
+    const client={async query(sql,values=[]){calls.push({sql,values});return{rowCount:1,rows:[]};}};
+    const worker=new DeliveryWorker({pool:{},provider:{},env:{NODE_ENV:'test'}});
+    const row={id:'delivery-1',lease_token:'lease-2'};
+    if(suppressed)await worker.cancelSuppressed(client,row);
+    else await worker.cancel(client,row,'survey_inactive');
+    const deliveryUpdate=calls[1].sql;
+    assert.match(deliveryUpdate,/a\.outcome='uncertain' AND a\.provider_started_at IS NOT NULL/);
+    assert.match(deliveryUpdate,/THEN 'uncertain' ELSE 'cancelled'/);
+    assert.match(deliveryUpdate,/dispatch_failed_at=CASE/);
+    assert.match(deliveryUpdate,/THEN d\.last_error_code ELSE/);
+  }
+  const releaseCalls=[];
+  const releaseClient={async query(sql,values=[]){releaseCalls.push({sql,values});return{rowCount:1,rows:[]};}};
+  const worker=new DeliveryWorker({pool:{},provider:{},env:{NODE_ENV:'test'}});
+  await worker.releaseWithoutSend(releaseClient,{id:'delivery-1',lease_token:'lease-3'},'provider_rate_wait');
+  assert.match(releaseCalls[1].sql,/THEN CASE WHEN d\.status='reminder_leased' THEN 'reminder_retry_wait' ELSE 'retry_wait'/);
+  assert.match(releaseCalls[1].sql,/THEN d\.last_error_code ELSE \$3/);
 });
 
 test('worker retry backoff is bounded and uses injected randomness', () => {
@@ -213,7 +347,10 @@ test('transactional launch locks control then survey, snapshots all work, activa
   }};
   const result=await launchSurvey({connect:async()=>client},{id:9,isPlatformAdmin:false},surveyId,{kind:'initial',idempotencyKey:'33333333-3333-4333-8333-333333333333'},{NODE_ENV:'test',SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key',SURVEY_DELIVERY_V2_ENABLED:'true'});
   assert.equal(result.status,'queued');assert.equal(result.target_count,2);
-  assert.match(calls[1].sql,/FOR SHARE/);assert.match(calls[2].sql,/email_sending_control/);assert.match(calls[3].sql,/FOR UPDATE OF s/);
+  assert.match(calls[1].sql,/FOR SHARE/);assert.match(calls[2].sql,/email_sending_control/);
+  const boundaryIndex=calls.findIndex(({values})=>values.some(value=>String(value).includes('survey-provider-boundary')));
+  const surveyLockIndex=calls.findIndex(({sql})=>/FOR UPDATE OF s/.test(sql));
+  assert.ok(boundaryIndex>2&&surveyLockIndex>boundaryIndex,'survey boundary lock precedes the survey row lock');
   const heartbeatCall=calls.find(({sql})=>/SELECT 1 FROM email_worker_heartbeats/.test(sql));
   assert.equal(heartbeatCall.values[2],'release-pinned-by-sending');
   assert.equal(calls.filter(({sql})=>/INSERT INTO survey_email_deliveries/.test(sql)).length,2);
@@ -244,7 +381,10 @@ test('close atomically cancels queued work, fences leased work, and writes stric
   const client={release(){},async query(sql,values=[]){calls.push({sql,values});if(/SELECT s\.\*, om\.role/.test(sql))return{rows:[{id:surveyId,organization_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',role:'editor',lifecycle_status:'active'}]};return{rows:[],rowCount:1};}};
   const result=await transitionSurvey({connect:async()=>client},{id:4},surveyId,'close');
   assert.equal(result.lifecycleStatus,'closed');
-  assert.ok(calls.some(({sql})=>/status IN \('pending','retry_wait','leased'\)/.test(sql)&&/cancellation_requested_at/.test(sql)));
+  const cancellation=calls.find(({sql})=>/status IN \('pending','retry_wait','leased','reminder_pending','reminder_retry_wait','reminder_leased'\)/.test(sql)&&/cancellation_requested_at/.test(sql));
+  assert.ok(cancellation);
+  assert.match(cancellation.sql,/d\.status IN \('pending','retry_wait','reminder_pending','reminder_retry_wait'\).*a\.outcome='uncertain'.*a\.provider_started_at IS NOT NULL.*THEN 'uncertain'/);
+  assert.match(cancellation.sql,/THEN d\.last_error_code WHEN d\.status IN/,'close must retain the ambiguous provider error when terminalizing retry work');
   assert.ok(calls.some(({sql})=>/INSERT INTO audit_events/.test(sql)));
   assert.match(calls.at(-1).sql,/COMMIT/);
 });

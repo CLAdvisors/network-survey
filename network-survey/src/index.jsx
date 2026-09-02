@@ -6,7 +6,11 @@ import { AppThemeProvider } from '@network-survey/frontend-react';
 
 import Survey from './Survey';
 
-const isMobileHarness = import.meta.env.DEV
+const isLongValueLab = window.location.pathname.replace(/\/$/, '') === '/labs/long-values';
+const LongValueLab = isLongValueLab
+  ? React.lazy(() => import('./long-value-lab/LongValueLab'))
+  : null;
+const isMobileHarness = !isLongValueLab && import.meta.env.DEV
   && new URLSearchParams(window.location.search).get('mobileHarness') === '1';
 const MobileSurveyHarness = isMobileHarness
   ? React.lazy(() => import('./MobileSurveyHarness'))
@@ -20,7 +24,11 @@ const MobileSurveyHarness = isMobileHarness
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <AppThemeProvider>
-    {isMobileHarness ? (
+    {isLongValueLab ? (
+      <React.Suspense fallback={<div>Loading long-value lab…</div>}>
+        <LongValueLab />
+      </React.Suspense>
+    ) : isMobileHarness ? (
       <React.Suspense fallback={<div>Loading mobile review harness…</div>}>
         <MobileSurveyHarness />
       </React.Suspense>

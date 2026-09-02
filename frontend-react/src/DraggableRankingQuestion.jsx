@@ -55,6 +55,7 @@ const normalizeChoice = (choice) => {
     ? extractValue(choice.value)
     : extractValue(choice);
   return {
+    source: choice,
     value,
     text: getChoiceText(choice, value),
     key: getValueKey(value)
@@ -64,6 +65,7 @@ const normalizeChoice = (choice) => {
 const buildChoiceFromValue = (value) => {
   const plain = extractValue(value);
   return {
+    source: null,
     value: plain,
     text: getChoiceText(null, plain),
     key: getValueKey(plain)
@@ -85,7 +87,9 @@ function Item({
   actionLabel,
   onAction,
   actionButtonRef,
-  actionDisabled = false
+  actionDisabled = false,
+  supplement,
+  stateLabel
 }) {
   const text = item.text ?? (item.value !== undefined ? String(item.value) : "");
   return (
@@ -101,22 +105,25 @@ function Item({
         borderRadius: 4,
         minWidth: 80,
         display: "flex",
+        flexWrap: supplement ? "wrap" : "nowrap",
         alignItems: "stretch",
         ...provided.draggableProps.style
       }}
     >
       <div
         {...provided.dragHandleProps}
+        aria-label={`${text}. ${stateLabel}. Drag to reorder or move between lists.`}
         style={{
           flex: "1 1 auto",
           minWidth: 0,
           padding: 8,
-          textAlign: "center",
+          textAlign: "start",
           overflowWrap: "anywhere"
         }}
       >
         {text}
       </div>
+      {supplement}
       <button
         ref={actionButtonRef}
         type="button"
@@ -147,7 +154,8 @@ export default function DraggableRankingQuestion({
   value,
   onChange,
   availableDirection = "horizontal",
-  valueSource = "prop"
+  valueSource = "prop",
+  renderChoiceSupplement
 }) {
   const [ranked, setRanked] = React.useState([]);
   const [available, setAvailable] = React.useState([]);
@@ -358,6 +366,12 @@ export default function DraggableRankingQuestion({
                         actionLabel="Unrank"
                         actionButtonRef={(node) => setActionButtonRef("ranked", item.key, node)}
                         onAction={() => unrankItem(index)}
+                        stateLabel={`Ranked position ${index + 1}`}
+                        supplement={renderChoiceSupplement?.(item, {
+                          list: "ranked",
+                          isAssigned: true,
+                          position: index + 1
+                        })}
                       />
                     )}
                   </Draggable>
@@ -407,6 +421,12 @@ export default function DraggableRankingQuestion({
                         actionButtonRef={(node) => setActionButtonRef("available", item.key, node)}
                         actionDisabled={isLimitReached}
                         onAction={() => rankAvailableItem(index)}
+                        stateLabel="Available, not ranked"
+                        supplement={renderChoiceSupplement?.(item, {
+                          list: "available",
+                          isAssigned: false,
+                          position: null
+                        })}
                       />
                     )}
                   </Draggable>

@@ -31,6 +31,14 @@ data "aws_ec2_managed_prefix_list" "cloudfront_origin" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
+data "aws_cloudfront_cache_policy" "caching_disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer_and_cloudfront" {
+  name = "Managed-AllViewerAndCloudFrontHeaders-2022-06"
+}
+
 locals {
   selected_ami_id = coalesce(var.ami_id, try(data.aws_ami.ubuntu[0].id, null))
 
@@ -52,6 +60,7 @@ locals {
     "DB_SSL_CA=/opt/service/certs/rds-global-bundle.pem",
     "SESSION_SECRET_PARAMETER=/network-survey/prod-secondary/api/session-secret",
     "SESSION_COOKIE_NAME=prodSecondarySessionId",
+    "TRUST_CLOUDFRONT_VIEWER_PROTO=true",
     "ALLOW_PUBLIC_SIGNUP=false",
     "FRONTEND_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.dashboard : aws_cloudfront_distribution.frontend["dashboard"].domain_name}",
     "SURVEY_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.survey : aws_cloudfront_distribution.frontend["survey"].domain_name}",
@@ -616,18 +625,8 @@ resource "aws_cloudfront_distribution" "api" {
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
 
-    forwarded_values {
-      query_string = true
-      headers      = ["*"]
-
-      cookies {
-        forward = "all"
-      }
-    }
-
-    min_ttl     = 0
-    default_ttl = 0
-    max_ttl     = 0
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_and_cloudfront.id
   }
 
   restrictions {

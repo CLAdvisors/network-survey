@@ -45,6 +45,7 @@ const {
   normalizeQuestionNames,
   formatRespondentChoice,
   isTrustedStateChangingOrigin,
+  trustCloudFrontViewerProtocol,
   configuredCorsOrigins,
   buildSurveyUrl,
   displayedRespondentCountExpression,
@@ -1730,6 +1731,20 @@ test('JSON parsing accepts maximum roster requests without raising the global li
     assert.equal(ordinaryOversized.status, 413, `${method.toUpperCase()} ${path}`);
     assert.equal(ordinaryOversized.body.error, 'request_too_large');
   }
+});
+
+test('CloudFront viewer protocol is trusted only through the explicit target runtime gate', () => {
+  const disabled = { headers: { 'cloudfront-forwarded-proto': 'https', 'x-forwarded-proto': 'http' } };
+  assert.equal(trustCloudFrontViewerProtocol(disabled, {}), false);
+  assert.equal(disabled.headers['x-forwarded-proto'], 'http');
+
+  const nonHttps = { headers: { 'cloudfront-forwarded-proto': 'http', 'x-forwarded-proto': 'http' } };
+  assert.equal(trustCloudFrontViewerProtocol(nonHttps, { TRUST_CLOUDFRONT_VIEWER_PROTO: 'true' }), false);
+  assert.equal(nonHttps.headers['x-forwarded-proto'], 'http');
+
+  const trusted = { headers: { 'cloudfront-forwarded-proto': 'https', 'x-forwarded-proto': 'http' } };
+  assert.equal(trustCloudFrontViewerProtocol(trusted, { TRUST_CLOUDFRONT_VIEWER_PROTO: 'true' }), true);
+  assert.equal(trusted.headers['x-forwarded-proto'], 'https');
 });
 
 test('public signup can be disabled by ALLOW_PUBLIC_SIGNUP=false', async () => {

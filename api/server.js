@@ -323,6 +323,17 @@ app.use(cors({
 }));
 
 app.set('trust proxy', 1);
+function trustCloudFrontViewerProtocol(req, env = process.env) {
+  if (String(env.TRUST_CLOUDFRONT_VIEWER_PROTO || '').toLowerCase() !== 'true') return false;
+  const viewerProtocol = String(req.headers?.['cloudfront-forwarded-proto'] || '').trim().toLowerCase();
+  if (viewerProtocol !== 'https') return false;
+  req.headers['x-forwarded-proto'] = 'https';
+  return true;
+}
+app.use((req, res, next) => {
+  trustCloudFrontViewerProtocol(req);
+  next();
+});
 function isHostedRuntimeEnvironment(env = process.env) {
   const nodeEnvironment = String(env.NODE_ENV || '').trim().toLowerCase();
   const workerEnvironment = String(env.EMAIL_WORKER_ENV || '').trim();
@@ -3332,6 +3343,7 @@ module.exports = {
   normalizeQuestionNames,
   formatRespondentChoice,
   isTrustedStateChangingOrigin,
+  trustCloudFrontViewerProtocol,
   parseInvitationTemplateCsv,
   normalizeInvitationLanguage,
   normalizeInvitationTemplates,

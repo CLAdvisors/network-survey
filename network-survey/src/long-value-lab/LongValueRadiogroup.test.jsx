@@ -46,7 +46,7 @@ describe('LongValueRadiogroup', () => {
     view.rerender(<LongValueRadiogroup question={question} definitionVariant="panel" />);
     expect(question.value).toBe('stable-beta');
     expect(screen.getByRole('radio', { name: /Beta Selected/ })).toBeChecked();
-    expect(screen.getByRole('complementary', { name: 'Selected value definition' })).toBeInTheDocument();
+    expect(screen.getAllByRole('complementary', { name: 'Selected value definition' })).toHaveLength(2);
   });
 
   it('subscribes to external SurveyJS value changes', () => {

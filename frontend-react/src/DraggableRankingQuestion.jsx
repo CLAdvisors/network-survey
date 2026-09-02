@@ -112,12 +112,14 @@ function Item({
     >
       <div
         {...provided.dragHandleProps}
-        aria-label={`${text}. ${stateLabel}. Drag to reorder or move between lists.`}
+        aria-label={supplement
+          ? `${text}. ${stateLabel}. ${actionDisabled ? "Ranking limit reached." : "Drag to reorder or move between lists."}`
+          : undefined}
         style={{
           flex: "1 1 auto",
           minWidth: 0,
           padding: 8,
-          textAlign: "start",
+          textAlign: supplement ? "start" : "center",
           overflowWrap: "anywhere"
         }}
       >

@@ -90,9 +90,12 @@ function LabSurvey({ variant, onAnswersChange }) {
       renderQuestion(options.question, root);
     });
     instance.onValueChanged.add((sender) => onAnswersChange({ ...sender.data }));
-    onAnswersChange({ ...instance.data });
     return instance;
   });
+
+  React.useEffect(() => {
+    onAnswersChange({ ...model.data });
+  }, [model, onAnswersChange]);
 
   React.useEffect(() => {
     rootsRef.current.forEach((root, question) => renderQuestion(question, root));

@@ -85,14 +85,20 @@ describe('DefinitionExperience', () => {
 
   it('synchronizes the persistent panel without an expanded-state claim', () => {
     render(<Fixture variant="panel" />);
-    const panel = screen.getByRole('complementary', { name: 'Selected value definition' });
-    expect(panel).toHaveTextContent('Alpha <literal>');
+    const panels = screen.getAllByRole('complementary', { name: 'Selected value definition' });
+    panels.forEach((panel) => expect(panel).toHaveTextContent('Alpha <literal>'));
     const beta = screen.getByRole('button', { name: 'Show definition for Beta' });
     fireEvent.focus(beta);
-    expect(panel).toHaveTextContent('A short second definition.');
+    panels.forEach((panel) => expect(panel).toHaveTextContent('A short second definition.'));
     expect(beta).toHaveAttribute('aria-pressed', 'true');
     expect(beta).not.toHaveAttribute('aria-expanded');
-    expect(beta).toHaveAttribute('aria-controls', panel.id);
+    panels.forEach((panel) => expect(beta.getAttribute('aria-controls')).toContain(panel.id));
+  });
+
+  it('uses instance-scoped IDs when two SurveyJS questions render together', () => {
+    render(<><Fixture variant="panel" /><Fixture variant="panel" /></>);
+    const ids = screen.getAllByRole('complementary', { name: 'Selected value definition' }).map((panel) => panel.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('opens a searchable glossary by click, filters safely, traps edge focus, and closes with Escape', async () => {
@@ -110,5 +116,10 @@ describe('DefinitionExperience', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await waitFor(() => expect(beta).toHaveFocus());
+
+    const launcher = screen.getByRole('button', { name: 'Open searchable glossary (2)' });
+    fireEvent.click(launcher);
+    fireEvent.click(screen.getByRole('button', { name: 'Close glossary' }));
+    await waitFor(() => expect(launcher).toHaveFocus());
   });
 });

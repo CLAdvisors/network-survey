@@ -30,8 +30,9 @@ export function DefinitionExperience({ variant, choices, children }) {
   const [pinnedKey, setPinnedKey] = React.useState('');
   const [glossaryOpen, setGlossaryOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  const instanceId = React.useId().replace(/:/g, '');
   const rootRef = React.useRef(null);
-  const openerRefs = React.useRef(new Map());
+  const lastOpenerRef = React.useRef(null);
   const dialogCloseRef = React.useRef(null);
   const dialogRef = React.useRef(null);
 
@@ -57,11 +58,12 @@ export function DefinitionExperience({ variant, choices, children }) {
     if (glossaryOpen) dialogCloseRef.current?.focus();
   }, [glossaryOpen]);
 
-  const closeAll = React.useCallback((restoreKey = '') => {
+  const closeAll = React.useCallback((restoreFocus = true) => {
     setOpenKeys(new Set());
     setPinnedKey('');
     setGlossaryOpen(false);
-    if (restoreKey) requestAnimationFrame(() => openerRefs.current.get(restoreKey)?.focus());
+    const opener = lastOpenerRef.current;
+    if (restoreFocus && opener) requestAnimationFrame(() => opener.focus());
   }, []);
 
   const handleRootKeyDown = (event) => {
@@ -82,7 +84,7 @@ export function DefinitionExperience({ variant, choices, children }) {
     if (!openKeys.size && !glossaryOpen) return;
     event.preventDefault();
     event.stopPropagation();
-    closeAll(activeKey);
+    closeAll();
   };
 
   const openTransient = (key) => {
@@ -117,13 +119,12 @@ export function DefinitionExperience({ variant, choices, children }) {
     if (!definition) return null;
     const expanded = variant === 'panel' ? activeKey === key : variant === 'glossary' ? glossaryOpen && activeKey === key : openKeys.has(key);
     const detailsId = variant === 'panel'
-      ? 'lv-panel-details'
-      : `lv-${variant}-${availableChoices.findIndex((candidate) => keyFor(candidate) === key)}-details`;
+      ? `${instanceId}-lv-panel-details-mobile ${instanceId}-lv-panel-details-desktop`
+      : `${instanceId}-lv-${variant}-${availableChoices.findIndex((candidate) => keyFor(candidate) === key)}-details`;
     const buttonLabel = variant === 'glossary' ? `Preview ${label} in glossary` : `Show definition for ${label}`;
     return (
       <React.Fragment key={`${variant}-${key}`}>
         <button
-          ref={(node) => node ? openerRefs.current.set(key, node) : openerRefs.current.delete(key)}
           type="button"
           className={`lv-definition-button${expanded ? ' is-active' : ''}`}
           aria-label={buttonLabel}
@@ -138,14 +139,16 @@ export function DefinitionExperience({ variant, choices, children }) {
             event.stopPropagation();
             if (event.key === 'Escape' && (openKeys.size || glossaryOpen)) {
               event.preventDefault();
-              closeAll(key);
+              closeAll();
             }
           }}
-          onMouseEnter={() => {
+          onMouseEnter={(event) => {
+            lastOpenerRef.current = event.currentTarget;
             setActiveKey(key);
             if (variant === 'popover') openTransient(key);
           }}
-          onFocus={() => {
+          onFocus={(event) => {
+            lastOpenerRef.current = event.currentTarget;
             setActiveKey(key);
             if (variant === 'popover') openTransient(key);
           }}
@@ -156,6 +159,7 @@ export function DefinitionExperience({ variant, choices, children }) {
           }}
           onClick={(event) => {
             stopDefinitionEvent(event);
+            lastOpenerRef.current = event.currentTarget;
             toggle(choice);
           }}
         >
@@ -171,7 +175,7 @@ export function DefinitionExperience({ variant, choices, children }) {
             <strong>{label}</strong>
             <DefinitionText text={definition} />
             {variant === 'popover' && (
-              <button type="button" className="lv-text-button" onClick={(event) => { stopDefinitionEvent(event); closeAll(key); }}>
+              <button type="button" className="lv-text-button" onClick={(event) => { stopDefinitionEvent(event); closeAll(); }}>
                 Close definition
               </button>
             )}
@@ -189,28 +193,47 @@ export function DefinitionExperience({ variant, choices, children }) {
 
   return (
     <div ref={rootRef} className={`lv-experience lv-experience--${variant}`} onKeyDown={handleRootKeyDown}>
-      <div className="lv-experience__task">{children({ renderControl, activeKey })}</div>
+      <div className="lv-experience__task">
+        {variant === 'panel' && activeChoice && (
+          <aside id={`${instanceId}-lv-panel-details-mobile`} className="lv-detail-panel lv-detail-panel--mobile" aria-live="polite" aria-label="Selected value definition">
+            <span className="lv-eyebrow">Currently previewing</span>
+            <h3>{labelFor(activeChoice)}</h3>
+            <DefinitionText text={definitionFor(activeChoice)} />
+          </aside>
+        )}
+        {children({ renderControl, activeKey })}
+      </div>
       {variant === 'panel' && activeChoice && (
-        <aside id="lv-panel-details" className="lv-detail-panel" aria-live="polite" aria-label="Selected value definition">
+        <aside id={`${instanceId}-lv-panel-details-desktop`} className="lv-detail-panel lv-detail-panel--desktop" aria-live="polite" aria-label="Selected value definition">
           <span className="lv-eyebrow">Currently previewing</span>
           <h3>{labelFor(activeChoice)}</h3>
           <DefinitionText text={definitionFor(activeChoice)} />
         </aside>
       )}
       {variant === 'glossary' && (
-        <button type="button" className="lv-glossary-launch" onClick={() => setGlossaryOpen(true)}>
+        <button
+          type="button"
+          className="lv-glossary-launch"
+          aria-haspopup="dialog"
+          aria-expanded={glossaryOpen}
+          aria-controls={`${instanceId}-lv-glossary-dialog`}
+          onClick={(event) => {
+            lastOpenerRef.current = event.currentTarget;
+            setGlossaryOpen(true);
+          }}
+        >
           Open searchable glossary ({availableChoices.length})
         </button>
       )}
       {variant === 'glossary' && glossaryOpen && (
-        <div className="lv-dialog-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeAll(activeKey); }}>
-          <section ref={dialogRef} className="lv-dialog" role="dialog" aria-modal="true" aria-labelledby="lv-glossary-title">
+        <div className="lv-dialog-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeAll(); }}>
+          <section id={`${instanceId}-lv-glossary-dialog`} ref={dialogRef} className="lv-dialog" role="dialog" aria-modal="true" aria-labelledby={`${instanceId}-lv-glossary-title`}>
             <header>
               <div>
                 <span className="lv-eyebrow">Preview before deciding</span>
-                <h2 id="lv-glossary-title">Value glossary</h2>
+                <h2 id={`${instanceId}-lv-glossary-title`}>Value glossary</h2>
               </div>
-              <button ref={dialogCloseRef} type="button" className="lv-dialog-close" aria-label="Close glossary" onClick={() => closeAll(activeKey)}>×</button>
+              <button ref={dialogCloseRef} type="button" className="lv-dialog-close" aria-label="Close glossary" onClick={() => closeAll()}>×</button>
             </header>
             <label className="lv-glossary-search">
               <span>Search labels and definitions</span>
@@ -219,7 +242,7 @@ export function DefinitionExperience({ variant, choices, children }) {
             <div className="lv-glossary-results" aria-live="polite">
               <span className="lv-result-count">{filteredChoices.length} definitions</span>
               {filteredChoices.map((choice) => (
-                <article key={keyFor(choice)} id={`lv-glossary-${availableChoices.indexOf(choice)}-details`} className={keyFor(choice) === activeKey ? 'is-target' : ''}>
+                <article key={keyFor(choice)} id={`${instanceId}-lv-glossary-${availableChoices.indexOf(choice)}-details`} className={keyFor(choice) === activeKey ? 'is-target' : ''}>
                   <h3>{labelFor(choice)}</h3>
                   <DefinitionText text={definitionFor(choice)} />
                 </article>

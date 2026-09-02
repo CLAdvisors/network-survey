@@ -150,6 +150,8 @@
   cursor: pointer;
 }
 
+.lv-detail-panel--mobile { display: none; }
+
 .lv-detail-panel {
   position: sticky;
   top: 12px;
@@ -302,7 +304,9 @@
 @container (max-width: 599px) {
   .lv-preview .cla-survey-runtime { padding: 8px; }
   .lv-preview .sd-question.sd-element--with-frame { padding: 14px 0; border-inline: 0; border-radius: 0; box-shadow: none; }
-  .lv-experience--panel { display: flex; flex-direction: column-reverse; }
+  .lv-experience--panel { display: block; }
+  .lv-detail-panel--desktop { display: none; }
+  .lv-detail-panel--mobile { display: block; margin-bottom: 12px; }
   .lv-detail-panel { position: static; width: 100%; max-height: none; }
   .lv-definition-button { flex-basis: 44px; }
   .lv-preview-banner { padding: 12px; }

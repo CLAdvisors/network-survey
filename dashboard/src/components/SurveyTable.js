@@ -31,6 +31,12 @@ export const surveyTableSx = {
     fontWeight: 700,
   },
   '@media (hover: none)': {
+    '& .MuiDataGrid-columnHeader:hover': {
+      backgroundColor: 'inherit',
+    },
+    '& .MuiDataGrid-row:hover': {
+      backgroundColor: 'transparent',
+    },
     '& .MuiDataGrid-row.Mui-selected:hover': {
       backgroundColor: (theme) => alpha(theme.palette.primary.dark, theme.palette.action.selectedOpacity),
     },

@@ -83,6 +83,8 @@ test('keeps selected-row indicators visible across horizontal scroll, hover, foc
   const selectedCellStyle = surveyTableSx['& .MuiDataGrid-row.Mui-selected .MuiDataGrid-cell'];
   expect(selectedStyle.boxShadow(theme)).toContain('inset 4px 0 0 #333333');
   expect(selectedStyle.backgroundColor(theme)).not.toBe(selectedHoverStyle.backgroundColor(theme));
+  expect(surveyTableSx['@media (hover: none)']['& .MuiDataGrid-columnHeader:hover'].backgroundColor).toBe('inherit');
+  expect(surveyTableSx['@media (hover: none)']['& .MuiDataGrid-row:hover'].backgroundColor).toBe('transparent');
   expect(surveyTableSx['@media (hover: none)']['& .MuiDataGrid-row.Mui-selected:hover'].backgroundColor(theme)).toBe(selectedStyle.backgroundColor(theme));
   expect(selectedFocusStyle.outline(theme)).toBe(`2px solid ${theme.palette.text.primary}`);
   expect(selectedCellStyle.boxShadow(theme)).toBe('inset 0 2px 0 #333333, inset 0 -2px 0 #333333');

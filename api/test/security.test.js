@@ -51,6 +51,7 @@ const {
   isLegacyPlaceholderRespondent,
   surveySummaryRespondentCount,
   surveyResponseSummary,
+  RESPONSE_JSON_LIMIT,
 } = require('../server');
 const { displayedRespondentPredicate } = require('../respondent-utils');
 
@@ -1014,6 +1015,36 @@ test('authenticated question update rejects nested, unknown, and invalid-identit
   assert.deepEqual(validResponse.body.questions.elements.map(({ name }) => name), ['question_1', 'question_2', 'question_3']);
   assert.equal(validResponse.body.questions.elements[2].visibleIf,
     '{question_1.Column 1} notempty and {question_3} empty');
+
+  // Exercise the real session/origin/parser/authorization route stack with the
+  // largest definition-feature shape allowed by all aggregate validators.
+  const maximumSchema = {
+    elements: Array.from({ length: 10 }, (_, questionIndex) => ({
+      type: 'draggableranking',
+      name: `maximum_${questionIndex}`,
+      choices: Array.from({ length: 100 }, (_, choiceIndex) => {
+        const prefix = `${questionIndex}-${choiceIndex}-`;
+        return {
+          value: prefix + '😀'.repeat(128 - [...prefix].length),
+          text: '😀'.repeat(240),
+          definition: 'd'.repeat(250),
+        };
+      }),
+    })),
+  };
+  const maximumPayload = { surveyName: 'Survey A', questions: maximumSchema };
+  assert.ok(Buffer.byteLength(JSON.stringify(maximumPayload)) > 1024 * 1024);
+  const maximumResponse = await agent.post('/api/updateQuestions').send(maximumPayload);
+  assert.equal(maximumResponse.status, 200);
+  assert.equal(maximumResponse.body.questions.elements.length, 10);
+
+  const oversizedResponse = await agent.post('/api/updateQuestions')
+    .send({ padding: 'x'.repeat(3 * 1024 * 1024) });
+  assert.equal(oversizedResponse.status, 413);
+  assert.deepEqual(oversizedResponse.body, {
+    error: 'request_too_large',
+    message: 'Request body exceeds the allowed size.',
+  });
 });
 
 test('authenticated question updates allocate above historical response keys for object and CSV payloads', async (t) => {
@@ -1247,6 +1278,79 @@ test('/api/user enforces required answers and accepts omitted optional answers',
   assert.equal(persisted[0].values[0].question_5, undefined, 'hidden required answer may be omitted');
   assert.equal(typeof persisted[0].values[0].timeStamp, 'string');
   assert.equal(queryCalls.filter(({ sql }) => /SELECT questions FROM Survey/.test(sql)).length, 0, 'schema reads use the locked submission transaction, not the pool');
+});
+
+test('/api/user accepts the maximum definition-enabled ranking response above 100 KiB', async (t) => {
+  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+  t.after(() => {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  });
+
+  assert.equal(RESPONSE_JSON_LIMIT, '1mb');
+  const elements = Array.from({ length: 10 }, (_, questionIndex) => ({
+    type: 'draggableranking',
+    name: `question_${questionIndex + 1}`,
+    isRequired: true,
+    choices: Array.from({ length: 100 }, (_, choiceIndex) => {
+      const prefix = `${questionIndex}-${choiceIndex}-`;
+      return {
+        value: prefix + '\\'.repeat(128 - prefix.length),
+        text: `Choice ${questionIndex + 1}-${choiceIndex + 1}`,
+        definition: 'Definition',
+      };
+    }),
+  }));
+  const schema = validateSurveyDefinition({ elements });
+  const answers = Object.fromEntries(elements.map((element) => [
+    element.name,
+    element.choices.map((choice) => choice.value),
+  ]));
+  const payload = {
+    surveyName: 'Large Response Survey',
+    userId: 'large-response-token',
+    answers: JSON.stringify(answers, null, 3),
+  };
+  const payloadBytes = Buffer.byteLength(JSON.stringify(payload));
+  assert.ok(payloadBytes > 100 * 1024, `expected more than 100 KiB, received ${payloadBytes} bytes`);
+  assert.ok(payloadBytes < 1024 * 1024, `expected less than 1 MiB, received ${payloadBytes} bytes`);
+
+  pool.query = async (sql) => {
+    if (/FROM Respondent r/.test(sql)) {
+      return { rows: [{
+        respondent_id: 92,
+        response: null,
+        can_respond: true,
+        survey_id: 'survey-large-response-id',
+      }] };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  let persisted;
+  pool.connect = async () => ({
+    query: async (sql, values) => {
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (/FROM Respondent r[\s\S]+JOIN Survey s/.test(sql)) {
+        return { rows: [{ respondent_id: 92, response: null, can_respond: true, survey_id: 'survey-large-response-id' }] };
+      }
+      if (/SELECT questions FROM Survey/.test(sql)) return { rows: [{ questions: schema }] };
+      if (/UPDATE respondent SET response/.test(sql)) {
+        persisted = values[0];
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error(`Unexpected transaction query: ${sql}`);
+    },
+    release() {},
+  });
+
+  const response = await request(app).post('/api/user').send(payload);
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { success: true });
+  assert.deepEqual(persisted.question_10, answers.question_10);
 });
 
 test('/api/user rejects nested required omissions and answer constraints before persistence', async (t) => {
@@ -1493,6 +1597,26 @@ test('/api/user returns a client error for malformed or non-object answers', asy
   assert.equal(arrayAnswers.status, 400);
   assert.equal(arrayAnswers.body.message, 'Invalid survey responses.');
   assert.deepEqual(arrayAnswers.body.errors, ['Answers must be an object.']);
+
+  for (const answers of [
+    { q: 'before\0after' },
+    { q: 'before\uD800after' },
+    { ['bad\0key']: 'value' },
+  ]) {
+    const incompatible = await request(app)
+      .post('/api/user')
+      .send({ surveyName: 'Survey A', userId: 'valid-token', answers: JSON.stringify(answers) });
+    assert.equal(incompatible.status, 400);
+    assert.match(incompatible.body.errors[0], /PostgreSQL JSONB cannot store/);
+  }
+
+  let deeplyNested = 'leaf';
+  for (let depth = 0; depth <= 100; depth += 1) deeplyNested = { nested: deeplyNested };
+  const excessiveDepth = await request(app)
+    .post('/api/user')
+    .send({ surveyName: 'Survey A', userId: 'valid-token', answers: JSON.stringify({ q: deeplyNested }) });
+  assert.equal(excessiveDepth.status, 400);
+  assert.match(excessiveDepth.body.errors[0], /nesting limit/);
   assert.equal(schemaQueries, 0, 'invalid answer envelopes must fail before loading the schema');
 });
 
@@ -1717,18 +1841,20 @@ test('JSON parsing accepts maximum roster requests without raising the global li
   const oversizedRoster = await request(app)
     .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
     .send({ padding: 'x'.repeat(3 * 1024 * 1024) });
-  assert.equal(oversizedRoster.status, 413);
-  assert.deepEqual(oversizedRoster.body, {
-    error: 'request_too_large',
-    message: 'Request body exceeds the allowed size.',
-  });
+  assert.equal(oversizedRoster.status, 401);
+  assert.deepEqual(oversizedRoster.body, { error: 'Unauthorized' });
 
-  for (const [method, path] of [['post', '/api/login'], ['post', '/api/user']]) {
-    const ordinaryOversized = await request(app)[method](path)
-      .send({ padding: 'x'.repeat(150 * 1024) });
-    assert.equal(ordinaryOversized.status, 413, `${method.toUpperCase()} ${path}`);
-    assert.equal(ordinaryOversized.body.error, 'request_too_large');
-  }
+  const ordinaryOversized = await request(app)
+    .post('/api/login')
+    .send({ padding: 'x'.repeat(150 * 1024) });
+  assert.equal(ordinaryOversized.status, 413);
+  assert.equal(ordinaryOversized.body.error, 'request_too_large');
+
+  const responseOversized = await request(app)
+    .post('/api/user')
+    .send({ padding: 'x'.repeat(1024 * 1024) });
+  assert.equal(responseOversized.status, 413);
+  assert.equal(responseOversized.body.error, 'request_too_large');
 });
 
 test('public signup can be disabled by ALLOW_PUBLIC_SIGNUP=false', async () => {

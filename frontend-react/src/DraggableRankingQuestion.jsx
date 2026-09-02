@@ -55,6 +55,7 @@ const normalizeChoice = (choice) => {
     ? extractValue(choice.value)
     : extractValue(choice);
   return {
+    source: choice,
     value,
     text: getChoiceText(choice, value),
     key: getValueKey(value)
@@ -64,6 +65,7 @@ const normalizeChoice = (choice) => {
 const buildChoiceFromValue = (value) => {
   const plain = extractValue(value);
   return {
+    source: null,
     value: plain,
     text: getChoiceText(null, plain),
     key: getValueKey(plain)
@@ -85,13 +87,43 @@ function Item({
   actionLabel,
   onAction,
   actionButtonRef,
-  actionDisabled = false
+  actionDisabled = false,
+  supplement,
+  stateLabel,
+  choiceContainerProps
 }) {
   const text = item.text ?? (item.value !== undefined ? String(item.value) : "");
+  const choiceAction = (
+    <button
+      ref={actionButtonRef}
+      type="button"
+      onClick={onAction}
+      disabled={actionDisabled}
+      aria-label={`${actionLabel}: ${text}`}
+      style={{
+        flex: "0 0 auto",
+        minWidth: 52,
+        minHeight: 44,
+        border: 0,
+        borderInlineStart: `1px solid ${colors.primaryBorder}`,
+        background: "transparent",
+        color: actionDisabled ? colors.disabled : colors.primary,
+        cursor: actionDisabled ? "not-allowed" : "pointer",
+        font: "inherit",
+        fontWeight: 600,
+        padding: "8px 10px"
+      }}
+    >
+      {actionLabel}
+    </button>
+  );
+  const supplementOwnsAction = React.isValidElement(supplement) &&
+    supplement.type?.rendersChoiceAction === true;
   return (
     <div
       ref={provided.innerRef}
       {...provided.draggableProps}
+      {...choiceContainerProps}
       style={{
         userSelect: "none",
         margin: "0 0 8px 0",
@@ -101,43 +133,32 @@ function Item({
         borderRadius: 4,
         minWidth: 80,
         display: "flex",
+        flexWrap: supplement ? "wrap" : "nowrap",
         alignItems: "stretch",
         ...provided.draggableProps.style
       }}
     >
       <div
         {...provided.dragHandleProps}
+        aria-label={supplement
+          ? `${text}. ${stateLabel}. ${actionDisabled ? "Ranking limit reached." : "Drag to reorder or move between lists."}`
+          : undefined}
         style={{
-          flex: "1 1 auto",
+          // A zero flex basis keeps long labels from claiming the action buttons'
+          // row; the label wraps inside the remaining space instead.
+          flex: supplement ? "1 1 0" : "1 1 auto",
           minWidth: 0,
           padding: 8,
-          textAlign: "center",
+          textAlign: supplement ? "start" : "center",
           overflowWrap: "anywhere"
         }}
       >
         {text}
       </div>
-      <button
-        ref={actionButtonRef}
-        type="button"
-        onClick={onAction}
-        disabled={actionDisabled}
-        aria-label={`${actionLabel}: ${text}`}
-        style={{
-          flex: "0 0 auto",
-          minWidth: 52,
-          border: 0,
-          borderInlineStart: `1px solid ${colors.primaryBorder}`,
-          background: "transparent",
-          color: actionDisabled ? colors.disabled : colors.primary,
-          cursor: actionDisabled ? "not-allowed" : "pointer",
-          font: "inherit",
-          fontWeight: 600,
-          padding: "8px 10px"
-        }}
-      >
-        {actionLabel}
-      </button>
+      {supplementOwnsAction
+        ? React.cloneElement(supplement, { choiceAction })
+        : supplement}
+      {!supplementOwnsAction && choiceAction}
     </div>
   );
 }
@@ -147,7 +168,9 @@ export default function DraggableRankingQuestion({
   value,
   onChange,
   availableDirection = "horizontal",
-  valueSource = "prop"
+  valueSource = "prop",
+  renderChoiceSupplement,
+  getChoiceContainerProps
 }) {
   const [ranked, setRanked] = React.useState([]);
   const [available, setAvailable] = React.useState([]);
@@ -358,6 +381,17 @@ export default function DraggableRankingQuestion({
                         actionLabel="Unrank"
                         actionButtonRef={(node) => setActionButtonRef("ranked", item.key, node)}
                         onAction={() => unrankItem(index)}
+                        stateLabel={`Ranked position ${index + 1}`}
+                        supplement={renderChoiceSupplement?.(item, {
+                          list: "ranked",
+                          isAssigned: true,
+                          position: index + 1
+                        })}
+                        choiceContainerProps={getChoiceContainerProps?.(item, {
+                          list: "ranked",
+                          isAssigned: true,
+                          position: index + 1
+                        })}
                       />
                     )}
                   </Draggable>
@@ -407,6 +441,17 @@ export default function DraggableRankingQuestion({
                         actionButtonRef={(node) => setActionButtonRef("available", item.key, node)}
                         actionDisabled={isLimitReached}
                         onAction={() => rankAvailableItem(index)}
+                        stateLabel="Available, not ranked"
+                        supplement={renderChoiceSupplement?.(item, {
+                          list: "available",
+                          isAssigned: false,
+                          position: null
+                        })}
+                        choiceContainerProps={getChoiceContainerProps?.(item, {
+                          list: "available",
+                          isAssigned: false,
+                          position: null
+                        })}
                       />
                     )}
                   </Draggable>

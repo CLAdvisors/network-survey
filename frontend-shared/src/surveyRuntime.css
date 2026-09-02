@@ -15,6 +15,8 @@
   background: transparent;
 }
 
+.cla-survey-runtime.sd-root-modern,
+.cla-survey-runtime.sv-root-modern,
 .cla-survey-runtime .sd-root-modern,
 .cla-survey-runtime .sv-root-modern {
   --sv-element-add-padding-right: 0;
@@ -23,6 +25,7 @@
 }
 
 /* Remove only the runtime page surfaces, not Creator surfaces. */
+.cla-survey-runtime.sd-root-modern,
 .cla-survey-runtime .sd-root-modern,
 .cla-survey-runtime .sd-body,
 .cla-survey-runtime .sd-container-modern,
@@ -264,6 +267,107 @@
 
 .cla-survey-runtime .sd-rating__item {
   border-radius: 50%;
+}
+
+/* Explicit Info-button choice definitions for production draggable ranking. */
+.cla-survey-runtime .draggable-ranking-host {
+  container-type: inline-size;
+}
+
+.cla-survey-runtime .cla-choice-definition__button,
+.cla-survey-runtime .cla-choice-definition__close {
+  box-sizing: border-box;
+  min-height: 44px;
+  border: 0;
+  color: var(--survey-primary, #176f69);
+  background: #f1faf8;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.cla-survey-runtime .cla-choice-definition__action {
+  display: contents;
+}
+
+.cla-survey-runtime .cla-choice-definition__button {
+  flex: 0 0 52px;
+  width: 52px;
+  align-self: stretch;
+  border-inline-start: 1px solid var(--survey-primary-border, #b2ebf2);
+  padding: 8px 6px;
+}
+
+.cla-survey-runtime .cla-choice-definition__button:hover,
+.cla-survey-runtime .cla-choice-definition__button.is-active {
+  background: #dff3f0;
+}
+
+.cla-survey-runtime .cla-choice-definition__button:focus-visible,
+.cla-survey-runtime .cla-choice-definition__close:focus-visible {
+  outline: 3px solid #8a4fff;
+  outline-offset: -3px;
+}
+
+.cla-survey-runtime .cla-choice-definition__callout {
+  order: 5;
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 12px;
+  border-block-start: 1px solid #b7dcd8;
+  border-inline-start: 4px solid var(--survey-primary, #42b4af);
+  color: #243331;
+  background: #f5fbfa;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cla-survey-runtime .cla-choice-definition__callout > strong {
+  display: block;
+  margin-block-end: 8px;
+}
+
+.cla-survey-runtime .cla-choice-definition__text,
+.cla-survey-runtime .cla-choice-definition__text p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cla-survey-runtime .cla-choice-definition__text p {
+  margin: 0 0 0.8em;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.cla-survey-runtime .cla-choice-definition__text p:last-child {
+  margin-block-end: 0;
+}
+
+.cla-survey-runtime .cla-choice-definition__close {
+  margin-block-start: 8px;
+  padding: 8px 10px;
+  text-decoration: underline;
+}
+
+@container (max-width: 320px) {
+  .cla-survey-runtime .cla-choice-definition__button {
+    flex-basis: 48px;
+    width: 48px;
+  }
+
+  .cla-survey-runtime .cla-choice-definition__callout {
+    padding: 10px 8px;
+  }
+}
+
+@media (forced-colors: active) {
+  .cla-survey-runtime .cla-choice-definition__button,
+  .cla-survey-runtime .cla-choice-definition__close,
+  .cla-survey-runtime .cla-choice-definition__callout {
+    border: 1px solid ButtonText;
+  }
 }
 
 /* Preserve the responsive tagbox and custom-ranking behavior. */

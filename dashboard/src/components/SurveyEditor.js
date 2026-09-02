@@ -9,7 +9,10 @@ import api from '../api/axios';
 import { Serializer, Question, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
-import { DraggableRankingQuestion } from '@network-survey/frontend-react';
+import {
+  attachDraggableRankingRenderer,
+  DraggableRankingQuestion,
+} from '@network-survey/frontend-react';
 import {
   applyProductionSurveyTheme,
   PRODUCTION_SURVEY_CLASS_NAME,
@@ -17,16 +20,24 @@ import {
   TAGBOX_PAGE_SIZE,
   TAGBOX_PLACEHOLDER
 } from '@network-survey/frontend-shared';
-import ReactDOM from 'react-dom/client';
 import {
   restrictSurveyToolbox,
   setSurveyToolboxItem,
   SUPPORTED_SURVEY_TOOLBOX_TYPES,
 } from '../utils/surveyToolbox';
 import { hideQuestionValueName } from '../utils/surveyCreatorMetadata';
+import {
+  configureDraggableRankingChoiceEditor,
+  normalizeDraggableRankingDefinitions,
+  registerDraggableRankingDefinitionMetadata,
+  validateDraggableRankingDefinitionProperty,
+} from '../utils/draggableRankingDefinitions';
 import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
 import { lifecycleLabel, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
+
+// ItemValue metadata must exist before Survey Creator constructs any choices.
+registerDraggableRankingDefinitionMetadata();
 
 // Define and register custom question class for draggableranking
 class QuestionDraggableRankingModel extends Question {
@@ -61,8 +72,6 @@ ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
     valueSource="question"
   />
 ));
-
-const draggableQuestionRoots = new WeakMap();
 
 const configureTagboxPropertyMetadata = (() => {
   let configured = false;
@@ -193,19 +202,9 @@ const normalizeTagboxElements = (elements) => {
   });
 };
 
-const cleanupDraggableQuestionRoot = (question) => {
-  if (!question) return;
-  const root = draggableQuestionRoots.get(question);
-  if (root) {
-    root.unmount();
-    draggableQuestionRoots.delete(question);
-  }
-};
-
 const cleanupDraggableSurveyRoots = (survey) => {
   if (!survey || typeof survey.getAllQuestions !== 'function') return;
   survey.getAllQuestions().forEach((question) => {
-    cleanupDraggableQuestionRoot(question);
     if (question?._claMaxSelectionWatcher && question.onPropertyChanged?.remove) {
       question.onPropertyChanged.remove(question._claMaxSelectionWatcher);
       delete question._claMaxSelectionWatcher;
@@ -283,18 +282,7 @@ const SurveyEditor = () => {
 
     const existing = surveyHooksRef.current.get(surveyModel);
     if (existing) {
-      if (existing.lazyLoadHandler) {
-        surveyModel.onChoicesLazyLoad.remove(existing.lazyLoadHandler);
-      }
-      if (existing.questionAddedHandler) {
-        surveyModel.onQuestionAdded.remove(existing.questionAddedHandler);
-      }
-      if (existing.questionRemovedHandler) {
-        surveyModel.onQuestionRemoved.remove(existing.questionRemovedHandler);
-      }
-      if (existing.afterRenderHandler) {
-        surveyModel.onAfterRenderQuestion.remove(existing.afterRenderHandler);
-      }
+      existing.cleanup?.();
       surveyHooksRef.current.delete(surveyModel);
     }
 
@@ -308,7 +296,6 @@ const SurveyEditor = () => {
 
     const questionRemovedHandler = (_, options) => {
       if (options?.question) {
-        cleanupDraggableQuestionRoot(options.question);
         if (options.question._claMaxSelectionWatcher && options.question.onPropertyChanged?.remove) {
           options.question.onPropertyChanged.remove(options.question._claMaxSelectionWatcher);
           delete options.question._claMaxSelectionWatcher;
@@ -355,58 +342,23 @@ const SurveyEditor = () => {
     surveyModel.onQuestionAdded.add(questionAddedHandler);
     surveyModel.onQuestionRemoved.add(questionRemovedHandler);
 
-    let afterRenderHandler = null;
-    if (context !== 'designer') {
-      afterRenderHandler = (survey, options) => {
-        if (!options?.question || options.question.getType() !== 'draggableranking') {
-          return;
-        }
-
-        const contentElement =
-          options.htmlElement?.querySelector?.('.sd-question__content') || options.htmlElement;
-        if (!contentElement) {
-          return;
-        }
-
-        cleanupDraggableQuestionRoot(options.question);
-
-        const container = document.createElement('div');
-        container.className = 'draggable-ranking-host';
-        contentElement.innerHTML = '';
-        contentElement.appendChild(container);
-
-        if (!options.question.title && options.question.name) {
-          options.question.title = options.question.name;
-        }
-
-        const root = ReactDOM.createRoot(container);
-        draggableQuestionRoots.set(options.question, root);
-        root.render(
-          <DraggableRankingQuestion
-            question={options.question}
-            value={options.question.value || []}
-            onChange={(val) => (options.question.value = val)}
-            valueSource="question"
-          />
-        );
-      };
-      surveyModel.onAfterRenderQuestion.add(afterRenderHandler);
-    }
+    // Creator's Preview tab and the custom Demo Survey intentionally share the
+    // exact production renderer used by the respondent application.
+    const disposeDraggableRenderer = context === 'designer'
+      ? null
+      : attachDraggableRankingRenderer(surveyModel);
 
     const cleanup = () => {
       surveyModel.onChoicesLazyLoad.remove(lazyLoadHandler);
       surveyModel.onQuestionAdded.remove(questionAddedHandler);
       surveyModel.onQuestionRemoved.remove(questionRemovedHandler);
-      if (afterRenderHandler) {
-        surveyModel.onAfterRenderQuestion.remove(afterRenderHandler);
-      }
+      disposeDraggableRenderer?.();
     };
 
     surveyHooksRef.current.set(surveyModel, {
       lazyLoadHandler,
       questionAddedHandler,
       questionRemovedHandler,
-      afterRenderHandler,
       cleanup,
       context
     });
@@ -428,6 +380,8 @@ const SurveyEditor = () => {
   };
   if (!creatorRef.current) {
     creatorRef.current = new SurveyCreator(creatorOptions);
+    creatorRef.current.onSetPropertyEditorOptions.add(configureDraggableRankingChoiceEditor);
+    creatorRef.current.onPropertyDisplayCustomError.add(validateDraggableRankingDefinitionProperty);
     // Add custom draggable-ranking question with a JSON template. Remove any
     // generated item first so the custom item appears exactly once.
     setSurveyToolboxItem(creatorRef.current.toolbox, {
@@ -474,7 +428,7 @@ const SurveyEditor = () => {
     const flatSchema = serializeFlatSurveySchema(rawJson);
     return {
       ...flatSchema,
-      elements: normalizeTagboxElements(flatSchema.elements)
+      elements: normalizeDraggableRankingDefinitions(normalizeTagboxElements(flatSchema.elements))
     };
   }, [creator]);
 

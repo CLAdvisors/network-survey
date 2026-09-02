@@ -139,6 +139,7 @@ function Item({
         style={{
           flex: "0 0 auto",
           minWidth: 52,
+          minHeight: 44,
           border: 0,
           borderInlineStart: `1px solid ${colors.primaryBorder}`,
           background: "transparent",

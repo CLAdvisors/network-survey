@@ -278,9 +278,13 @@ function prepareSurveyForDemo(value) {
 // Resend signatures cover the exact bytes; this route must precede JSON parsing.
 app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '256kb' }), createResendWebhookHandler({ pool, env: process.env }));
 const rosterJsonParser = express.json({ limit: '3mb' });
+const questionDefinitionJsonParser = express.json({ limit: '1mb' });
 app.patch('/api/surveys/:surveyId/respondents', rosterJsonParser);
 app.post('/api/updateTargets', rosterJsonParser);
 app.delete('/api/user', rosterJsonParser);
+// Long literal definitions can exceed Express's 100 KiB default, but only the
+// question-authoring endpoint needs the larger request budget.
+app.post('/api/updateQuestions', questionDefinitionJsonParser);
 app.use(express.json());
 app.use((error, req, res, next) => {
   if (error?.type === 'entity.too.large') {
@@ -1495,6 +1499,9 @@ function validateItemDefinitions(items, label, { requireObjects = false } = {}) 
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error(`${label} item ${index + 1} is malformed.`);
     }
+    if (Object.prototype.hasOwnProperty.call(item, 'definition')) {
+      throw new Error(`${label} item ${index + 1} defines unsupported property definition; only draggableranking choices may define it.`);
+    }
     const hasValue = Object.prototype.hasOwnProperty.call(item, 'value');
     if (hasValue && !isPrimitiveDefinitionValue(item.value)) {
       throw new Error(`${label} item ${index + 1} value must be primitive.`);
@@ -1504,6 +1511,115 @@ function validateItemDefinitions(items, label, { requireObjects = false } = {}) 
     if (!hasValue && !hasPrimitiveText) {
       throw new Error(`${label} item ${index + 1} must define a primitive value or text.`);
     }
+  });
+}
+
+const DEFINED_RANKING_LIMITS = Object.freeze({
+  choices: 100,
+  valueChars: 128,
+  valueBytes: 512,
+  textChars: 240,
+  textBytes: 1024,
+  definitionChars: 10_000,
+  definitionBytes: 40 * 1024,
+  surveyDefinitionChars: 250_000,
+  surveyDefinitionBytes: 512 * 1024,
+});
+const FORBIDDEN_LITERAL_CHARACTERS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+
+function normalizeBoundedLiteral(value, label, maxChars, maxBytes) {
+  if (typeof value !== 'string') throw new Error(`${label} must be an explicit string.`);
+  const lineNormalized = value.replace(/\r\n?/g, '\n');
+  if (FORBIDDEN_LITERAL_CHARACTERS_RE.test(lineNormalized)) {
+    throw new Error(`${label} contains a forbidden control or bidirectional formatting character.`);
+  }
+  const normalized = lineNormalized.trim();
+  if (normalized.length === 0) throw new Error(`${label} must be nonempty.`);
+  if ([...normalized].length > maxChars || Buffer.byteLength(normalized, 'utf8') > maxBytes) {
+    throw new Error(`${label} exceeds its ${maxChars}-character or ${maxBytes}-byte limit.`);
+  }
+  return normalized;
+}
+
+function rejectMisplacedDefinitions(node, label, allowDefinition = false) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    node.forEach((item, index) => rejectMisplacedDefinitions(item, `${label} item ${index + 1}`));
+    return;
+  }
+  for (const [property, value] of Object.entries(node)) {
+    if (property === 'definition') {
+      if (!allowDefinition) {
+        throw new Error(`${label} defines unsupported property definition; only draggableranking choices may define it.`);
+      }
+      continue;
+    }
+    rejectMisplacedDefinitions(value, `${label} ${property}`);
+  }
+}
+
+function normalizeDraggableRankingChoices(choices, questionLabel, definitionTotals) {
+  if (!Array.isArray(choices)) throw new Error(`${questionLabel} choices must be an array.`);
+
+  const hasDefinition = choices.some((choice) => {
+    if (!choice || typeof choice !== 'object' || Array.isArray(choice) ||
+        !Object.prototype.hasOwnProperty.call(choice, 'definition')) return false;
+    if (typeof choice.definition !== 'string') return true;
+    const lineNormalized = choice.definition.replace(/\r\n?/g, '\n');
+    return FORBIDDEN_LITERAL_CHARACTERS_RE.test(lineNormalized) || lineNormalized.trim().length > 0;
+  });
+  if (!hasDefinition) {
+    const withoutBlankDefinitions = choices.map((choice) => {
+      if (!choice || typeof choice !== 'object' || Array.isArray(choice) ||
+          !Object.prototype.hasOwnProperty.call(choice, 'definition')) return choice;
+      const normalized = { ...choice };
+      delete normalized.definition;
+      return normalized;
+    });
+    validateItemDefinitions(withoutBlankDefinitions, `${questionLabel} choices`);
+    return withoutBlankDefinitions;
+  }
+  if (choices.length > DEFINED_RANKING_LIMITS.choices) {
+    throw new Error(`${questionLabel} with definitions may contain at most ${DEFINED_RANKING_LIMITS.choices} choices.`);
+  }
+
+  const values = new Set();
+  return choices.map((choice, index) => {
+    const label = `${questionLabel} choice ${index + 1}`;
+    if (!choice || typeof choice !== 'object' || Array.isArray(choice)) {
+      throw new Error(`${label} must explicitly define string value and text properties when any definition is present.`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(choice, 'value') ||
+        !Object.prototype.hasOwnProperty.call(choice, 'text')) {
+      throw new Error(`${label} must explicitly define string value and text properties when any definition is present.`);
+    }
+    const value = normalizeBoundedLiteral(
+      choice.value, `${label} value`, DEFINED_RANKING_LIMITS.valueChars, DEFINED_RANKING_LIMITS.valueBytes);
+    const text = normalizeBoundedLiteral(
+      choice.text, `${label} text`, DEFINED_RANKING_LIMITS.textChars, DEFINED_RANKING_LIMITS.textBytes);
+    if (values.has(value)) throw new Error(`${questionLabel} choice values must be unique: ${value}.`);
+    values.add(value);
+
+    const normalized = { ...choice, value, text };
+    if (Object.prototype.hasOwnProperty.call(choice, 'definition')) {
+      if (typeof choice.definition !== 'string') {
+        throw new Error(`${label} definition must be a literal string when present.`);
+      }
+      const lineNormalized = choice.definition.replace(/\r\n?/g, '\n');
+      if (FORBIDDEN_LITERAL_CHARACTERS_RE.test(lineNormalized)) {
+        throw new Error(`${label} definition contains a forbidden control or bidirectional formatting character.`);
+      }
+      if (lineNormalized.trim().length === 0) {
+        delete normalized.definition;
+      } else {
+        normalized.definition = normalizeBoundedLiteral(
+          choice.definition, `${label} definition`,
+          DEFINED_RANKING_LIMITS.definitionChars, DEFINED_RANKING_LIMITS.definitionBytes);
+        definitionTotals.chars += [...normalized.definition].length;
+        definitionTotals.bytes += Buffer.byteLength(normalized.definition, 'utf8');
+      }
+    }
+    return normalized;
   });
 }
 
@@ -1595,13 +1711,33 @@ function validateSurveyDefinition(json) {
   if (json.elements.length > 200) {
     throw new Error('A survey may contain at most 200 questions.');
   }
+  for (const [property, value] of Object.entries(json)) {
+    if (property === 'elements') continue;
+    if (property === 'definition') {
+      throw new Error('Survey defines unsupported property definition; only draggableranking choices may define it.');
+    }
+    rejectMisplacedDefinitions(value, `Survey ${property}`);
+  }
 
   const questionNames = new Set();
-  return {
+  const definitionTotals = { chars: 0, bytes: 0 };
+  const normalized = {
     ...json,
     elements: json.elements.map((element, index) => {
       if (!element || typeof element !== 'object' || Array.isArray(element)) {
         throw new Error(`Question ${index + 1} must be an object.`);
+      }
+      const questionLabel = `Question ${index + 1}`;
+      for (const [property, value] of Object.entries(element)) {
+        if (property === 'definition') {
+          throw new Error(`${questionLabel} defines unsupported property definition; only draggableranking choices may define it.`);
+        }
+        if (property === 'choices' && element.type === 'draggableranking' && Array.isArray(value)) {
+          value.forEach((choice, choiceIndex) =>
+            rejectMisplacedDefinitions(choice, `${questionLabel} choice ${choiceIndex + 1}`, true));
+        } else {
+          rejectMisplacedDefinitions(value, `${questionLabel} ${property}`);
+        }
       }
       if (typeof element.type !== 'string' || !/^[a-z][a-z0-9-]{0,99}$/i.test(element.type)) {
         throw new Error(`Question ${index + 1} has an invalid type.`);
@@ -1643,11 +1779,14 @@ function validateSurveyDefinition(json) {
         throw new Error(`Question ${index + 1} required must be true or false.`);
       }
 
-      const questionLabel = `Question ${index + 1}`;
-      for (const property of ['choices', 'rateValues']) {
-        if (element[property] !== undefined) {
-          validateItemDefinitions(element[property], `${questionLabel} ${property}`);
-        }
+      let normalizedChoices = element.choices;
+      if (element.type === 'draggableranking' && element.choices !== undefined) {
+        normalizedChoices = normalizeDraggableRankingChoices(element.choices, questionLabel, definitionTotals);
+      } else if (element.choices !== undefined) {
+        validateItemDefinitions(element.choices, `${questionLabel} choices`);
+      }
+      if (element.rateValues !== undefined) {
+        validateItemDefinitions(element.rateValues, `${questionLabel} rateValues`);
       }
       for (const property of ['otherItemValue', 'noneItemValue', 'refuseItemValue', 'dontKnowItemValue']) {
         if (element[property] !== undefined && !isPrimitiveDefinitionValue(element[property])) {
@@ -1684,9 +1823,18 @@ function validateSurveyDefinition(json) {
         validateMultipleTextItems(element.items, questionLabel);
       }
       // Materialize SurveyJS's false default, making the persisted contract explicit.
-      return { ...element, isRequired: element.isRequired === true };
+      return {
+        ...element,
+        ...(element.choices !== undefined ? { choices: normalizedChoices } : {}),
+        isRequired: element.isRequired === true,
+      };
     })
   };
+  if (definitionTotals.chars > DEFINED_RANKING_LIMITS.surveyDefinitionChars ||
+      definitionTotals.bytes > DEFINED_RANKING_LIMITS.surveyDefinitionBytes) {
+    throw new Error(`Survey choice definitions exceed the ${DEFINED_RANKING_LIMITS.surveyDefinitionChars}-character or ${DEFINED_RANKING_LIMITS.surveyDefinitionBytes}-byte aggregate limit.`);
+  }
+  return normalized;
 }
 
 function isEmptyAnswer(value) {
@@ -3322,6 +3470,7 @@ module.exports = {
   csvToJson,
   NESTED_QUESTIONS_UNSUPPORTED_MESSAGE,
   SUPPORTED_QUESTION_TYPES,
+  DEFINED_RANKING_LIMITS,
   validateSurveyDefinition,
   validateRequiredAnswers,
   normalizeQuestionNames,

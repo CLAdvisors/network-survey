@@ -1,22 +1,23 @@
 import React from "react";
-import ReactDOM from "react-dom/client";
 import { Model, Serializer, Question } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { Alert, useTheme } from '@mui/material';
 import "survey-core/survey-core.min.css";
 import "@network-survey/frontend-shared/src/surveyRuntime.css";
 import { buildApiUrl } from "./api";
-import { DraggableRankingQuestion } from "@network-survey/frontend-react";
+import { attachDraggableRankingRenderer } from "@network-survey/frontend-react";
 import {
   applyProductionSurveyTheme,
-  PRODUCTION_SURVEY_CLASS_NAME
+  PRODUCTION_SURVEY_CLASS_NAME,
+  registerChoiceDefinitionProperty
 } from "@network-survey/frontend-shared";
 import {
   disposeTagboxSearchPlaceholder,
   restoreTagboxSearchPlaceholder
 } from "./tagboxSearchPlaceholder";
 
-const draggableQuestionRoots = new WeakMap();
+// Register choice metadata before any SurveyJS Model materializes ItemValues.
+registerChoiceDefinitionProperty({ visible: false });
 
 // Define a custom Question class for draggableranking
 class QuestionDraggableRankingModel extends Question {
@@ -95,7 +96,6 @@ function SurveyComponent({setTitle, setInstructions}) {
       if (!json) return;
 
       const newSurvey = new Model(json);
-      const roots = new Set();
       const runtimeGeneration = runtimeGenerationRef.current;
       applyProductionSurveyTheme(newSurvey);
 
@@ -154,61 +154,23 @@ function SurveyComponent({setTitle, setInstructions}) {
         });
       });
 
-      // Custom rendering for draggableranking
-      newSurvey.onAfterRenderQuestion.add((survey, options) => {
+      const restoreTagboxHandler = (_, options) => {
         const questionElement = options.htmlElement?.matches?.(".sd-question")
           ? options.htmlElement
-          : options.htmlElement?.querySelector(".sd-question") || options.htmlElement;
-
+          : options.htmlElement?.querySelector?.(".sd-question") || options.htmlElement;
         restoreTagboxSearchPlaceholder(questionElement, options.question);
-
-        if (options.question.getType() !== "draggableranking") {
-          return;
-        }
-
-        const contentElement =
-          questionElement?.querySelector(".sd-question__content") ||
-          questionElement;
-
-        const previousRoot = draggableQuestionRoots.get(options.question);
-        if (previousRoot) {
-          previousRoot.unmount();
-          roots.delete(previousRoot);
-          draggableQuestionRoots.delete(options.question);
-        }
-
-        const container = document.createElement("div");
-        container.className = "draggable-ranking-host";
-        contentElement.innerHTML = "";
-        contentElement.appendChild(container);
-
-        if (!options.question.title && options.question.name) {
-          options.question.title = options.question.name;
-        }
-
-        const root = ReactDOM.createRoot(container);
-        draggableQuestionRoots.set(options.question, root);
-        roots.add(root);
-        root.render(
-          <DraggableRankingQuestion
-            question={options.question}
-            value={options.question.value || []}
-            onChange={(val) => (options.question.value = val)}
-            availableDirection="vertical"
-            valueSource="question"
-          />
-        );
-      });
+      };
+      newSurvey.onAfterRenderQuestion.add(restoreTagboxHandler);
+      const disposeDraggableRenderer = attachDraggableRankingRenderer(newSurvey);
 
       setSurvey(newSurvey);
 
       return () => {
+        newSurvey.onAfterRenderQuestion.remove(restoreTagboxHandler);
+        disposeDraggableRenderer();
         newSurvey.getAllQuestions().forEach((question) => {
           disposeTagboxSearchPlaceholder(question);
-          draggableQuestionRoots.delete(question);
         });
-        roots.forEach((root) => root.unmount());
-        roots.clear();
         newSurvey.dispose();
       };
     }, [json, userId, surveyName, demoToken, isDemo]);

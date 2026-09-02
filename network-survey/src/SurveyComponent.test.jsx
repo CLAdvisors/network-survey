@@ -3,6 +3,10 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const surveyState = vi.hoisted(() => ({ model: null }));
+const runtimeSpies = vi.hoisted(() => ({
+  registerDefinitions: vi.fn(),
+  attachRenderer: vi.fn(() => vi.fn()),
+}));
 
 vi.mock('survey-core', () => {
   class FakeModel {
@@ -10,7 +14,10 @@ vi.mock('survey-core', () => {
       this.json = json;
       this.onCompleting = { add: (handler) => { this.completingHandler = handler; } };
       this.onChoicesLazyLoad = { add: (handler) => { this.lazyLoadHandler = handler; } };
-      this.onAfterRenderQuestion = { add: (handler) => { this.renderHandler = handler; } };
+      this.onAfterRenderQuestion = {
+        add: (handler) => { this.renderHandler = handler; },
+        remove: vi.fn(),
+      };
       surveyState.model = this;
     }
 
@@ -35,6 +42,7 @@ vi.mock('survey-react-ui', () => ({
 vi.mock('@network-survey/frontend-shared', () => ({
   applyProductionSurveyTheme: vi.fn(),
   PRODUCTION_SURVEY_CLASS_NAME: 'survey-runtime',
+  registerChoiceDefinitionProperty: runtimeSpies.registerDefinitions,
   buildApiUrl: (pathname, queryParams = {}) => {
     const query = new URLSearchParams(
       Object.entries(queryParams).filter(([, value]) => value !== null && value !== undefined)
@@ -45,7 +53,7 @@ vi.mock('@network-survey/frontend-shared', () => ({
 }));
 
 vi.mock('@network-survey/frontend-react', () => ({
-  DraggableRankingQuestion: () => null,
+  attachDraggableRankingRenderer: runtimeSpies.attachRenderer,
 }));
 
 vi.mock('./tagboxSearchPlaceholder', () => ({
@@ -80,10 +88,22 @@ class MockXMLHttpRequest {
 describe('SurveyComponent demo mode', () => {
   beforeEach(() => {
     surveyState.model = null;
+    runtimeSpies.attachRenderer.mockClear();
     MockXMLHttpRequest.requests = [];
     vi.stubGlobal('XMLHttpRequest', MockXMLHttpRequest);
     vi.stubGlobal('fetch', vi.fn());
     window.history.replaceState({}, '', '/?surveyName=Survey%20A&demoToken=signed-demo-token');
+  });
+
+  it('registers definition metadata before models and attaches the fixed production renderer', async () => {
+    const view = render(<SurveyComponent setTitle={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('survey-form')).toBeInTheDocument());
+
+    expect(runtimeSpies.registerDefinitions).toHaveBeenCalledWith({ visible: false });
+    expect(runtimeSpies.attachRenderer).toHaveBeenCalledWith(surveyState.model);
+    const dispose = runtimeSpies.attachRenderer.mock.results[0].value;
+    view.unmount();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it('loads real roster choices and completes without posting a response', async () => {

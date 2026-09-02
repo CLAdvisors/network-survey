@@ -2,13 +2,13 @@
 
 ## Scope and assumptions
 
-This lab is a respondent-UI experiment only. It does not call the API, submit answers, change dashboard authoring, or register its experimental schema in the normal respondent bundle. It is loaded only at `/labs/long-values` and uses synthetic “expedition charter” values that are unrelated to any client or real survey.
+This lab began as a respondent-UI experiment and remains isolated at `/labs/long-values`, using synthetic “expedition charter” values unrelated to any client or real survey. The production implementation now adopts only the **Info-button popover** treatment for `draggableranking` questions. The other four treatments remain lab-only and are not author-configurable.
 
 The experiment assumes respondents need a short, scannable label while definitions may range from one sentence to several paragraphs. A definition is supporting information, not the answer value. Opening supporting information must therefore never select, rank, drag, or submit a choice.
 
 ## Experimental SurveyJS data shape
 
-The lab registers one optional custom property on SurveyJS `itemvalue` objects, and only when the lab chunk loads:
+The lab and production browser runtimes register one optional custom property on SurveyJS `itemvalue` objects:
 
 ```json
 {
@@ -22,11 +22,13 @@ The lab registers one optional custom property on SurveyJS `itemvalue` objects, 
 - `text` is the short respondent-facing label.
 - `definition` is an optional plain-text SurveyJS `itemvalue` property. Newlines represent paragraph breaks. It is rendered as React text, never as HTML.
 
-`definition` is deliberately additive and namespaced by its location on a choice rather than encoded into `value` or `text`. SurveyJS preserves registered item-value properties during model serialization. A future production proposal should still review naming, localization, authoring, API allow-listing, exports, and versioning before adopting this shape. This lab changes none of those systems.
+`definition` is deliberately additive and namespaced by its location on a choice rather than encoded into `value` or `text`. SurveyJS preserves registered item-value properties during model serialization. Production supports this field only on `draggableranking.choices`, uses English literal strings, exposes a multiline Survey Creator editor, validates bounded content in the API, and stores only `value` in answers. No presentation-variant field is stored in survey JSON.
 
 ## Variants
 
-1. **Info-button popover** — one transient explanation at a time; hover targets only the explicit information control, while focus and activation provide equivalent access. Compact and intentional, but the small discovery point may be missed.
+The first variant is the fixed production treatment. Variants 2–5 remain comparison artifacts in the lab.
+
+1. **Info-button popover (selected for production)** — one transient explanation at a time; hover targets only the explicit information control, while focus and activation provide equivalent access. Compact and intentional, but the small discovery point may be missed.
 2. **Whole-row popover** — the same accessible popover with the entire value row as its hover target. Easier to discover, but more prone to incidental activation while scanning.
 3. **Expandable cards** — explicit, independently expandable definitions remain in context. Strong for reading and comparison, with high vertical cost.
 4. **Detail panel** — a synchronized, persistent reading region follows the last previewed value. Dense lists remain scannable; the relationship may be less obvious on narrow screens.

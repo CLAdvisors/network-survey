@@ -54,10 +54,10 @@ jobs:
           LEGACY='For each question below, indicate the people you interact with at work. The survey will take 10-15 minutes to complete; please plan to finish in one session.'
           for DATABASE in ONA_pr27 ONA_no_pr27_history; do
             PGPASSWORD=postgres createdb -h 127.0.0.1 -U postgres -T ONA "$DATABASE"
-            PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d "$DATABASE" -v ON_ERROR_STOP=1 -v legacy="$LEGACY" \
+            PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d "$DATABASE" -v ON_ERROR_STOP=1 \
               -c "DELETE FROM databasechangelog WHERE id='editable-survey-instructions-reconciliation-1' AND author='network-survey'" \
-              -c "ALTER TABLE survey ALTER COLUMN instructions SET DEFAULT :'legacy'" \
-              -c "INSERT INTO survey(name,title,creation_date,organization_id,instructions) SELECT 'PR27Legacy','Legacy',now(),id,:'legacy' FROM organizations WHERE slug='default-imported'" \
+              -c "ALTER TABLE survey ALTER COLUMN instructions SET DEFAULT '$LEGACY'" \
+              -c "INSERT INTO survey(name,title,creation_date,organization_id,instructions) SELECT 'PR27Legacy','Legacy',now(),id,'$LEGACY' FROM organizations WHERE slug='default-imported'" \
               -c "INSERT INTO survey(name,title,creation_date,organization_id,instructions) SELECT 'PR27Hidden','Hidden',now(),id,'' FROM organizations WHERE slug='default-imported'" \
               -c "INSERT INTO survey(name,title,creation_date,organization_id,instructions) SELECT 'PR27Custom','Custom',now(),id,'Preserve this administrator value' FROM organizations WHERE slug='default-imported'"
           done

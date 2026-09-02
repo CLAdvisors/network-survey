@@ -1,31 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  cancelDeferredResourceDisposal,
-  deferOwnedResourceDisposal,
-  releaseSurveyModel,
-  replaceSurveyContextModel,
-} from './surveyModelLifecycle';
+import { releaseSurveyModel, replaceSurveyContextModel } from './surveyModelLifecycle';
 
 describe('SurveyJS model hook lifecycle', () => {
-  it('cancels deferred disposal during a Strict Mode effect replay', () => {
-    vi.useFakeTimers();
-    const creator = { dispose: vi.fn() };
-    const creatorRef = { current: creator };
-    const timerRef = { current: null };
-
-    deferOwnedResourceDisposal(timerRef, creatorRef, creator);
-    cancelDeferredResourceDisposal(timerRef);
-    vi.runAllTimers();
-    expect(creator.dispose).not.toHaveBeenCalled();
-    expect(creatorRef.current).toBe(creator);
-
-    deferOwnedResourceDisposal(timerRef, creatorRef, creator);
-    vi.runAllTimers();
-    expect(creator.dispose).toHaveBeenCalledOnce();
-    expect(creatorRef.current).toBeNull();
-    vi.useRealTimers();
-  });
-
   it('cleans the old Creator preview hooks before tracking its replacement', () => {
     const oldPreview = { name: 'old preview' };
     const newPreview = { name: 'new preview' };

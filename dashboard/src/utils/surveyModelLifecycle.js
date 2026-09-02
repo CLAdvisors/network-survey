@@ -1,19 +1,3 @@
-export function cancelDeferredResourceDisposal(timerRef) {
-  if (timerRef.current === null) return;
-  clearTimeout(timerRef.current);
-  timerRef.current = null;
-}
-
-export function deferOwnedResourceDisposal(timerRef, ownerRef, resource) {
-  timerRef.current = setTimeout(() => {
-    if (ownerRef.current === resource) {
-      resource?.dispose?.();
-      ownerRef.current = null;
-    }
-    timerRef.current = null;
-  }, 0);
-}
-
 /**
  * Releases hooks owned by one configured SurveyJS model and removes every
  * context reference to it. Survey Creator owns model disposal; this helper

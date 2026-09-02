@@ -204,6 +204,15 @@ test('canonical reference expansion cannot exceed the persisted schema budget', 
   );
 });
 
+test('deep schema metadata is rejected with a stable validation error', () => {
+  let metadata = 'leaf';
+  for (let depth = 0; depth <= 100; depth += 1) metadata = { nested: metadata };
+  assert.throws(
+    () => validateSurveyDefinition({ elements: [{ type: 'text', name: 'q', metadata }] }),
+    /exceeds the 100-level nesting limit/
+  );
+});
+
 test('all schema strings reject characters PostgreSQL JSONB cannot store', () => {
   for (const element of [
     { type: 'text', name: 'q', title: 'before\0after' },

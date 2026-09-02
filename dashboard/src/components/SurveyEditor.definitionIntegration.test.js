@@ -14,8 +14,9 @@ describe('Survey Editor definition runtime integration', () => {
     expect(source).toContain('replaceSurveyContextModel(');
     expect(source).toContain("{ disposePrevious: context === 'preview-runtime' }");
     expect(source).toContain('dashboardOwnedModels.forEach((survey) => survey?.dispose?.())');
-    expect(source).toContain('cancelDeferredResourceDisposal(creatorDisposeTimerRef)');
-    expect(source).toContain('deferOwnedResourceDisposal(creatorDisposeTimerRef, creatorRef, creator)');
+    expect(source).toContain('const instance = createConfiguredSurveyCreator()');
+    expect(source).toContain('instance.dispose?.()');
+    expect(source).not.toContain('if (!creatorRef.current)');
     expect(source).not.toContain('ReactDOM.createRoot');
   });
 

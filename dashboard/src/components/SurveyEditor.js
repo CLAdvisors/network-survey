@@ -6,7 +6,7 @@ import "@network-survey/frontend-shared/src/surveyRuntime.css";
 // SurveyJS runtime themes are applied to each model via applyTheme().
 import { Alert, Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import api from '../api/axios';
-import { Serializer, Question, Model } from 'survey-core';
+import { Serializer, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
 import {
@@ -17,6 +17,7 @@ import {
   applyProductionSurveyTheme,
   PRODUCTION_SURVEY_CLASS_NAME,
   PRODUCTION_SURVEY_WRAPPER_SX,
+  QuestionDraggableRankingModel,
   TAGBOX_PAGE_SIZE,
   TAGBOX_PLACEHOLDER
 } from '@network-survey/frontend-shared';
@@ -35,12 +36,7 @@ import {
   validateDraggableRankingDefinitionProperty,
 } from '../utils/draggableRankingDefinitions';
 import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
-import {
-  cancelDeferredResourceDisposal,
-  deferOwnedResourceDisposal,
-  releaseSurveyModel,
-  replaceSurveyContextModel,
-} from '../utils/surveyModelLifecycle';
+import { releaseSurveyModel, replaceSurveyContextModel } from '../utils/surveyModelLifecycle';
 import { lifecycleLabel, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
@@ -54,12 +50,6 @@ export const configureProductionSurveyPresentation = (surveyModel) => {
   surveyModel.progressBarType = 'questions';
 };
 
-// Define and register custom question class for draggableranking
-class QuestionDraggableRankingModel extends Question {
-  getType() {
-    return 'draggableranking';
-  }
-}
 // Register class without inline properties, then define choices property correctly
 Serializer.addClass(
   'draggableranking',
@@ -238,6 +228,59 @@ Serializer.removeProperty('survey', 'description');
 Serializer.removeProperty('survey', 'logo');
 hideQuestionValueName();
 
+const creatorOptions = {
+  showLogicTab: false,
+  showJSONEditorTab: false,
+  isAutoSave: false,
+  showPagesPanel: false,
+  pageEditMode: 'single',
+  showTitle: false,
+  showDescription: false,
+  showLogo: false,
+  questionTypes: [...SUPPORTED_SURVEY_TOOLBOX_TYPES],
+};
+
+export const createConfiguredSurveyCreator = () => {
+  const creator = new SurveyCreator(creatorOptions);
+  creator.onSetPropertyEditorOptions.add(configureDraggableRankingChoiceEditor);
+  creator.onPropertyShowing.add(configureDraggableRankingDefinitionVisibility);
+  creator.onPropertyEditorCreated.add(configureDraggableRankingDefinitionEditor);
+  creator.onPropertyDisplayCustomError.add(validateDraggableRankingDefinitionProperty);
+  setSurveyToolboxItem(creator.toolbox, {
+    name: 'draggableranking',
+    iconName: 'icon-tagbox',
+    title: 'Draggable Ranking',
+    json: {
+      type: 'draggableranking',
+      name: 'draggableranking1',
+      title: 'Draggable Ranking',
+      choices: [
+        { value: 'item1', text: 'Item 1' },
+        { value: 'item2', text: 'Item 2' }
+      ]
+    }
+  });
+  setSurveyToolboxItem(creator.toolbox, {
+    name: 'tagbox',
+    iconName: 'icon-tagbox',
+    title: 'People Tagbox',
+    json: {
+      type: 'tagbox',
+      name: 'tagbox1',
+      title: 'Select people',
+      isRequired: true,
+      claMaxSelections: 0,
+      placeholder: TAGBOX_PLACEHOLDER,
+      allowAddNewTag: false,
+      choices: [],
+      choicesLazyLoadEnabled: true,
+      choicesLazyLoadPageSize: TAGBOX_PAGE_SIZE
+    }
+  });
+  restrictSurveyToolbox(creator.toolbox);
+  return creator;
+};
+
 const SurveyEditor = () => {
   const { canEditSurvey } = useAuth();
   const [surveys, setSurveys] = useState([]);
@@ -249,8 +292,8 @@ const SurveyEditor = () => {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewSurveyModel, setPreviewSurveyModel] = useState(null);
   const [previewError, setPreviewError] = useState(null);
+  const [creator, setCreator] = useState(null);
   const creatorRef = useRef(null);
-  const creatorDisposeTimerRef = useRef(null);
   const surveyHooksRef = useRef(new Map());
   const surveyContextModelsRef = useRef(new Map());
   const selectedSurveyRef = useRef(null);
@@ -390,66 +433,6 @@ const SurveyEditor = () => {
     });
   }, []);
 
-  // SurveyJS Creator setup
-  const creatorOptions = {
-    showLogicTab: false,
-    showJSONEditorTab: false,
-    isAutoSave: false,
-    showPagesPanel: false,
-    pageEditMode: 'single',
-    showTitle: false, // hide survey title in editor
-    showDescription: false,  // hide survey description in editor
-    showLogo: false,         // hide survey image/logo in editor
-    // Match the API's flat, answer-bearing schema contract. This excludes
-    // nested containers and display-only elements from the authoring UI.
-    questionTypes: [...SUPPORTED_SURVEY_TOOLBOX_TYPES],
-  };
-  if (!creatorRef.current) {
-    creatorRef.current = new SurveyCreator(creatorOptions);
-    creatorRef.current.onSetPropertyEditorOptions.add(configureDraggableRankingChoiceEditor);
-    creatorRef.current.onPropertyShowing.add(configureDraggableRankingDefinitionVisibility);
-    creatorRef.current.onPropertyEditorCreated.add(configureDraggableRankingDefinitionEditor);
-    creatorRef.current.onPropertyDisplayCustomError.add(validateDraggableRankingDefinitionProperty);
-    // Add custom draggable-ranking question with a JSON template. Remove any
-    // generated item first so the custom item appears exactly once.
-    setSurveyToolboxItem(creatorRef.current.toolbox, {
-      name: 'draggableranking',
-      iconName: 'icon-tagbox',
-      title: 'Draggable Ranking',
-      json: {
-        type: 'draggableranking',
-        name: 'draggableranking1',
-        title: 'Draggable Ranking',
-        choices: [
-          { value: 'item1', text: 'Item 1' },
-          { value: 'item2', text: 'Item 2' }
-        ]
-      }
-    });
-    // Ensure tagbox uses the custom lazy-load configuration without leaving the
-    // default toolbox item alongside it.
-    setSurveyToolboxItem(creatorRef.current.toolbox, {
-      name: 'tagbox',
-      iconName: 'icon-tagbox',
-      title: 'People Tagbox',
-      json: {
-        type: 'tagbox',
-        name: 'tagbox1',
-        title: 'Select people',
-        isRequired: true,
-        claMaxSelections: 0,
-        placeholder: TAGBOX_PLACEHOLDER,
-        allowAddNewTag: false,
-        choices: [],
-        choicesLazyLoadEnabled: true,
-        choicesLazyLoadPageSize: TAGBOX_PAGE_SIZE
-      }
-    });
-    // Defensively remove any defaults introduced by Survey Creator upgrades.
-    restrictSurveyToolbox(creatorRef.current.toolbox);
-  }
-  const creator = creatorRef.current;
-
   const buildNormalizedSurveySchema = useCallback(() => {
     const editorJson = creator?.survey?.toJSON ? creator.survey.toJSON() : creator?.JSON;
     const rawJson = editorJson ? JSON.parse(JSON.stringify(editorJson)) : {};
@@ -488,7 +471,6 @@ const SurveyEditor = () => {
   useEffect(() => {
     const hooksMap = surveyHooksRef.current;
     const contextModels = surveyContextModelsRef.current;
-    cancelDeferredResourceDisposal(creatorDisposeTimerRef);
     return () => {
       const dashboardOwnedModels = new Set(
         [...contextModels.entries()]
@@ -502,16 +484,25 @@ const SurveyEditor = () => {
       hooksMap.clear();
       contextModels.clear();
       dashboardOwnedModels.forEach((survey) => survey?.dispose?.());
-      // React 18 development Strict Mode immediately replays effects without
-      // recreating refs. Defer Creator disposal so replay can cancel it, while
-      // a real unmount still releases the dashboard-owned Creator instance.
-      deferOwnedResourceDisposal(creatorDisposeTimerRef, creatorRef, creator);
     };
-  }, [creator]);
+  }, []);
+
+  // SurveyCreator owns global/model resources and must be created by an effect:
+  // React Strict Mode may discard render-phase hook state before cleanup exists.
+  useEffect(() => {
+    const instance = createConfiguredSurveyCreator();
+    creatorRef.current = instance;
+    setCreator(instance);
+    return () => {
+      if (creatorRef.current === instance) creatorRef.current = null;
+      instance.dispose?.();
+    };
+  }, []);
 
   // Normalize the one logical editor page while rejecting unsupported layouts
   // before Survey Creator can silently discard them in single-page mode.
   useEffect(() => {
+    if (!creator) return undefined;
     const controller = new AbortController();
     creator.readOnly = editorReadOnly;
     if (!selectedSurvey) {
@@ -649,14 +640,14 @@ const SurveyEditor = () => {
         <Button
           variant="contained"
           onClick={handleSaveSurvey}
-          disabled={!selectedSurvey || saving || editorReadOnly}
+          disabled={!creator || !selectedSurvey || saving || editorReadOnly}
         >
           Save Survey
         </Button>
         <Button
           variant="outlined"
           onClick={handleOpenPreview}
-          disabled={!selectedSurvey || loading}
+          disabled={!creator || !selectedSurvey || loading}
         >
           Demo Survey
         </Button>
@@ -674,7 +665,7 @@ const SurveyEditor = () => {
           overflow: 'auto',
         }}
       >
-        {loading ? <CircularProgress /> : <SurveyCreatorComponent creator={creator} />}
+        {loading || !creator ? <CircularProgress /> : <SurveyCreatorComponent creator={creator} />}
       </Box>
       <Dialog
         open={previewOpen}

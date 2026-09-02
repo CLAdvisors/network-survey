@@ -124,7 +124,8 @@ describe('attachDraggableRankingRenderer', () => {
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Info: One' })).not.toBeInTheDocument());
     ownedListeners.forEach(([type, handler]) => {
-      expect(removeListener).toHaveBeenCalledWith(type, handler);
+      if (type === 'pointerdown') expect(removeListener).toHaveBeenCalledWith(type, handler, true);
+      else expect(removeListener).toHaveBeenCalledWith(type, handler);
     });
     expect(onAfterRenderQuestion.size()).toBe(1);
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CHOICE_DEFINITION_PROPERTY,
   getChoiceDefinition,
+  QuestionDraggableRankingModel,
   registerChoiceDefinitionProperty,
 } from '@network-survey/frontend-shared';
 
@@ -33,6 +34,13 @@ describe('production SurveyJS choice definitions', () => {
       text: 'Readable label',
       definition: 'First paragraph.\n\nSecond paragraph.',
     });
+  });
+
+  it('exposes the custom composite ranking with group semantics', () => {
+    const question = new QuestionDraggableRankingModel('ranking');
+    expect(question.getType()).toBe('draggableranking');
+    expect(question.ariaRole).toBe('group');
+    expect(question.isNewA11yStructure).toBe(false);
   });
 
   it('refuses to coerce structured or HTML-like metadata and returns strings literally', () => {

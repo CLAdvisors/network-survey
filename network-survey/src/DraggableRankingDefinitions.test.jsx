@@ -118,6 +118,20 @@ describe('production draggable-ranking Info definitions', () => {
     expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
   });
 
+  it('treats controls in another ranking question as an outside interaction', () => {
+    render(<><Fixture /><Fixture /></>);
+    const betaInfos = screen.getAllByRole('button', { name: 'Info: Beta' });
+
+    fireEvent.click(betaInfos[0]);
+    expect(screen.getAllByRole('region', { name: 'Definition: Beta' })).toHaveLength(1);
+    fireEvent.pointerDown(betaInfos[1]);
+    fireEvent.click(betaInfos[1]);
+
+    expect(screen.getAllByRole('region', { name: 'Definition: Beta' })).toHaveLength(1);
+    expect(betaInfos[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(betaInfos[1]).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('uses explicit-button-only hover and closes at the actual control boundary', () => {
     render(<><Fixture /><button type="button">Outside ranking</button></>);
     const betaInfo = screen.getByRole('button', { name: 'Info: Beta' });

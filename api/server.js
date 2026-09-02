@@ -366,6 +366,13 @@ const respondentRateLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
 });
+const preAuthAuthoringRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.AUTHORING_PREAUTH_RATE_LIMIT_MAX) || 240,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authoring requests, please try again later.' },
+});
 const authoringRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: Number(process.env.AUTHORING_RATE_LIMIT_MAX) || 120,
@@ -402,10 +409,10 @@ const QUESTION_DEFINITION_JSON_LIMIT = '3mb';
 const questionDefinitionJsonParser = express.json({ limit: QUESTION_DEFINITION_JSON_LIMIT });
 const RESPONSE_JSON_LIMIT = '1mb';
 const responseJsonParser = express.json({ limit: RESPONSE_JSON_LIMIT });
-app.patch('/api/surveys/:surveyId/respondents', requireAuth, authoringRateLimiter, rosterJsonParser);
-app.post('/api/updateTargets', requireAuth, authoringRateLimiter, rosterJsonParser);
-app.delete('/api/user', requireAuth, authoringRateLimiter, rosterJsonParser);
-app.post('/api/updateQuestions', requireAuth, authoringRateLimiter, questionDefinitionJsonParser);
+app.patch('/api/surveys/:surveyId/respondents', preAuthAuthoringRateLimiter, requireAuth, authoringRateLimiter, rosterJsonParser);
+app.post('/api/updateTargets', preAuthAuthoringRateLimiter, requireAuth, authoringRateLimiter, rosterJsonParser);
+app.delete('/api/user', preAuthAuthoringRateLimiter, requireAuth, authoringRateLimiter, rosterJsonParser);
+app.post('/api/updateQuestions', preAuthAuthoringRateLimiter, requireAuth, authoringRateLimiter, questionDefinitionJsonParser);
 app.post('/api/user', respondentRateLimiter, responseJsonParser);
 // All other JSON routes retain Express's 100 KiB default limit.
 app.use(express.json());
@@ -1539,6 +1546,8 @@ const DEFINED_RANKING_LIMITS = Object.freeze({
 const FORBIDDEN_LITERAL_CHARACTERS_RE = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\uD800-\uDFFF]/u;
 const JSONB_INCOMPATIBLE_CHARACTERS_RE = /[\u0000\uD800-\uDFFF]/u;
 const SURVEY_SCHEMA_MAX_BYTES = Math.floor(2.5 * 1024 * 1024);
+const JSON_STRUCTURE_MAX_DEPTH = 100;
+const JSON_STRUCTURE_MAX_NODES = 100_000;
 
 function assertSurveySchemaSize(json) {
   let serializedBytes;
@@ -1552,22 +1561,58 @@ function assertSurveySchemaSize(json) {
   }
 }
 
-function rejectJsonbIncompatibleStrings(node, label = 'Questions schema') {
-  if (typeof node === 'string') {
-    if (JSONB_INCOMPATIBLE_CHARACTERS_RE.test(node)) {
-      throw new Error(`${label} contains a NUL or malformed Unicode surrogate that PostgreSQL JSONB cannot store.`);
+function assertJsonStructureBounds(root, label = 'JSON value') {
+  const stack = [{ value: root, depth: 0 }];
+  let visitedNodes = 0;
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop();
+    visitedNodes += 1;
+    if (visitedNodes > JSON_STRUCTURE_MAX_NODES) {
+      throw new Error(`${label} exceeds the ${JSON_STRUCTURE_MAX_NODES}-node structure limit.`);
     }
-    return;
+    if (depth > JSON_STRUCTURE_MAX_DEPTH) {
+      throw new Error(`${label} exceeds the ${JSON_STRUCTURE_MAX_DEPTH}-level nesting limit.`);
+    }
+    if (!value || typeof value !== 'object') continue;
+    const children = Array.isArray(value) ? value : Object.values(value);
+    children.forEach((item) => stack.push({ value: item, depth: depth + 1 }));
   }
-  if (Array.isArray(node)) {
-    node.forEach((item, index) => rejectJsonbIncompatibleStrings(item, `${label} item ${index + 1}`));
-    return;
+}
+
+function rejectJsonbIncompatibleStrings(root, label = 'JSON value') {
+  const stack = [{ value: root, path: label, depth: 0 }];
+  let visitedNodes = 0;
+  while (stack.length > 0) {
+    const { value, path, depth } = stack.pop();
+    visitedNodes += 1;
+    if (visitedNodes > JSON_STRUCTURE_MAX_NODES) {
+      throw new Error(`${label} exceeds the ${JSON_STRUCTURE_MAX_NODES}-node structure limit.`);
+    }
+    if (depth > JSON_STRUCTURE_MAX_DEPTH) {
+      throw new Error(`${label} exceeds the ${JSON_STRUCTURE_MAX_DEPTH}-level nesting limit.`);
+    }
+    if (typeof value === 'string') {
+      if (JSONB_INCOMPATIBLE_CHARACTERS_RE.test(value)) {
+        throw new Error(`${path} contains a NUL or malformed Unicode surrogate that PostgreSQL JSONB cannot store.`);
+      }
+      continue;
+    }
+    if (!value || typeof value !== 'object') continue;
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => stack.push({
+        value: item,
+        path: `${path} item ${index + 1}`,
+        depth: depth + 1,
+      }));
+      continue;
+    }
+    Object.entries(value).forEach(([property, item]) => {
+      if (JSONB_INCOMPATIBLE_CHARACTERS_RE.test(property)) {
+        throw new Error(`${path} property name contains a NUL or malformed Unicode surrogate that PostgreSQL JSONB cannot store.`);
+      }
+      stack.push({ value: item, path: `${path} ${property}`, depth: depth + 1 });
+    });
   }
-  if (!node || typeof node !== 'object') return;
-  Object.entries(node).forEach(([property, value]) => {
-    rejectJsonbIncompatibleStrings(property, `${label} property name`);
-    rejectJsonbIncompatibleStrings(value, `${label} ${property}`);
-  });
 }
 
 function normalizeBoundedLiteral(value, label, maxChars, maxBytes) {
@@ -1764,6 +1809,7 @@ function validateSurveyDefinition(json) {
     throw new Error('Questions must be a SurveyJS schema object.');
   }
   assertSurveySchemaSize(json);
+  assertJsonStructureBounds(json, 'Questions schema');
   if (json.claNextQuestionNumber !== undefined &&
       (!Number.isSafeInteger(json.claNextQuestionNumber) || json.claNextQuestionNumber < 1)) {
     throw new Error('claNextQuestionNumber must be a positive safe integer.');
@@ -2856,6 +2902,11 @@ app.post('/api/user', async (req, res) => {
     }
     if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
       return res.status(400).json({ message: 'Invalid survey responses.', errors: ['Answers must be an object.'] });
+    }
+    try {
+      rejectJsonbIncompatibleStrings(answers, 'Survey responses');
+    } catch (error) {
+      return res.status(400).json({ message: 'Invalid survey responses.', errors: [error.message] });
     }
     client = await pool.connect();
     await client.query('BEGIN');

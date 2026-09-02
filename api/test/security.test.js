@@ -1597,6 +1597,26 @@ test('/api/user returns a client error for malformed or non-object answers', asy
   assert.equal(arrayAnswers.status, 400);
   assert.equal(arrayAnswers.body.message, 'Invalid survey responses.');
   assert.deepEqual(arrayAnswers.body.errors, ['Answers must be an object.']);
+
+  for (const answers of [
+    { q: 'before\0after' },
+    { q: 'before\uD800after' },
+    { ['bad\0key']: 'value' },
+  ]) {
+    const incompatible = await request(app)
+      .post('/api/user')
+      .send({ surveyName: 'Survey A', userId: 'valid-token', answers: JSON.stringify(answers) });
+    assert.equal(incompatible.status, 400);
+    assert.match(incompatible.body.errors[0], /PostgreSQL JSONB cannot store/);
+  }
+
+  let deeplyNested = 'leaf';
+  for (let depth = 0; depth <= 100; depth += 1) deeplyNested = { nested: deeplyNested };
+  const excessiveDepth = await request(app)
+    .post('/api/user')
+    .send({ surveyName: 'Survey A', userId: 'valid-token', answers: JSON.stringify({ q: deeplyNested }) });
+  assert.equal(excessiveDepth.status, 400);
+  assert.match(excessiveDepth.body.errors[0], /nesting limit/);
   assert.equal(schemaQueries, 0, 'invalid answer envelopes must fail before loading the schema');
 });
 

@@ -1,5 +1,5 @@
 import React from "react";
-import { Model, Serializer, Question } from "survey-core";
+import { Model, Serializer } from "survey-core";
 import { Survey } from "survey-react-ui";
 import { Alert, useTheme } from '@mui/material';
 import "survey-core/survey-core.min.css";
@@ -9,6 +9,7 @@ import { attachDraggableRankingRenderer } from "@network-survey/frontend-react";
 import {
   applyProductionSurveyTheme,
   PRODUCTION_SURVEY_CLASS_NAME,
+  QuestionDraggableRankingModel,
   registerChoiceDefinitionProperty
 } from "@network-survey/frontend-shared";
 import {
@@ -18,13 +19,6 @@ import {
 
 // Register choice metadata before any SurveyJS Model materializes ItemValues.
 registerChoiceDefinitionProperty({ visible: false });
-
-// Define a custom Question class for draggableranking
-class QuestionDraggableRankingModel extends Question {
-  getType() {
-    return "draggableranking";
-  }
-}
 
 // Register custom question type for SurveyJS
 Serializer.addClass(

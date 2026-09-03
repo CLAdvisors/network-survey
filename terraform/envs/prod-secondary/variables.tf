@@ -97,6 +97,18 @@ variable "enable_custom_domain_aliases" {
   default     = false
 }
 
+variable "enable_resend_credentials" {
+  description = "Load the isolated prod-secondary Resend sending key into runtime. Activation gate; default off."
+  type        = bool
+  default     = false
+}
+
+variable "enable_resend_webhook_ingest" {
+  description = "Load the isolated prod-secondary webhook secret and accept webhooks. Activation gate; default off."
+  type        = bool
+  default     = false
+}
+
 variable "enable_owner_bootstrap" {
   description = "One-time target-only CLA owner bootstrap gate. Return to false immediately after successful verification."
   type        = bool

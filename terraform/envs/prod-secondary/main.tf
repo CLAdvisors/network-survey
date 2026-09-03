@@ -27,6 +27,8 @@ module "platform" {
   custom_domains               = var.custom_domains
   enable_custom_domain_aliases = var.enable_custom_domain_aliases
   enable_owner_bootstrap       = var.enable_owner_bootstrap
+  enable_resend_credentials    = var.enable_resend_credentials
+  enable_resend_webhook_ingest = var.enable_resend_webhook_ingest
   operations_alert_email       = "bgarcia2324@gmail.com"
 
   common_tags = local.common_tags

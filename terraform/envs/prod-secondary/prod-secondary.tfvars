@@ -12,6 +12,8 @@ db_allocated_storage         = 20
 enable_public_aws_endpoints  = true
 enable_custom_domain_aliases = true
 enable_owner_bootstrap       = false
+enable_resend_credentials    = false
+enable_resend_webhook_ingest = false
 
 # Dark bootstrap posture. Do not populate these in the initial apply.
 alb_allowed_ipv4_cidrs = []

@@ -70,11 +70,14 @@ locals {
     "LEGACY_START_ENABLED=false",
     "EMAIL_CLAIMING_ENABLED=false",
     "EMAIL_SENDING_ENABLED=false",
-    "RESEND_API_KEY_PARAMETER=",
-    "RESEND_PROVIDER_ACCOUNT_SCOPE=network-survey-resend-team",
-    "RESEND_WEBHOOK_SECRET_PARAMETER=",
-    "RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=",
-    "RESEND_WEBHOOK_INGEST_ENABLED=false",
+    "RESEND_CREDENTIAL_LOAD_ENABLED=${var.enable_resend_credentials}",
+    "RESEND_API_KEY_PARAMETER=${var.enable_resend_credentials ? "/network-survey/prod-secondary/resend/api-key" : ""}",
+    "RESEND_PROVIDER_ACCOUNT_SCOPE=network-survey-resend-prod-secondary",
+    "SURVEY_EMAIL_SENDER=CLA Survey <survey@cladvisorsurveys.com>",
+    "SURVEY_EMAIL_REPLY_TO=survey@cladvisors.com",
+    "RESEND_WEBHOOK_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-secret" : ""}",
+    "RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-previous-secret" : ""}",
+    "RESEND_WEBHOOK_INGEST_ENABLED=${var.enable_resend_webhook_ingest}",
     "WEBHOOK_PROCESSING_ENABLED=false",
     "BOOTSTRAP_ENABLED=${var.enable_owner_bootstrap}",
     "BOOTSTRAP_ADMIN_USERNAME=",
@@ -1015,6 +1018,13 @@ data "aws_iam_policy_document" "app" {
     actions = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = concat(
       ["arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/api/session-secret"],
+      var.enable_resend_credentials ? [
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/resend/api-key",
+      ] : [],
+      var.enable_resend_webhook_ingest ? [
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/resend/webhook-secret",
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/resend/webhook-previous-secret",
+      ] : [],
       var.enable_owner_bootstrap ? [
         "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/api/bootstrap-admin-identity",
         "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/api/bootstrap-admin-password",
@@ -1050,9 +1060,32 @@ resource "aws_iam_role_policy" "app" {
   policy = data.aws_iam_policy_document.app.json
 }
 
+data "aws_iam_policy_document" "ssm_core_without_parameter_reads" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "ssm:DescribeAssociation", "ssm:DescribeDocument", "ssm:GetDeployablePatchSnapshotForInstance",
+      "ssm:GetDocument", "ssm:GetManifest", "ssm:ListAssociations", "ssm:ListInstanceAssociations",
+      "ssm:PutComplianceItems", "ssm:PutConfigurePackageResult", "ssm:PutInventory",
+      "ssm:UpdateAssociationStatus", "ssm:UpdateInstanceAssociationStatus", "ssm:UpdateInstanceInformation",
+      "ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel",
+      "ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_policy" "ssm_core_without_parameter_reads" {
+  name   = "${var.name_prefix}-ssm-core-no-parameter-reads"
+  policy = data.aws_iam_policy_document.ssm_core_without_parameter_reads.json
+  tags   = var.common_tags
+}
+
 resource "aws_iam_role_policy_attachment" "ssm" {
   role       = aws_iam_role.app.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  policy_arn = aws_iam_policy.ssm_core_without_parameter_reads.arn
 }
 
 resource "aws_iam_instance_profile" "app" {

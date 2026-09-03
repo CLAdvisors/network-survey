@@ -14,9 +14,9 @@ It creates:
 - an RDS-managed master credential in Secrets Manager
 - private/versioned config, artifact, dashboard, and survey buckets
 - CloudFront HTTPS distributions for the API, dashboard, and survey with optional validated ACM aliases while retaining default-domain access
-- exact `prod-secondary` runtime configuration with sending, claiming, webhook, bootstrap, cutover, and traffic gates off
+- exact `prod-secondary` runtime configuration with an isolated Resend scope/sender/Reply-To and credential, sending, claiming, webhook, bootstrap, cutover, and traffic gates off
 - target-scoped deploy IAM, runtime log groups, SNS routing, and baseline ALB/ASG/RDS alarms
 
-The launch template installs the reviewed runtime through per-AZ NAT egress and bootstraps only `latest-compatible.tar.gz` from the target artifact bucket. The deploy contract retrieves the RDS-managed password transiently, permits an absent Resend key only for `prod-secondary`, validates the exact namespace, and keeps all durable email/webhook controls disabled after fresh migration.
+The launch template installs the reviewed runtime through per-AZ NAT egress and bootstraps only `latest-compatible.tar.gz` from the target artifact bucket. The deploy contract retrieves the RDS-managed password transiently, loads Resend secrets only when target-only gates are enabled, validates the exact target identity and parameter paths, and keeps all durable email/webhook controls disabled after fresh migration.
 
 The module does not create DNS, ACM certificates, provider credentials, webhook registrations, bootstrap identities, or production data.

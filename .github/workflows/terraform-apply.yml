@@ -7,7 +7,7 @@ on:
         description: Environment to apply
         required: true
         type: choice
-        options: [staging, prod]
+        options: [staging, prod, prod-secondary]
         default: staging
 
 permissions:
@@ -17,13 +17,13 @@ permissions:
 concurrency:
   # Production infrastructure/config updates serialize with production API
   # releases so deploy cannot read partially updated IAM or runtime config.
-  group: ${{ inputs.environment == 'prod' && 'api-release-production' || 'api-release-staging' }}
+  group: ${{ inputs.environment == 'prod' && 'api-release-production' || inputs.environment == 'prod-secondary' && 'api-release-prod-secondary' || 'api-release-staging' }}
   cancel-in-progress: false
 
 jobs:
   apply:
     runs-on: ubuntu-latest
-    # prod/prod-v2 should be protected with required reviewers in GitHub Environments.
+    # prod and prod-secondary must be protected with required reviewers in GitHub Environments.
     environment: ${{ inputs.environment }}
 
     steps:
@@ -38,6 +38,17 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Assert prod-secondary target account
+        if: ${{ inputs.environment == 'prod-secondary' }}
+        env:
+          EXPECTED_ACCOUNT_ID: '710054969994'
+          ROLE_ARN: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          case "$ROLE_ARN" in arn:aws:iam::${EXPECTED_ACCOUNT_ID}:role/*) ;; *) echo 'prod-secondary role belongs to the wrong account' >&2; exit 1;; esac
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$EXPECTED_ACCOUNT_ID" || { echo 'Refusing apply outside prod-secondary account' >&2; exit 1; }
+          test "$AWS_REGION" = us-east-1 || { echo 'prod-secondary region must be us-east-1' >&2; exit 1; }
 
       - name: Resolve Terraform environment
         id: env
@@ -54,6 +65,11 @@ jobs:
               WORKSPACE=
               VAR_FILE=
               ;;
+            prod-secondary)
+              WORKING_DIR=terraform/envs/prod-secondary
+              WORKSPACE=
+              VAR_FILE=prod-secondary.tfvars
+              ;;
             production)
               echo "The old root production workspace is blocked; use prod-v2/prod (terraform/envs/prod)." >&2
               exit 1
@@ -68,6 +84,7 @@ jobs:
         run: terraform fmt -check -recursive
 
       - name: Check sensitive variables
+        if: ${{ inputs.environment != 'prod-secondary' }}
         env:
           TF_VAR_db_password: ${{ secrets.TF_VAR_DB_PASSWORD }}
         run: |

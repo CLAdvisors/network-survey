@@ -15,7 +15,9 @@ const { Model, Serializer, Question } = require('survey-core');
 
 dotenvFlow.config();
 
-const { ResendProvider, reserveProviderRateOnClient } = require('./email');
+const { ResendProvider, reserveProviderRateOnClient, synchronousEmailIdentity, validateProdSecondaryResendConfig } = require('./email');
+validateProdSecondaryResendConfig(process.env);
+const emailIdentity = synchronousEmailIdentity(process.env);
 const lifecycle = require('./lifecycle');
 const respondentRoster = require('./respondent-roster');
 const { effectiveInstructions } = require('./survey-instructions');
@@ -101,7 +103,7 @@ async function sendAccountEmail({ to, subject, html, text }) {
   if (!directSurveyProvider) return { sent: false, message: 'Email is not configured; deliver the returned link manually.' };
   try {
     const result = await invokeSynchronousProvider(to, () => directSurveyProvider.send(
-      { from: 'CLA Survey <survey@cladvisors.com>', to, subject, html, text },
+      { from:emailIdentity.sender, ...(emailIdentity.replyTo ? { reply_to:emailIdentity.replyTo } : {}), to, subject, html, text },
       { idempotencyKey: `account-email/${crypto.randomUUID()}` }
     ));
     if (!result?.id) throw new Error('Provider response did not include a message ID');
@@ -134,7 +136,7 @@ async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Netwo
   const link = buildSurveyUrl(process.env.SURVEY_URL, { surveyName: survey.name, demoToken });
   const rendered = require('./email').renderInvitation({ bodyText: text, link, language });
   return invokeSynchronousProvider(email, () => directSurveyProvider.send(
-    { from: 'CLA Survey <survey@cladvisors.com>', to: email, subject: `[Demo] ${subject}`, ...rendered },
+    { from:emailIdentity.sender, ...(emailIdentity.replyTo ? { reply_to:emailIdentity.replyTo } : {}), to: email, subject: `[Demo] ${subject}`, ...rendered },
     { idempotencyKey: `survey-demo/${crypto.randomUUID()}` }
   ));
 }

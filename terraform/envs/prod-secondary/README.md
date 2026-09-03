@@ -24,11 +24,12 @@ The target-owned bucket and CMK were bootstrapped before initialization. This wo
 - RDS generates and manages its master password in Secrets Manager under a target CMK
 - direct ALB CIDR ingress remains empty; the enabled API CloudFront distribution reaches the ALB only through AWS's managed CloudFront origin-facing prefix list
 - API, dashboard, and survey use CloudFront with validated ACM aliases under `cladvisorsurveys.com`; default domains remain available during the transition window
-- no DNS, Resend credential/webhook, source data, or source account reference is created; target-only session/bootstrap SecureStrings are operator-managed
-- runtime config hard-codes delivery, claiming, sending, webhook, bootstrap, cutover, and public-traffic gates off
+- no DNS or Resend provider resource is created; target-only Resend SecureStrings are operator-managed at fixed `/network-survey/prod-secondary/resend/*` paths
+- runtime fixes the isolated scope, `cladvisorsurveys.com` sender, and Reply-To; credential loading and webhook ingestion are independent Terraform gates that default off
+- runtime config hard-codes delivery, claiming, sending, webhook processing, bootstrap, and cutover gates off
 
 ## Current build state
 
-The target backend, account governance, network, private two-instance ASG, Multi-AZ RDS, encrypted storage, disabled CloudFront distributions, fenced ALB, logs, alarms, and deploy roles have been created in account `710054969994`. The launch template installs the application runtime through per-AZ NAT egress and bootstraps only a capability-verified artifact from the target bucket. Runtime resolves the RDS-managed secret transiently and allows no Resend key while all provider controls remain disabled.
+The target backend, account governance, network, private two-instance ASG, Multi-AZ RDS, encrypted storage, disabled CloudFront distributions, fenced ALB, logs, alarms, and deploy roles have been created in account `710054969994`. The launch template installs the application runtime through per-AZ NAT egress and bootstraps only a capability-verified artifact from the target bucket. Runtime resolves the RDS-managed secret transiently. Resend credential loading and ingestion remain disabled by default; exact target-only parameter permissions are granted only when their corresponding gate is enabled.
 
-Direct public ALB ingress, Resend registration/key, and production data remain deliberately absent. Custom DNS and ACM are active for `api.cladvisorsurveys.com`, `dashboard.cladvisorsurveys.com`, and `surveys.cladvisorsurveys.com`. The protected GitHub `prod-secondary` environment and target-only OIDC variables are configured.
+Direct public ALB ingress, Resend provider registration/key values, and production data remain deliberately absent. See `../../../docs/runbooks/prod-secondary-resend.md` for the separately approved provider and secret preparation sequence. Custom DNS and ACM are active for `api.cladvisorsurveys.com`, `dashboard.cladvisorsurveys.com`, and `surveys.cladvisorsurveys.com`. The protected GitHub `prod-secondary` environment and target-only OIDC variables are configured.

@@ -112,6 +112,6 @@ class DeliveryWorker {
   stop(){this.stopped=true;}
 }
 
-async function main(){const pool=createPool();const apiKey=process.env.RESEND_API_KEY||process.env.RESEND_KEY;const provider=apiKey?new ResendProvider({apiKey,timeoutMs:Number(process.env.EMAIL_PROVIDER_TIMEOUT_MS||15000)}):{send:async()=>{throw new Error('Email provider is disabled because no Resend API key is configured');}};const worker=new DeliveryWorker({pool,provider});const stop=()=>worker.stop();process.on('SIGTERM',stop);process.on('SIGINT',stop);try{await worker.run();}finally{await pool.end();}}
+async function main(){require('./email').validateProdSecondaryResendConfig(process.env);const pool=createPool();const apiKey=process.env.RESEND_API_KEY||process.env.RESEND_KEY;const provider=apiKey?new ResendProvider({apiKey,timeoutMs:Number(process.env.EMAIL_PROVIDER_TIMEOUT_MS||15000)}):{send:async()=>{throw new Error('Email provider is disabled because no Resend API key is configured');}};const worker=new DeliveryWorker({pool,provider});const stop=()=>worker.stop();process.on('SIGTERM',stop);process.on('SIGINT',stop);try{await worker.run();}finally{await pool.end();}}
 if(require.main===module)main().catch((error)=>{console.error('Email worker failed:',bounded(error.message));process.exit(1);});
 module.exports={DeliveryWorker,createPool,isOutsideProviderIdempotencyWindow,canRetryAmbiguous,buildDeliveryPayload};

@@ -819,6 +819,7 @@ class WebhookWorker {
 }
 
 async function main() {
+  require('./email').validateProdSecondaryResendConfig(process.env);
   const pool = createPool();
   const provider = process.env.RESEND_API_KEY || process.env.RESEND_KEY
     ? new ResendProvider({ apiKey:process.env.RESEND_API_KEY || process.env.RESEND_KEY })

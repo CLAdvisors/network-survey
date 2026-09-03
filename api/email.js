@@ -3,6 +3,33 @@
 const crypto = require('crypto');
 
 const DEFAULT_SENDER = 'CLA Survey <survey@cladvisors.com>';
+const PROD_SECONDARY_SCOPE = 'network-survey-resend-prod-secondary';
+const PROD_SECONDARY_SENDER = 'CLA Survey <survey@cladvisorsurveys.com>';
+const PROD_SECONDARY_REPLY_TO = 'survey@cladvisors.com';
+
+function isProdSecondary(env = process.env) {
+  return String(env.EMAIL_WORKER_ENV || '').trim() === 'prod-secondary';
+}
+
+function synchronousEmailIdentity(env = process.env) {
+  return isProdSecondary(env)
+    ? { sender:PROD_SECONDARY_SENDER, replyTo:PROD_SECONDARY_REPLY_TO }
+    : { sender:DEFAULT_SENDER, replyTo:null };
+}
+
+function validateProdSecondaryResendConfig(env = process.env) {
+  if (!isProdSecondary(env)) return;
+  if (env.RESEND_KEY) throw new Error('prod-secondary must not use the legacy RESEND_KEY');
+  if (env.RESEND_PROVIDER_ACCOUNT_SCOPE !== PROD_SECONDARY_SCOPE) throw new Error(`prod-secondary RESEND_PROVIDER_ACCOUNT_SCOPE must be ${PROD_SECONDARY_SCOPE}`);
+  if (env.SURVEY_EMAIL_SENDER !== PROD_SECONDARY_SENDER) throw new Error(`prod-secondary SURVEY_EMAIL_SENDER must be ${PROD_SECONDARY_SENDER}`);
+  if (env.SURVEY_EMAIL_REPLY_TO !== PROD_SECONDARY_REPLY_TO) throw new Error(`prod-secondary SURVEY_EMAIL_REPLY_TO must be ${PROD_SECONDARY_REPLY_TO}`);
+  if (!['true','false'].includes(env.RESEND_CREDENTIAL_LOAD_ENABLED)) throw new Error('prod-secondary RESEND_CREDENTIAL_LOAD_ENABLED must be exactly true or false');
+  if (!['true','false'].includes(env.RESEND_WEBHOOK_INGEST_ENABLED)) throw new Error('prod-secondary RESEND_WEBHOOK_INGEST_ENABLED must be exactly true or false');
+  if (env.RESEND_CREDENTIAL_LOAD_ENABLED === 'true' && !env.RESEND_API_KEY) throw new Error('prod-secondary Resend credential loading is enabled but RESEND_API_KEY is unavailable');
+  if (env.RESEND_CREDENTIAL_LOAD_ENABLED === 'false' && (env.RESEND_API_KEY || env.RESEND_KEY)) throw new Error('prod-secondary Resend credential is present while loading is disabled');
+  if (env.RESEND_WEBHOOK_INGEST_ENABLED === 'true' && !env.RESEND_WEBHOOK_SECRET) throw new Error('prod-secondary webhook ingestion is enabled but its secret is unavailable');
+  if (env.RESEND_WEBHOOK_INGEST_ENABLED === 'false' && (env.RESEND_WEBHOOK_SECRET || env.RESEND_WEBHOOK_PREVIOUS_SECRET)) throw new Error('prod-secondary webhook secret is present while ingestion is disabled');
+}
 const LEGACY_RENDERER_VERSION = 'survey-invitation-v1';
 const TAGGED_RENDERER_VERSION = 'survey-invitation-v2';
 const RENDERER_VERSION = 'survey-invitation-v3';
@@ -205,4 +232,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction };
+module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction };

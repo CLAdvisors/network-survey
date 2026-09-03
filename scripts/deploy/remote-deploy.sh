@@ -101,10 +101,28 @@ else
   append_secret_from_ssm DB_PASSWORD DB_PASSWORD_PARAMETER
 fi
 append_secret_from_ssm SESSION_SECRET SESSION_SECRET_PARAMETER
+RUNTIME_EMAIL_ENV=$(get_env_value EMAIL_WORKER_ENV || true)
 RESEND_API_KEY_PARAMETER=$(get_env_value RESEND_API_KEY_PARAMETER || true)
-if [ -n "$RESEND_API_KEY_PARAMETER" ]; then
+if [ "$RUNTIME_EMAIL_ENV" = "prod-secondary" ]; then
+  test "$(get_env_value RESEND_PROVIDER_ACCOUNT_SCOPE)" = "network-survey-resend-prod-secondary" || { echo 'Invalid prod-secondary Resend account scope' >&2; exit 1; }
+  test "$(get_env_value SURVEY_EMAIL_SENDER)" = "CLA Survey <survey@cladvisorsurveys.com>" || { echo 'Invalid prod-secondary sender identity' >&2; exit 1; }
+  test "$(get_env_value SURVEY_EMAIL_REPLY_TO)" = "survey@cladvisors.com" || { echo 'Invalid prod-secondary Reply-To identity' >&2; exit 1; }
+  if [ "$(get_env_value RESEND_CREDENTIAL_LOAD_ENABLED)" = "true" ]; then
+    test "$RESEND_API_KEY_PARAMETER" = "/network-survey/prod-secondary/resend/api-key" || { echo 'Invalid prod-secondary Resend API key path' >&2; exit 1; }
+    append_secret_from_ssm RESEND_API_KEY RESEND_API_KEY_PARAMETER
+  else
+    test -z "$RESEND_API_KEY_PARAMETER" || { echo 'prod-secondary API key path must be absent while credential loading is disabled' >&2; exit 1; }
+  fi
+  if [ "$(get_env_value RESEND_WEBHOOK_INGEST_ENABLED)" = "true" ]; then
+    test "$(get_env_value RESEND_WEBHOOK_SECRET_PARAMETER)" = "/network-survey/prod-secondary/resend/webhook-secret" || { echo 'Invalid prod-secondary webhook secret path' >&2; exit 1; }
+    test "$(get_env_value RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER)" = "/network-survey/prod-secondary/resend/webhook-previous-secret" || { echo 'Invalid prod-secondary previous webhook secret path' >&2; exit 1; }
+  else
+    test -z "$(get_env_value RESEND_WEBHOOK_SECRET_PARAMETER)" || { echo 'prod-secondary webhook secret path must be absent while ingestion is disabled' >&2; exit 1; }
+    test -z "$(get_env_value RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER)" || { echo 'prod-secondary previous webhook secret path must be absent while ingestion is disabled' >&2; exit 1; }
+  fi
+elif [ -n "$RESEND_API_KEY_PARAMETER" ]; then
   append_secret_from_ssm RESEND_API_KEY RESEND_API_KEY_PARAMETER
-elif [ "$(get_env_value EMAIL_WORKER_ENV || true)" != "prod-secondary" ]; then
+else
   echo "Missing RESEND_API_KEY_PARAMETER in runtime config" >&2
   exit 1
 fi

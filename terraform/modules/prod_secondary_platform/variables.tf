@@ -154,6 +154,18 @@ variable "enable_custom_domain_aliases" {
   default     = false
 }
 
+variable "enable_resend_credentials" {
+  description = "Allow prod-secondary runtime to load its isolated Resend sending key. Keep false until approved activation."
+  type        = bool
+  default     = false
+}
+
+variable "enable_resend_webhook_ingest" {
+  description = "Allow prod-secondary to load its isolated webhook secret and accept Resend webhooks. Keep false until approved activation."
+  type        = bool
+  default     = false
+}
+
 variable "enable_owner_bootstrap" {
   description = "Temporarily expose the approved CLA owner bootstrap configuration."
   type        = bool

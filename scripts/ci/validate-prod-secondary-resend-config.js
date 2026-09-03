@@ -8,6 +8,7 @@ const required=(text,value,file)=>{if(!text.includes(value))throw new Error(`${f
 
 const moduleMain=read('terraform/modules/prod_secondary_platform/main.tf');
 const tfvars=read('terraform/envs/prod-secondary/prod-secondary.tfvars');
+const targetVariables=read('terraform/envs/prod-secondary/variables.tf');
 const remoteDeploy=read('scripts/deploy/remote-deploy.sh');
 const emailRuntime=read('api/email.js');
 const webhookManagement=read('scripts/deploy/manage-resend-webhook.js');
@@ -24,7 +25,11 @@ for(const value of [
   'RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-previous-secret" : ""}',
   'RESEND_WEBHOOK_INGEST_ENABLED=${var.enable_resend_webhook_ingest}',
 ]) required(moduleMain,value,'target module');
-for(const value of ['enable_resend_credentials    = false','enable_resend_webhook_ingest = false']) required(tfvars,value,'prod-secondary.tfvars');
+for(const value of ['enable_resend_credentials    = true','enable_resend_webhook_ingest = true']) required(tfvars,value,'activated prod-secondary.tfvars');
+for(const value of [
+  'variable "enable_resend_credentials" {\n  description = "Load the isolated prod-secondary Resend sending key into runtime. Activation gate; default off."\n  type        = bool\n  default     = false',
+  'variable "enable_resend_webhook_ingest" {\n  description = "Load the isolated prod-secondary webhook secret and accept webhooks. Activation gate; default off."\n  type        = bool\n  default     = false',
+]) required(targetVariables,value,'default-off target variables');
 for(const value of ['var.enable_resend_credentials ? [','var.enable_resend_webhook_ingest ? [','ssm:resourceTag/Environment','ssm:resourceTag/App','ssm:resourceTag/Stack','tag:GetResources']) required(moduleMain,value,'conditional target IAM');
 if(moduleMain.includes('resourcegroupstaggingapi:GetResources'))throw new Error('target deploy IAM uses an invalid Resource Groups Tagging API action name');
 required(remoteDeploy,'RUNTIME_EMAIL_ENV" = "prod-secondary','remote deploy');

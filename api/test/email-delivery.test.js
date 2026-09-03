@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
+const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient, reserveProviderRateWithAvailabilityInTransaction } = require('../email');
 const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
@@ -137,6 +137,15 @@ test('retained provider-boundary clients reserve rate capacity without reconnect
   assert.match(calls[0].sql,/BEGIN/);
   assert.ok(calls.some(({values})=>values.includes('email-rate-budget:test')));
   assert.match(calls.at(-1).sql,/COMMIT/);
+});
+
+test('full provider rate budgets report the first principled reservation time without reserving', async () => {
+  const calls=[];
+  const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
+  const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:5,next_available_at:nextAvailableAt}]};return{rowCount:1,rows:[]};}};
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt});
+  assert.match(calls.find(({sql})=>/SELECT count/.test(sql)).sql,/array_agg\(reserved_at ORDER BY reserved_at\).*\+interval '1 second' AS next_available_at/);
+  assert.equal(calls.some(({sql})=>/INSERT INTO email_rate_reservations/.test(sql)),false);
 });
 
 test('readiness validates the entire audience and exact normalized template coverage', () => {
@@ -327,9 +336,33 @@ test('worker cancellation helpers cannot erase a previously ambiguous provider a
   const releaseCalls=[];
   const releaseClient={async query(sql,values=[]){releaseCalls.push({sql,values});return{rowCount:1,rows:[]};}};
   const worker=new DeliveryWorker({pool:{},provider:{},env:{NODE_ENV:'test'}});
-  await worker.releaseWithoutSend(releaseClient,{id:'delivery-1',lease_token:'lease-3'},'provider_rate_wait');
+  const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
+  await worker.releaseWithoutSend(releaseClient,{id:'delivery-1',lease_token:'lease-3'},'provider_rate_wait',nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN CASE WHEN d\.status='reminder_leased' THEN 'reminder_retry_wait' ELSE 'retry_wait'/);
+  assert.match(releaseCalls[1].sql,/GREATEST\(COALESCE\(\$4::timestamptz/);
+  assert.doesNotMatch(releaseCalls[1].sql,/100 milliseconds/);
+  assert.equal(releaseCalls[1].values[3],nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN d\.last_error_code ELSE \$3/);
+});
+
+test('provider failures back off by provider crossings rather than inflated worker claims', async () => {
+  for(const error of [
+    new ProviderError('Rate limited',{code:'rate_limit_exceeded',status:429}),
+    new ProviderError('Provider response lost',{code:'provider_timeout',status:503}),
+  ]){
+    const calls=[];
+    const current={id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1',status:'leased',attempt_count:12,created_at:'2026-08-04T11:00:00Z',cancellation_requested_at:null};
+    const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+      if(/SELECT \* FROM survey_email_deliveries/.test(sql))return{rows:[current],rowCount:1};
+      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
+      return{rows:[],rowCount:1};
+    }};
+    const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},random:()=>0.5,clock:()=>new Date('2026-08-04T12:00:01Z'),env:{NODE_ENV:'test'}});
+    await worker.finalizeFailure(current,error);
+    const retry=calls.find(({sql})=>/next_attempt_at=now\(\)\+\(\$3::text\|\|' milliseconds'\)/.test(sql));
+    assert.ok(retry);
+    assert.equal(retry.values[2],1000,'one provider crossing receives first-attempt backoff despite twelve worker claims');
+  }
 });
 
 test('worker retry backoff is bounded and uses injected randomness', () => {

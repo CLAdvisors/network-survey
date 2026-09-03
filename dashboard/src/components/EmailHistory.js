@@ -46,15 +46,17 @@ const DesktopHistory = ({ messages }) => (
       <TableHead><TableRow>
         <TableCell sx={{ width: '9%' }}>Type</TableCell>
         <TableCell sx={{ width: '20%' }}>Recipient</TableCell>
-        <TableCell sx={{ width: '22%' }}>Status</TableCell>
-        <TableCell align="right" sx={{ width: '8%' }}>Attempts</TableCell>
-        <TableCell sx={{ width: '41%' }}>Timing</TableCell>
+        <TableCell sx={{ width: '20%' }}>Status</TableCell>
+        <TableCell align="right" sx={{ width: '9%' }}>Provider attempts</TableCell>
+        <TableCell align="right" sx={{ width: '9%' }}>Worker attempts</TableCell>
+        <TableCell sx={{ width: '33%' }}>Timing</TableCell>
       </TableRow></TableHead>
       <TableBody>{messages.map((message, index) => (
         <TableRow key={`${message.campaign?.launchId || 'legacy'}-${message.recipient?.address || 'unknown'}-${message.timestamps?.queuedAt || 'unknown'}-${index}`}>
           <TableCell>{typeLabel(message.messageType)}</TableCell>
           <TableCell><Recipient recipient={message.recipient} /></TableCell>
           <TableCell><Outcome status={message.status} /></TableCell>
+          <TableCell align="right">{Number(message.providerAttempts || 0)}</TableCell>
           <TableCell align="right">{Number(message.attempts || 0)}</TableCell>
           <TableCell><TimeList timestamps={message.timestamps} /></TableCell>
         </TableRow>
@@ -72,7 +74,10 @@ const MobileHistory = ({ messages }) => (
       <Paper component="article" aria-labelledby={headingId} variant="outlined" key={`${message.campaign?.launchId || 'legacy'}-${message.recipient?.address || 'unknown'}-${message.timestamps?.queuedAt || 'unknown'}-${index}`} sx={{ p: 1.5, minWidth: 0 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
           <Typography id={headingId} component="h3" variant="subtitle2">Message {index + 1}: {typeLabel(message.messageType)} for {recipientLabel}</Typography>
-          <Typography variant="body2" aria-label={`${Number(message.attempts || 0)} attempt${Number(message.attempts || 0) === 1 ? '' : 's'}`}>{Number(message.attempts || 0)} attempt{Number(message.attempts || 0) === 1 ? '' : 's'}</Typography>
+          <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
+            <Typography variant="body2" aria-label={`${Number(message.providerAttempts || 0)} provider attempt${Number(message.providerAttempts || 0) === 1 ? '' : 's'}`}>{Number(message.providerAttempts || 0)} provider</Typography>
+            <Typography variant="caption" color="text.secondary" aria-label={`${Number(message.attempts || 0)} worker attempt${Number(message.attempts || 0) === 1 ? '' : 's'}`}>{Number(message.attempts || 0)} worker</Typography>
+          </Box>
         </Stack>
         <Box sx={{ mt: 1 }}><Recipient recipient={message.recipient} /></Box>
         <Box sx={{ mt: 1.25 }}><Outcome status={message.status} /></Box>
@@ -172,7 +177,7 @@ const EmailHistoryView = ({ survey, sessionKey }) => {
         <Box>
           <Typography id="email-history-heading" ref={headingRef} tabIndex={-1} component="h2" variant="h6" sx={{ '&:focus-visible': { outline: '3px solid', outlineColor: 'primary.main', outlineOffset: 3 } }}>Email history</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 800 }}>
-            Invitations and reminders targeted for this survey. “Provider accepted” means the email service accepted a message; only “Delivered” confirms receipt by the recipient's mail server.
+            Invitations and reminders targeted for this survey. Provider attempts count requests that reached the email service; worker attempts also include internal scheduling work. “Provider accepted” means the email service accepted a message; only “Delivered” confirms receipt by the recipient's mail server.
           </Typography>
         </Box>
         <Button onClick={refresh} startIcon={loading ? <CircularProgress size={16} /> : <RefreshIcon />} disabled={loading} aria-label={`Refresh email history for ${survey.name || 'selected survey'}`}>Refresh</Button>

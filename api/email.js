@@ -197,13 +197,17 @@ class ResendProvider {
   }
 }
 
-async function reserveProviderRateInTransaction(client, environment, rate) {
+async function reserveProviderRateWithAvailabilityInTransaction(client, environment, rate) {
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`email-rate-budget:${environment}`]);
   await client.query(`DELETE FROM email_rate_reservations WHERE environment=$1 AND reserved_at<clock_timestamp()-interval '10 minutes'`, [environment]);
-  const used = await client.query(`SELECT count(*)::int AS count FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()-interval '1 second'`, [environment]);
-  if (Number(used.rows[0]?.count || 0) >= rate) return false;
+  const used = await client.query(`SELECT count(*)::int AS count,(array_agg(reserved_at ORDER BY reserved_at))[GREATEST(count(*)::int-$2+1,1)]+interval '1 second' AS next_available_at FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()-interval '1 second'`, [environment, rate]);
+  if (Number(used.rows[0]?.count || 0) >= rate) return { reserved: false, nextAvailableAt: used.rows[0].next_available_at };
   await client.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp())`, [environment]);
-  return true;
+  return { reserved: true, nextAvailableAt: null };
+}
+
+async function reserveProviderRateInTransaction(client, environment, rate) {
+  return (await reserveProviderRateWithAvailabilityInTransaction(client, environment, rate)).reserved;
 }
 
 async function reserveProviderRateOnClient(client, environment, rate) {
@@ -232,4 +236,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction };
+module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction };

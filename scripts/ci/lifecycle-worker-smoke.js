@@ -6,7 +6,7 @@ const { createRequire } = require('node:module');
 const apiRequire = createRequire(path.resolve(process.cwd(), 'api/package.json'));
 const { Pool } = apiRequire('pg');
 const { DeliveryWorker } = require('../../api/email-worker');
-const { ProviderError, reserveProviderRate } = require('../../api/email');
+const { ProviderError, reserveProviderRate, reserveProviderRateWithAvailabilityInTransaction } = require('../../api/email');
 const lifecycle = require('../../api/lifecycle');
 
 const poolConfig = {
@@ -62,6 +62,16 @@ const pool = new Pool(poolConfig);
   assert.equal(reservations.filter(Boolean).length, 3, 'sliding provider budget must serialize concurrent reservations');
   await pool.query(`DELETE FROM email_rate_reservations WHERE environment='test'`);
 
+  const schedulingClient=await pool.connect();
+  try{
+    await schedulingClient.query('BEGIN');
+    const seeded=(await schedulingClient.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES('test-rate-schedule',clock_timestamp()) RETURNING reserved_at`)).rows[0];
+    const denied=await reserveProviderRateWithAvailabilityInTransaction(schedulingClient,'test-rate-schedule',1);
+    assert.equal(denied.reserved,false);
+    assert.equal(new Date(denied.nextAvailableAt).getTime(),new Date(seeded.reserved_at).getTime()+1000,'rate-wait retry must target expiry of the oldest active reservation');
+    await schedulingClient.query('ROLLBACK');
+  }finally{schedulingClient.release();}
+
   const boundaryBlocker = await pool.connect();
   await boundaryBlocker.query(`SELECT pg_advisory_lock(hashtextextended($1,0))`, [`survey-provider-boundary:${process.env.SURVEY_ID}`]);
   const processing = worker.processOne();
@@ -94,6 +104,14 @@ const pool = new Pool(poolConfig);
   assert.equal(delivery.provider_message_id, 'ci-provider-message-id');
   assert.ok(attempt.provider_started_at);
   assert.equal(attempt.outcome, 'accepted');
+
+  const acceptedDelivery=(await pool.query(`SELECT id FROM survey_email_deliveries WHERE survey_id=$1 AND provider_message_id='ci-provider-message-id'`,[process.env.SURVEY_ID])).rows[0];
+  await pool.query(`INSERT INTO survey_email_attempts(delivery_id,attempt_number,lease_token,outcome,finished_at,error_message) VALUES($1,2,gen_random_uuid(),'cancelled',now(),'provider_rate_wait'),($1,3,gen_random_uuid(),'cancelled',now(),'provider_rate_wait')`,[acceptedDelivery.id]);
+  const history=await lifecycle.listEmailHistory(pool,actor,process.env.SURVEY_ID,{}, {SESSION_SECRET:'ci-email-history-secret'});
+  const acceptedHistory=history.messages.find(message=>message.status.code==='provider_accepted');
+  assert.equal(acceptedHistory.attempts,3,'history must retain all worker-attempt diagnostics');
+  assert.equal(acceptedHistory.providerAttempts,1,'history must count only committed provider boundary crossings');
+  assert.equal(JSON.stringify(acceptedHistory).includes('provider_rate_wait'),false,'history must not expose internal attempt errors');
 
   const concurrentSurvey = (await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id) SELECT 'CI Concurrent Launch','Concurrent',now(),'{"elements":[{"type":"text","name":"question_1"}]}'::jsonb,organization_id FROM survey WHERE id=$1 RETURNING *`, [process.env.SURVEY_ID])).rows[0];
   await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES('Concurrent Person','concurrent@example.test',$1,$2,true,'ci-concurrent-token','English',false)`, [concurrentSurvey.name, concurrentSurvey.id]);

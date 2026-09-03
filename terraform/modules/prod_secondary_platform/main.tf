@@ -66,7 +66,7 @@ locals {
     "SURVEY_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.survey : aws_cloudfront_distribution.frontend["survey"].domain_name}",
     "EMAIL_WORKER_ENV=prod-secondary",
     "EMAIL_RATE_BUDGET_ENV=prod-secondary",
-    "SURVEY_DELIVERY_V2_ENABLED=false",
+    "SURVEY_DELIVERY_V2_ENABLED=${var.enable_survey_delivery_v2}",
     "LEGACY_START_ENABLED=false",
     "EMAIL_CLAIMING_ENABLED=false",
     "EMAIL_SENDING_ENABLED=false",

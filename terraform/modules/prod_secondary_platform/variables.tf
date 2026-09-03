@@ -166,6 +166,12 @@ variable "enable_resend_webhook_ingest" {
   default     = false
 }
 
+variable "enable_survey_delivery_v2" {
+  description = "Allow prod-secondary administrators to create durable survey launches after provider activation. Keep false until approved activation."
+  type        = bool
+  default     = false
+}
+
 variable "enable_owner_bootstrap" {
   description = "Temporarily expose the approved CLA owner bootstrap configuration."
   type        = bool

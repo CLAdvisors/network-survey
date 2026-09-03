@@ -2188,14 +2188,17 @@ test('rollback capability validation permits no-reminder artifacts, rejects shar
   t.after(()=>fs.rmSync(release,{recursive:true,force:true}));
   fs.mkdirSync(path.join(release,'deploy'));
   const base={format_version:1,webhook_ingest:1,webhook_projection:1,suppression_enforcement:1,schema:{webhook_delivery_truth:1}};
-  const validate=marker=>{
+  const validate=(marker,...args)=>{
     fs.writeFileSync(path.join(release,'deploy','CAPABILITIES.json'),JSON.stringify(marker));
-    return spawnSync(process.execPath,[path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),release],{encoding:'utf8'});
+    return spawnSync(process.execPath,[path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),release,...args],{encoding:'utf8'});
   };
   assert.equal(validate(base).status,0,'artifact without reminder launch support is safe when no database floor is requested');
   const shared=validate({...base,reminder_provider_boundary:1});
   assert.notEqual(shared.status,0);assert.match(shared.stderr,/unsafe shared reminder queue/);
   assert.equal(validate({...base,reminder_provider_boundary:2}).status,0);
+  const unisolated=validate({...base,reminder_provider_boundary:3},'--require-prod-secondary-resend-isolation');
+  assert.notEqual(unisolated.status,0);assert.match(unisolated.stderr,/prod-secondary Resend isolation/);
+  assert.equal(validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1},'--require-prod-secondary-resend-isolation').status,0);
 });
 
 test('rollback database validation uses the installed runtime and enforces provider-binding capability 3', (t) => {

@@ -10,6 +10,8 @@ const moduleMain=read('terraform/modules/prod_secondary_platform/main.tf');
 const tfvars=read('terraform/envs/prod-secondary/prod-secondary.tfvars');
 const remoteDeploy=read('scripts/deploy/remote-deploy.sh');
 const emailRuntime=read('api/email.js');
+const webhookManagement=read('scripts/deploy/manage-resend-webhook.js');
+const capabilities=JSON.parse(read('scripts/deploy/CAPABILITIES.json'));
 const applyWorkflow=read('.github/workflows/terraform-apply.yml');
 
 for(const value of [
@@ -23,9 +25,11 @@ for(const value of [
   'RESEND_WEBHOOK_INGEST_ENABLED=${var.enable_resend_webhook_ingest}',
 ]) required(moduleMain,value,'target module');
 for(const value of ['enable_resend_credentials    = false','enable_resend_webhook_ingest = false']) required(tfvars,value,'prod-secondary.tfvars');
-for(const value of ['var.enable_resend_credentials ? [','var.enable_resend_webhook_ingest ? [']) required(moduleMain,value,'conditional target IAM');
+for(const value of ['var.enable_resend_credentials ? [','var.enable_resend_webhook_ingest ? [','ssm:resourceTag/Environment','ssm:resourceTag/App','ssm:resourceTag/Stack']) required(moduleMain,value,'conditional target IAM');
 required(remoteDeploy,'RUNTIME_EMAIL_ENV" = "prod-secondary','remote deploy');
 for(const value of ['prod-secondary must not use the legacy RESEND_KEY','credential is present while loading is disabled','webhook secret is present while ingestion is disabled']) required(emailRuntime,value,'email runtime');
+for(const value of ['https://api.cladvisorsurveys.com/api/webhooks/resend','710054969994','/network-survey/prod-secondary/resend/webhook-secret']) required(webhookManagement,value,'webhook management');
+if(capabilities.prod_secondary_resend_isolation!==1)throw new Error('release capability marker lacks prod-secondary Resend isolation');
 required(applyWorkflow,"EXPECTED_ACCOUNT_ID: '710054969994'",'Terraform apply workflow');
 required(applyWorkflow,'WORKING_DIR=terraform/envs/prod-secondary','Terraform apply workflow');
 if(/terraform\/envs\/(?:prod|staging)\//.test(moduleMain))throw new Error('prod-secondary module references a source-environment Terraform root');

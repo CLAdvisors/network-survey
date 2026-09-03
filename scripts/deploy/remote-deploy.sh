@@ -22,7 +22,11 @@ source "$SERVICE_DIR/deploy.env"
 export AWS_DEFAULT_REGION
 
 REVISION=$(cat "$SOURCE_DIR/REVISION")
-node "$SOURCE_DIR/deploy/validate-release-capabilities.js" "$SOURCE_DIR"
+RELEASE_CAPABILITY_ARGS=()
+if [ "$ENVIRONMENT" = "prod-secondary" ]; then
+  RELEASE_CAPABILITY_ARGS+=(--require-prod-secondary-resend-isolation)
+fi
+node "$SOURCE_DIR/deploy/validate-release-capabilities.js" "$SOURCE_DIR" "${RELEASE_CAPABILITY_ARGS[@]}"
 test -f "$SOURCE_DIR/api/webhook-worker.js" || { echo "Release lacks dedicated webhook worker" >&2; exit 1; }
 DEPLOYMENT_ID="${REVISION}-$(date +%s)-$$"
 PREVIOUS_RELEASE=$(readlink -f "$SERVICE_DIR/current" 2>/dev/null || true)

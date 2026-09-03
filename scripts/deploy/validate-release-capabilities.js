@@ -5,6 +5,7 @@ const path = require('path');
 
 const releaseDir = path.resolve(process.argv[2] || '.');
 const checkDatabase = process.argv.includes('--database');
+const requireProdSecondaryResendIsolation = process.argv.includes('--require-prod-secondary-resend-isolation');
 const runtimeApiDirIndex = process.argv.indexOf('--runtime-api-dir');
 if (runtimeApiDirIndex >= 0 && !process.argv[runtimeApiDirIndex + 1]) throw new Error('--runtime-api-dir requires a path');
 const runtimeApiDir = runtimeApiDirIndex >= 0
@@ -20,6 +21,9 @@ try {
   throw new Error('release is missing a valid deploy/CAPABILITIES.json marker');
 }
 if (marker.format_version !== 1) throw new Error('unsupported capability marker format');
+if (requireProdSecondaryResendIsolation && marker.prod_secondary_resend_isolation !== 1) {
+  throw new Error('release lacks required prod-secondary Resend isolation capability');
+}
 for (const capability of required) {
   if (!Number.isSafeInteger(marker[capability]) || marker[capability] < 1) {
     throw new Error(`release lacks required ${capability} capability`);

@@ -1368,13 +1368,35 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
   statement {
-    sid     = "SendReviewedDeployCommands"
-    effect  = "Allow"
-    actions = ["ssm:SendCommand"]
-    resources = [
-      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${var.account_id}:instance/*",
-      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}::document/AWS-RunShellScript",
-    ]
+    sid       = "UseReviewedDeployDocument"
+    effect    = "Allow"
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}::document/AWS-RunShellScript"]
+  }
+
+  statement {
+    sid       = "SendCommandsToTargetStackInstances"
+    effect    = "Allow"
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${var.account_id}:instance/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/Environment"
+      values   = [var.environment]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/App"
+      values   = ["ona-api"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/Stack"
+      values   = [var.common_tags["Stack"]]
+    }
   }
 
   statement {

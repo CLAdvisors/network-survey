@@ -109,6 +109,12 @@ variable "enable_resend_webhook_ingest" {
   default     = false
 }
 
+variable "enable_survey_delivery_v2" {
+  description = "Expose durable survey launch operations in prod-secondary after provider activation. Default off."
+  type        = bool
+  default     = false
+}
+
 variable "enable_owner_bootstrap" {
   description = "One-time target-only CLA owner bootstrap gate. Return to false immediately after successful verification."
   type        = bool

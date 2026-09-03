@@ -29,6 +29,7 @@ module "platform" {
   enable_owner_bootstrap       = var.enable_owner_bootstrap
   enable_resend_credentials    = var.enable_resend_credentials
   enable_resend_webhook_ingest = var.enable_resend_webhook_ingest
+  enable_survey_delivery_v2    = var.enable_survey_delivery_v2
   operations_alert_email       = "bgarcia2324@gmail.com"
 
   common_tags = local.common_tags

@@ -24,11 +24,13 @@ for(const value of [
   'RESEND_WEBHOOK_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-secret" : ""}',
   'RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-previous-secret" : ""}',
   'RESEND_WEBHOOK_INGEST_ENABLED=${var.enable_resend_webhook_ingest}',
+  'SURVEY_DELIVERY_V2_ENABLED=${var.enable_survey_delivery_v2}',
 ]) required(moduleMain,value,'target module');
-for(const value of ['enable_resend_credentials    = true','enable_resend_webhook_ingest = true']) required(tfvars,value,'activated prod-secondary.tfvars');
+for(const value of ['enable_resend_credentials    = true','enable_resend_webhook_ingest = true','enable_survey_delivery_v2    = true']) required(tfvars,value,'activated prod-secondary.tfvars');
 for(const value of [
   'variable "enable_resend_credentials" {\n  description = "Load the isolated prod-secondary Resend sending key into runtime. Activation gate; default off."\n  type        = bool\n  default     = false',
   'variable "enable_resend_webhook_ingest" {\n  description = "Load the isolated prod-secondary webhook secret and accept webhooks. Activation gate; default off."\n  type        = bool\n  default     = false',
+  'variable "enable_survey_delivery_v2" {\n  description = "Expose durable survey launch operations in prod-secondary after provider activation. Default off."\n  type        = bool\n  default     = false',
 ]) required(targetVariables,value,'default-off target variables');
 for(const value of ['var.enable_resend_credentials ? [','var.enable_resend_webhook_ingest ? [','ssm:resourceTag/Environment','ssm:resourceTag/App','ssm:resourceTag/Stack','tag:GetResources']) required(moduleMain,value,'conditional target IAM');
 if(moduleMain.includes('resourcegroupstaggingapi:GetResources'))throw new Error('target deploy IAM uses an invalid Resource Groups Tagging API action name');

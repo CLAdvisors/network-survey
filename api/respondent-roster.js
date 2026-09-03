@@ -6,8 +6,8 @@ const { nanoid } = require('nanoid');
 const lifecycle = require('./lifecycle');
 const { isLegacyPlaceholderRespondent } = require('./respondent-utils');
 
-const MAX_ROSTER_SIZE = 1000;
-const MAX_BATCH_SIZE = 1000;
+const MAX_ROSTER_SIZE = 1500;
+const MAX_BATCH_SIZE = 1500;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CANONICAL_LANGUAGES = new Map([
   'english', 'spanish', 'french', 'german', 'italian', 'portuguese',
@@ -229,6 +229,7 @@ function parseRespondentCsv(csvData) {
 
 module.exports = {
   MAX_ROSTER_SIZE,
+  MAX_BATCH_SIZE,
   normalizeCommand,
   validateFinalRoster,
   temporaryName,

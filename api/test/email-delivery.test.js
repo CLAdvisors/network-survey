@@ -152,6 +152,11 @@ test('readiness validates the entire audience and exact normalized template cove
   const survey = { lifecycle_status:'draft', archived_at:null, questions:{elements:[{name:'q1',type:'text'}]} };
   const good = evaluateReadiness(survey, { recipients:[{respondent_id:1,contact_info:'A@example.com',uuid:'token',lang:'English'}], templates:[{lang:' english ',text:'Welcome',invitation_subject:' Team invitation '}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.equal(good.canLaunch,true);
+  const launchRecipient=index=>({respondent_id:index,contact_info:`launch${index}@example.test`,uuid:`launch-token-${index}`,lang:'English'});
+  const maximum=evaluateReadiness(survey,{recipients:Array.from({length:1500},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  assert.equal(maximum.canLaunch,true);assert.equal(maximum.eligibleCount,1500);
+  const overLimit=evaluateReadiness(survey,{recipients:Array.from({length:1501},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  assert.ok(overLimit.blockers.some(({code})=>code==='recipients_limit_exceeded'));
   assert.deepEqual(good.languages,['english']);
   assert.deepEqual(good.templateCoverage,[{language:'english',covered:true}]);
   const bad = evaluateReadiness(survey, { recipients:[
@@ -182,7 +187,7 @@ test('readiness validates the entire audience and exact normalized template cove
   assert.equal(manyInvalid.blockers.at(-1).code, 'blockers_truncated');
 });
 
-test('reminder readiness handles zero, one, 1,000, localization, and privacy-safe blockers', () => {
+test('reminder readiness handles zero, one, 1,500, localization, and privacy-safe blockers', () => {
   const survey={lifecycle_status:'active',archived_at:null};
   const config={SURVEY_URL:'https://survey.test',RESEND_API_KEY:'fake',RESEND_PROVIDER_ACCOUNT_SCOPE:'test'};
   const template={language:'english',subject:'Reminder',body_text:'Please complete the survey.',configuration_version:1};
@@ -193,9 +198,9 @@ test('reminder readiness handles zero, one, 1,000, localization, and privacy-saf
   assert.ok(draft.blockers.some(item=>item.code==='survey_not_active'&&item.message==='Only a launched survey can receive reminders.'));
   const one=evaluateReminderReadiness(survey,{recipients:[recipient(1)],templates:[template]},config);
   assert.equal(one.canLaunch,true);assert.equal(one.targetCount,1);
-  const thousand=evaluateReminderReadiness(survey,{recipients:Array.from({length:1000},(_,index)=>recipient(index+1)),templates:[template]},config);
-  assert.equal(thousand.canLaunch,true);assert.equal(thousand.targetCount,1000);
-  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:1001},(_,index)=>recipient(index+1)),templates:[template]},config);
+  const maximum=evaluateReminderReadiness(survey,{recipients:Array.from({length:1500},(_,index)=>recipient(index+1)),templates:[template]},config);
+  assert.equal(maximum.canLaunch,true);assert.equal(maximum.targetCount,1500);
+  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:1501},(_,index)=>recipient(index+1)),templates:[template]},config);
   assert.ok(over.blockers.some(item=>item.code==='recipients_limit_exceeded'));
   const localized=evaluateReminderReadiness(survey,{recipients:[{...recipient(2),lang:'French'},{...recipient(3),lang:'Klingon'}],templates:[template]},config);
   assert.ok(localized.blockers.some(item=>item.code==='template_missing'&&item.language==='french'));

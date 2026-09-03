@@ -8,6 +8,8 @@ const {
   temporaryName,
   mutateRoster,
   parseRespondentCsv,
+  MAX_ROSTER_SIZE,
+  MAX_BATCH_SIZE,
 } = require('../respondent-roster');
 
 const surveyId = '11111111-1111-4111-8111-111111111111';
@@ -200,6 +202,23 @@ test('forced failures at every mutation phase roll back rows, revision, addition
     assert.deepEqual(client.audit, [], phase);
     assert.equal(client.released, true, phase);
   }
+});
+
+test('roster and mutation limits allow exactly 1,500 respondents', () => {
+  assert.equal(MAX_ROSTER_SIZE, 1500);
+  assert.equal(MAX_BATCH_SIZE, 1500);
+  const addition = (index) => ({ name: `Person${index}`, email: `person${index}@example.test`, language: 'English', canRespond: true });
+  const maximumCommand = normalizeCommand({ expectedRevision: 0, additions: Array.from({ length: 1500 }, (_, index) => addition(index + 1)) });
+  assert.equal(validateFinalRoster([], maximumCommand).length, 1500);
+  assert.throws(
+    () => normalizeCommand({ expectedRevision: 0, additions: Array.from({ length: 1501 }, (_, index) => addition(index + 1)) }),
+    (error) => error.code === 'roster_batch_too_large'
+  );
+  const oversizedExisting = Array.from({ length: 1501 }, (_, index) => respondent(index + 1, `Person${index + 1}`, { contact_info: `person${index + 1}@example.test` }));
+  assert.throws(
+    () => validateFinalRoster(oversizedExisting, normalizeCommand({ expectedRevision: 0, updates: [fields(oversizedExisting[0])] })),
+    (error) => error.code === 'roster_too_large'
+  );
 });
 
 test('validation enforces complete roster formats, strict IDs, lengths, and supported language', () => {

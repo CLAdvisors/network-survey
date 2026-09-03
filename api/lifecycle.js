@@ -14,7 +14,7 @@ const {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MAX_LAUNCH_RECIPIENTS = 1000;
+const MAX_LAUNCH_RECIPIENTS = 1500;
 const MAX_LAUNCH_TEMPLATES = 100;
 const DEFAULT_EMAIL_HISTORY_PAGE_SIZE = 50;
 const MAX_EMAIL_HISTORY_PAGE_SIZE = 100;

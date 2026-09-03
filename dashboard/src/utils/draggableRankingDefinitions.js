@@ -46,28 +46,38 @@ const applyDefinitionEditorOptions = (editor) => {
   editor.autoGrow = true;
   editor.allowResize = true;
   editor.descriptionLocation = 'underInput';
-  editor.description = 'Optional plain text shown by the respondent information button. Line breaks are preserved and HTML is displayed literally. If any choice has a definition, every choice needs separate Value and Text strings. Every draggable ranking is limited to 100 choices and all draggable rankings together to 1,000 choices per survey. Each definition is limited to 10,000 characters / 40,960 UTF-8 bytes, and all survey definitions together to 250,000 characters / 524,288 bytes.';
+  editor.description = 'Optional plain text shown from the respondent Info button. Line breaks are preserved; HTML is shown as text. Maximum 10,000 characters / 40,960 UTF-8 bytes.';
 };
 
 export const registerDraggableRankingDefinitionMetadata = () => {
   const property = registerChoiceDefinitionProperty({
     visible: false,
-    category: 'choices',
-    displayName: 'Definition (optional plain text)',
+    category: '',
+    displayName: 'Definition',
   }) || Serializer.findProperty('itemvalue', CHOICE_DEFINITION_PROPERTY);
 
   if (!property) return null;
   property.isLocalizable = false;
+  property.category = '';
+  property.visibleIndex = 0;
   property.locationInTable = 'detail';
   property.visible = true;
   return property;
 };
 
-/** Scope the global ItemValue property to draggable-ranking choice editors. */
+const isDraggableRankingChoiceProperty = (options) =>
+  options?.parentProperty?.name === 'choices' &&
+  typeOf(options?.parentElement) === 'draggableranking';
+
+/** Keep draggable-ranking choice details focused on the definition authors need. */
 export const configureDraggableRankingDefinitionVisibility = (_sender, options) => {
-  if (options?.property?.name !== CHOICE_DEFINITION_PROPERTY) return;
-  const isRankingChoice = options?.parentProperty?.name === 'choices' &&
-    typeOf(options?.parentElement) === 'draggableranking';
+  const propertyName = options?.property?.name;
+  const isRankingChoice = isDraggableRankingChoiceProperty(options);
+  if (isRankingChoice && (propertyName === 'visibleIf' || propertyName === 'enableIf')) {
+    options.show = false;
+    return;
+  }
+  if (propertyName !== CHOICE_DEFINITION_PROPERTY) return;
   options.show = isRankingChoice;
   if (isRankingChoice && options.element && typeof options.element === 'object') {
     definitionAuthoringChoices.add(options.element);

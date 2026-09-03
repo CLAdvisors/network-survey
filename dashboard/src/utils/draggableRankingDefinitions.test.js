@@ -21,6 +21,8 @@ describe('draggable ranking definition authoring', () => {
     expect(property.type).toBe('text');
     expect(property.isLocalizable).toBe(false);
     expect(property.locationInTable).toBe('detail');
+    expect(property.category).toBe('');
+    expect(property.visibleIndex).toBe(0);
 
     const rankingChoice = {};
     const rankingVisibility = {
@@ -42,6 +44,26 @@ describe('draggable ranking definition authoring', () => {
     configureDraggableRankingDefinitionVisibility(null, dropdownVisibility);
     expect(dropdownVisibility.show).toBe(false);
 
+    for (const propertyName of ['visibleIf', 'enableIf']) {
+      const conditionalVisibility = {
+        property: { name: propertyName },
+        parentElement: rankingOwner,
+        parentProperty: { name: 'choices' },
+        show: true,
+      };
+      configureDraggableRankingDefinitionVisibility(null, conditionalVisibility);
+      expect(conditionalVisibility.show).toBe(false);
+    }
+
+    const unrelatedVisibility = {
+      property: { name: 'visibleIf' },
+      parentElement: dropdownOwner,
+      parentProperty: { name: 'choices' },
+      show: true,
+    };
+    configureDraggableRankingDefinitionVisibility(null, unrelatedVisibility);
+    expect(unrelatedVisibility.show).toBe(true);
+
     const editor = {};
     configureDraggableRankingDefinitionEditor(null, {
       property,
@@ -51,7 +73,8 @@ describe('draggable ranking definition authoring', () => {
     expect(editor.rows).toBe(5);
     expect(editor.autoGrow).toBe(true);
     expect(editor.description).toContain('10,000 characters');
-    expect(editor.description).toContain('HTML is displayed literally');
+    expect(editor.description).toContain('HTML is shown as text');
+    expect(editor.description).not.toContain('1,000 choices per survey');
   });
 
   it('configures the real Creator choice-detail editor as multiline with guidance', () => {
@@ -87,7 +110,9 @@ describe('draggable ranking definition authoring', () => {
     expect(definitionEditor.getType()).toBe('comment');
     expect(definitionEditor.rows).toBe(5);
     expect(definitionEditor.autoGrow).toBe(true);
-    expect(definitionEditor.description).toContain('HTML is displayed literally');
+    expect(definitionEditor.description).toContain('HTML is shown as text');
+    expect(panel.getQuestionByName('visibleIf')?.isVisible).toBe(false);
+    expect(panel.getQuestionByName('enableIf')?.isVisible).toBe(false);
     creator.dispose();
   });
 

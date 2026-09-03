@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
+const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient, reserveProviderRateWithAvailabilityInTransaction } = require('../email');
 const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
@@ -139,10 +139,29 @@ test('retained provider-boundary clients reserve rate capacity without reconnect
   assert.match(calls.at(-1).sql,/COMMIT/);
 });
 
+test('full provider rate budgets report the first principled reservation time without reserving', async () => {
+  const calls=[];
+  const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
+  const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:5,next_available_at:nextAvailableAt}]};return{rowCount:1,rows:[]};}};
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt});
+  assert.match(calls.find(({sql})=>/SELECT count/.test(sql)).sql,/array_agg\(reserved_at ORDER BY reserved_at\).*\+interval '1 second' AS next_available_at/);
+  assert.equal(calls.some(({sql})=>/INSERT INTO email_rate_reservations/.test(sql)),false);
+
+  const fractionalCalls=[];
+  const fractionalClient={async query(sql,values=[]){fractionalCalls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:2,next_available_at:null}]};return{rowCount:1,rows:[]};}};
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(fractionalClient,'test',2.5),{reserved:true,nextAvailableAt:null});
+  assert.equal(fractionalCalls.find(({sql})=>/SELECT count/.test(sql)).values[1],3,'fractional legacy configuration is normalized to its prior effective capacity');
+});
+
 test('readiness validates the entire audience and exact normalized template coverage', () => {
   const survey = { lifecycle_status:'draft', archived_at:null, questions:{elements:[{name:'q1',type:'text'}]} };
   const good = evaluateReadiness(survey, { recipients:[{respondent_id:1,contact_info:'A@example.com',uuid:'token',lang:'English'}], templates:[{lang:' english ',text:'Welcome',invitation_subject:' Team invitation '}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.equal(good.canLaunch,true);
+  const launchRecipient=index=>({respondent_id:index,contact_info:`launch${index}@example.test`,uuid:`launch-token-${index}`,lang:'English'});
+  const maximum=evaluateReadiness(survey,{recipients:Array.from({length:1500},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  assert.equal(maximum.canLaunch,true);assert.equal(maximum.eligibleCount,1500);
+  const overLimit=evaluateReadiness(survey,{recipients:Array.from({length:1501},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  assert.ok(overLimit.blockers.some(({code})=>code==='recipients_limit_exceeded'));
   assert.deepEqual(good.languages,['english']);
   assert.deepEqual(good.templateCoverage,[{language:'english',covered:true}]);
   const bad = evaluateReadiness(survey, { recipients:[
@@ -173,7 +192,7 @@ test('readiness validates the entire audience and exact normalized template cove
   assert.equal(manyInvalid.blockers.at(-1).code, 'blockers_truncated');
 });
 
-test('reminder readiness handles zero, one, 1,000, localization, and privacy-safe blockers', () => {
+test('reminder readiness handles zero, one, 1,500, localization, and privacy-safe blockers', () => {
   const survey={lifecycle_status:'active',archived_at:null};
   const config={SURVEY_URL:'https://survey.test',RESEND_API_KEY:'fake',RESEND_PROVIDER_ACCOUNT_SCOPE:'test'};
   const template={language:'english',subject:'Reminder',body_text:'Please complete the survey.',configuration_version:1};
@@ -184,9 +203,9 @@ test('reminder readiness handles zero, one, 1,000, localization, and privacy-saf
   assert.ok(draft.blockers.some(item=>item.code==='survey_not_active'&&item.message==='Only a launched survey can receive reminders.'));
   const one=evaluateReminderReadiness(survey,{recipients:[recipient(1)],templates:[template]},config);
   assert.equal(one.canLaunch,true);assert.equal(one.targetCount,1);
-  const thousand=evaluateReminderReadiness(survey,{recipients:Array.from({length:1000},(_,index)=>recipient(index+1)),templates:[template]},config);
-  assert.equal(thousand.canLaunch,true);assert.equal(thousand.targetCount,1000);
-  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:1001},(_,index)=>recipient(index+1)),templates:[template]},config);
+  const maximum=evaluateReminderReadiness(survey,{recipients:Array.from({length:1500},(_,index)=>recipient(index+1)),templates:[template]},config);
+  assert.equal(maximum.canLaunch,true);assert.equal(maximum.targetCount,1500);
+  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:1501},(_,index)=>recipient(index+1)),templates:[template]},config);
   assert.ok(over.blockers.some(item=>item.code==='recipients_limit_exceeded'));
   const localized=evaluateReminderReadiness(survey,{recipients:[{...recipient(2),lang:'French'},{...recipient(3),lang:'Klingon'}],templates:[template]},config);
   assert.ok(localized.blockers.some(item=>item.code==='template_missing'&&item.language==='french'));
@@ -218,6 +237,8 @@ test('reminder implementation selects and rechecks only incomplete eligible resp
   assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
   assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
   assert.match(workerSource,/row\.launch_kind!=='reminder'.*email_sent/s);
+  assert.match(workerSource,/MIN\(provider_started_at\) FILTER \(WHERE outcome='uncertain'\) AS first_uncertain_provider_started_at,COUNT\(provider_started_at\)::int AS provider_attempt_count/);
+  assert.doesNotMatch(workerSource,/WHERE delivery_id=\$1 AND outcome='uncertain'/);
 });
 
 test('launch fingerprint is canonical and aggregate SQL derives dispatch and distinct provider summary counts', () => {
@@ -230,6 +251,25 @@ test('launch fingerprint is canonical and aggregate SQL derives dispatch and dis
   assert.match(sql, /AS provider_waiting_count/);
   assert.match(sql, /d\.status='accepted' AND d\.provider_delivered_at IS NULL/);
   assert.doesNotMatch(sql, /UPDATE survey_launches/);
+});
+
+test('expired leases count every provider crossing before deciding retry exhaustion', async () => {
+  const calls=[];
+  const previous={id:'delivery-1',status:'leased',attempt_count:9,created_at:'2026-08-04T11:00:00Z',lease_token:'lease-6',launch_kind:'initial'};
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT claiming_enabled,minimum_release/.test(sql))return{rows:[{claiming_enabled:true,minimum_release:null}]};
+    if(/SELECT d\.id,d\.status/.test(sql))return{rows:[previous],rowCount:1};
+    if(/SELECT MIN\(provider_started_at\)/.test(sql))return{rows:[{first_ambiguous_provider_started_at:'2026-08-04T11:59:00Z',provider_attempt_count:6,current_provider_started:true}],rowCount:1};
+    return{rows:[],rowCount:1};
+  }};
+  const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},clock:()=>new Date('2026-08-04T12:00:00Z'),env:{NODE_ENV:'test',EMAIL_MAX_ATTEMPTS:'6'}});
+  assert.equal(await worker.claim(),null);
+  const stats=calls.find(({sql})=>/SELECT MIN\(provider_started_at\)/.test(sql));
+  assert.match(stats.sql,/MIN\(provider_started_at\) FILTER \(WHERE outcome='uncertain' OR \(lease_token=\$2 AND outcome='in_progress'\)\) AS first_ambiguous_provider_started_at/);
+  assert.doesNotMatch(stats.sql,/WHERE delivery_id=\$1 AND outcome/);
+  assert.deepEqual(stats.values,['delivery-1','lease-6']);
+  assert.ok(calls.some(({sql,values})=>/UPDATE survey_email_deliveries SET status='uncertain'/.test(sql)&&values[1]==='ambiguous_attempts_exhausted'));
+  assert.equal(calls.some(({sql})=>/attempt_count=attempt_count\+1/.test(sql)),false);
 });
 
 test('expired ambiguous attempts never cross the provider idempotency boundary', () => {
@@ -288,7 +328,7 @@ test('cancellation after an ambiguous provider result stays terminal uncertain w
     const current={id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1',status:'reminder_leased',attempt_count:1,created_at:'2026-08-04T11:00:00Z',cancellation_requested_at:'2026-08-04T12:00:01Z'};
     const client={release(){},async query(sql,values=[]){calls.push({sql,values});
       if(/SELECT \* FROM survey_email_deliveries/.test(sql))return{rows:[current],rowCount:1};
-      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
+      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_ambiguous_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
       return{rows:[],rowCount:1};
     }};
     const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},clock:()=>new Date('2026-08-04T12:00:02Z'),env:{NODE_ENV:'test'}});
@@ -327,9 +367,34 @@ test('worker cancellation helpers cannot erase a previously ambiguous provider a
   const releaseCalls=[];
   const releaseClient={async query(sql,values=[]){releaseCalls.push({sql,values});return{rowCount:1,rows:[]};}};
   const worker=new DeliveryWorker({pool:{},provider:{},env:{NODE_ENV:'test'}});
-  await worker.releaseWithoutSend(releaseClient,{id:'delivery-1',lease_token:'lease-3'},'provider_rate_wait');
+  const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
+  await worker.releaseWithoutSend(releaseClient,{id:'delivery-1',lease_token:'lease-3'},'provider_rate_wait',nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN CASE WHEN d\.status='reminder_leased' THEN 'reminder_retry_wait' ELSE 'retry_wait'/);
+  assert.match(releaseCalls[1].sql,/GREATEST\(COALESCE\(\$4::timestamptz/);
+  assert.doesNotMatch(releaseCalls[1].sql,/100 milliseconds/);
+  assert.equal(releaseCalls[1].values[3],nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN d\.last_error_code ELSE \$3/);
+});
+
+test('provider failures back off by provider crossings rather than inflated worker claims', async () => {
+  for(const error of [
+    new ProviderError('Rate limited',{code:'rate_limit_exceeded',status:429}),
+    new ProviderError('Provider response lost',{code:'provider_timeout',status:503}),
+  ]){
+    const calls=[];
+    const current={id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1',status:'leased',attempt_count:12,created_at:'2026-08-04T11:00:00Z',cancellation_requested_at:null};
+    const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+      if(/SELECT \* FROM survey_email_deliveries/.test(sql))return{rows:[current],rowCount:1};
+      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_ambiguous_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
+      return{rows:[],rowCount:1};
+    }};
+    const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},random:()=>0.5,clock:()=>new Date('2026-08-04T12:00:01Z'),env:{NODE_ENV:'test'}});
+    await worker.finalizeFailure(current,error);
+    assert.match(calls.find(({sql})=>/SELECT COUNT\(provider_started_at\)/.test(sql)).sql,/MIN\(provider_started_at\) FILTER \(WHERE outcome='uncertain' OR \(lease_token=\$2 AND outcome='in_progress'\)\) AS first_ambiguous_provider_started_at/);
+    const retry=calls.find(({sql})=>/next_attempt_at=now\(\)\+\(\$3::text\|\|' milliseconds'\)/.test(sql));
+    assert.ok(retry);
+    assert.equal(retry.values[2],1000,'one provider crossing receives first-attempt backoff despite twelve worker claims');
+  }
 });
 
 test('worker retry backoff is bounded and uses injected randomness', () => {

@@ -53,6 +53,7 @@ const {
   surveySummaryRespondentCount,
   surveyResponseSummary,
   RESPONSE_JSON_LIMIT,
+  ROSTER_JSON_LIMIT,
 } = require('../server');
 const { displayedRespondentPredicate } = require('../respondent-utils');
 
@@ -1821,10 +1822,10 @@ test('dashboard/admin endpoints require authentication', async () => {
   }
 });
 
-test('JSON parsing accepts maximum roster requests without raising the global limit', async () => {
+test('roster parser budget fits a maximum request while authentication precedes body parsing', async () => {
   const validMaximumBatch = {
     expectedRevision: 0,
-    additions: Array.from({ length: 1000 }, (_, index) => {
+    additions: Array.from({ length: 1500 }, (_, index) => {
       const prefix = String(index);
       return {
         name: `${prefix}${'\u0001'.repeat(100 - prefix.length)}`,
@@ -1834,7 +1835,12 @@ test('JSON parsing accepts maximum roster requests without raising the global li
       };
     }),
   };
-  assert.ok(Buffer.byteLength(JSON.stringify(validMaximumBatch)) > 2 * 1024 * 1024);
+  const maximumBatchBytes = Buffer.byteLength(JSON.stringify(validMaximumBatch));
+  assert.equal(ROSTER_JSON_LIMIT, '5mb');
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /app\.post\('\/api\/updateTargets'[\s\S]+resolveSurveyForUser\(req, res,[\s\S]+parseRespondentCsv\(csvData\)/);
+  assert.ok(maximumBatchBytes > 3 * 1024 * 1024);
+  assert.ok(maximumBatchBytes < 5 * 1024 * 1024);
   const maximum = await request(app)
     .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
     .send(validMaximumBatch);
@@ -1842,7 +1848,7 @@ test('JSON parsing accepts maximum roster requests without raising the global li
 
   const oversizedRoster = await request(app)
     .patch('/api/surveys/11111111-1111-4111-8111-111111111111/respondents')
-    .send({ padding: 'x'.repeat(3 * 1024 * 1024) });
+    .send({ padding: 'x'.repeat(5 * 1024 * 1024) });
   assert.equal(oversizedRoster.status, 401);
   assert.deepEqual(oversizedRoster.body, { error: 'Unauthorized' });
 

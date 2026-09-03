@@ -23,6 +23,7 @@ const baseRow = (overrides = {}) => ({
   to_address: 'target@example.test',
   status: 'pending',
   attempt_count: 0,
+  provider_attempt_count: 0,
   created_at: '2026-08-01T10:00:00.000Z',
   created_at_cursor: '2026-08-01T10:00:00.000000Z',
   updated_at: '2026-08-01T10:00:00.000Z',
@@ -100,12 +101,14 @@ test('status precedence preserves adverse webhook truth, delivery, delay, accept
 
 test('history projection distinguishes invitations/reminders and omits all operational and secret fields', () => {
   const invitation = emailHistoryItem(baseRow({
-    status: 'accepted', attempt_count: 1, dispatch_accepted_at: '2026-08-01T10:01:00Z',
+    status: 'accepted', attempt_count: 3, provider_attempt_count: 1, dispatch_accepted_at: '2026-08-01T10:01:00Z',
     respondent_token: 'never-return-this', provider_message_id: 'provider-secret',
     last_error_message: 'raw provider failure', body_text: 'private body', lease_token: 'lease-secret',
   }));
   const reminder = emailHistoryItem(baseRow({ kind: 'reminder', recipient_display_name: null, status: 'cancelled' }));
   assert.equal(invitation.messageType, 'invitation');
+  assert.equal(invitation.attempts, 3, 'worker claim diagnostics remain available');
+  assert.equal(invitation.providerAttempts, 1, 'provider attempts count only provider boundary crossings');
   assert.equal(reminder.messageType, 'reminder');
   assert.equal(reminder.recipient.displayName, null, 'partial historical snapshots remain humane and unmisattributed');
   const serialized = JSON.stringify([invitation, reminder]);
@@ -141,6 +144,7 @@ test('history uses tenant-bound deterministic keyset SQL, max page size, and a l
   assert.match(query.sql, /ORDER BY d\.created_at DESC,d\.id DESC/);
   assert.match(query.sql, /LIMIT \$3/);
   assert.match(query.sql, /JOIN survey_launches l ON l\.id=d\.launch_id AND l\.survey_id=d\.survey_id AND l\.organization_id=d\.organization_id/);
+  assert.match(query.sql, /count\(provider_started_at\)::int AS provider_attempt_count/);
   assert.doesNotMatch(query.sql, /JOIN respondent|provider_message_id|last_error|render_inputs|body_text|lease_token/i);
   assert.deepEqual(query.values, [SURVEY_ID, ORG_ID, 101]);
 
@@ -158,11 +162,12 @@ test('zero history and legacy/null snapshots return a stable bounded contract', 
   assert.deepEqual(await listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, {}, SECRET), {
     surveyId: SURVEY_ID, messages: [], pageInfo: { limit: 50, hasMore: false, nextCursor: null },
   });
-  const legacy = historyPool([baseRow({ kind: null, recipient_display_name: null, status: null, updated_at: null })]);
+  const legacy = historyPool([baseRow({ kind: null, recipient_display_name: null, status: null, updated_at: null, provider_attempt_count: undefined })]);
   const response = await listEmailHistory(legacy.pool, { id: 7 }, SURVEY_ID, {}, SECRET);
   assert.equal(response.messages[0].messageType, 'invitation');
   assert.equal(response.messages[0].status.code, 'unknown');
   assert.equal(response.messages[0].recipient.displayName, null);
+  assert.equal(response.messages[0].providerAttempts, null, 'missing rolling-deployment evidence remains unavailable rather than becoming a factual zero');
   await assert.rejects(() => listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, { limit: '0' }, SECRET), error => error.code === 'email_history_limit_invalid');
   await assert.rejects(() => listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, { status: 'failed' }, SECRET), error => error.code === 'email_history_parameter_invalid');
 });

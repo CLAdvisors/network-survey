@@ -427,7 +427,8 @@ async function requireAuth(req, res, next) {
 // Large parsers are mounted only on routes that need them. Authoring requests
 // are authoritatively authenticated and rate-limited before larger allocation;
 // the public response route is IP-rate-limited before its bounded parser.
-const rosterJsonParser = express.json({ limit: '3mb' });
+const ROSTER_JSON_LIMIT = '5mb';
+const rosterJsonParser = express.json({ limit: ROSTER_JSON_LIMIT });
 const QUESTION_DEFINITION_JSON_LIMIT = '3mb';
 const questionDefinitionJsonParser = express.json({ limit: QUESTION_DEFINITION_JSON_LIMIT });
 const RESPONSE_JSON_LIMIT = '1mb';
@@ -2726,9 +2727,9 @@ app.post('/api/updateTargets', async (req, res) => {
   try {
     const { surveyName, csvData, expectedRevision } = req.body || {};
     if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });
-    const additions = respondentRoster.parseRespondentCsv(csvData);
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
+    const additions = respondentRoster.parseRespondentCsv(csvData);
     const result = await respondentRoster.mutateRoster(pool, req.user, survey.id, { expectedRevision, additions });
     res.set('X-Roster-Revision', String(result.revision));
     res.status(200).json({ message: 'Respondents imported successfully.', ...result, processedCount: additions.length });
@@ -3617,6 +3618,7 @@ module.exports = {
   SUPPORTED_QUESTION_TYPES,
   DEFINED_RANKING_LIMITS,
   QUESTION_DEFINITION_JSON_LIMIT,
+  ROSTER_JSON_LIMIT,
   RESPONSE_JSON_LIMIT,
   SURVEY_SCHEMA_MAX_BYTES,
   validateSurveyDefinition,

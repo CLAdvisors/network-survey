@@ -20,7 +20,8 @@ const message = (overrides = {}) => ({
   campaign: { launchId: 'launch-safe', kind: 'initial', queuedAt: '2026-08-01T09:59:00Z' },
   recipient: { displayName: 'A Recipient With A Very Long Name That Must Wrap', address: 'a.very.long.address.for.responsive.layout@example.test' },
   status: { code: 'provider_accepted', label: 'Provider accepted', explanation: 'The email provider accepted the message for delivery; recipient delivery is not confirmed.', occurredAt: '2026-08-01T10:02:00Z' },
-  attempts: 2,
+  attempts: 3,
+  providerAttempts: 1,
   timestamps: {
     queuedAt: '2026-08-01T10:00:00Z', firstAttemptedAt: '2026-08-01T10:01:00Z',
     lastAttemptedAt: '2026-08-01T10:02:00Z', providerAcceptedAt: '2026-08-01T10:02:00Z',
@@ -45,7 +46,8 @@ test('renders semantic desktop table and responsive cards with privacy-safe stat
   expect(within(table).getByRole('columnheader', { name: 'Type' })).toBeInTheDocument();
   expect(within(table).getByRole('columnheader', { name: 'Recipient' })).toBeInTheDocument();
   expect(within(table).getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
-  expect(within(table).getByRole('columnheader', { name: 'Attempts' })).toBeInTheDocument();
+  expect(within(table).getByRole('columnheader', { name: 'Provider attempts' })).toBeInTheDocument();
+  expect(within(table).getByRole('columnheader', { name: 'Worker attempts' })).toBeInTheDocument();
   expect(screen.getByTestId('email-history-table-view')).toBeInTheDocument();
   expect(screen.getByTestId('email-history-card-view')).toHaveAttribute('aria-label', 'Email message history cards');
   expect(screen.getByRole('article', { name: /Message 1: Invitation for A Recipient With A Very Long Name/ })).toBeInTheDocument();
@@ -55,16 +57,19 @@ test('renders semantic desktop table and responsive cards with privacy-safe stat
   expect(screen.getByText(/only “Delivered” confirms receipt/i)).toBeInTheDocument();
   expect(screen.getAllByText('A Recipient With A Very Long Name That Must Wrap').length).toBeGreaterThanOrEqual(2);
   expect(screen.getAllByText('a.very.long.address.for.responsive.layout@example.test').length).toBeGreaterThanOrEqual(2);
-  expect(screen.getByLabelText('2 attempts')).toBeInTheDocument();
+  expect(screen.getByLabelText('1 provider attempt')).toBeInTheDocument();
+  expect(screen.getByLabelText('3 worker attempts')).toBeInTheDocument();
+  expect(screen.getByText(/Provider attempts count work that crossed the provider dispatch boundary/i)).toBeInTheDocument();
   expect(screen.getByRole('heading', { level: 2, name: 'Email history' })).toHaveAttribute('tabindex', '-1');
   expect(document.body.textContent).not.toMatch(/respondent[_ -]?token|message body|provider[_ -]?message[_ -]?id|lease[_ -]?token/i);
 });
 
-test('gives repeated messages for the same recipient distinct mobile article names', async () => {
-  api.get.mockResolvedValueOnce(response('survey-1', [message(), message({ campaign: { launchId: 'launch-two', kind: 'initial' } })]));
+test('gives repeated messages for the same recipient distinct mobile article names and preserves unavailable provider counts', async () => {
+  api.get.mockResolvedValueOnce(response('survey-1', [message(), message({ providerAttempts: null, campaign: { launchId: 'launch-two', kind: 'initial' } })]));
   render(<EmailHistory survey={{ id: 'survey-1', name: 'Lifecycle survey' }} />);
   expect(await screen.findByRole('article', { name: /Message 1: Invitation for A Recipient/ })).toBeInTheDocument();
   expect(screen.getByRole('article', { name: /Message 2: Invitation for A Recipient/ })).toBeInTheDocument();
+  expect(screen.getByLabelText('Provider attempts unavailable')).toBeInTheDocument();
 });
 
 test('shows bounded loading, empty, error/retry, and explicit refresh states', async () => {

@@ -14,7 +14,7 @@ const {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const MAX_LAUNCH_RECIPIENTS = 1000;
+const MAX_LAUNCH_RECIPIENTS = 1500;
 const MAX_LAUNCH_TEMPLATES = 100;
 const DEFAULT_EMAIL_HISTORY_PAGE_SIZE = 50;
 const MAX_EMAIL_HISTORY_PAGE_SIZE = 100;
@@ -455,6 +455,7 @@ function emailHistoryItem(row) {
     },
     status: outcome,
     attempts: Number(row.attempt_count || 0),
+    providerAttempts: row.provider_attempt_count == null ? null : Number(row.provider_attempt_count),
     timestamps: {
       queuedAt: row.created_at || null,
       firstAttemptedAt: row.first_attempt_at || null,
@@ -490,6 +491,7 @@ async function listEmailHistory(pool, user, surveyId, params = {}, config = proc
       `SELECT d.id,d.launch_id,l.kind,l.created_at AS launch_created_at,
               d.recipient_display_name,d.to_address,d.status,
               GREATEST(d.attempt_count,COALESCE(a.recorded_attempt_count,0))::int AS attempt_count,
+              COALESCE(a.provider_attempt_count,0)::int AS provider_attempt_count,
               d.dispatch_accepted_at,d.dispatch_failed_at,d.provider_sent_at,d.provider_delivered_at,
               d.provider_delayed_at,d.provider_bounced_at,d.provider_complained_at,
               d.provider_suppressed_at,d.provider_failed_at,d.created_at,d.updated_at,
@@ -498,7 +500,8 @@ async function listEmailHistory(pool, user, surveyId, params = {}, config = proc
          FROM survey_email_deliveries d
          JOIN survey_launches l ON l.id=d.launch_id AND l.survey_id=d.survey_id AND l.organization_id=d.organization_id
          LEFT JOIN LATERAL (
-           SELECT count(*)::int AS recorded_attempt_count,min(started_at) AS first_attempt_at,max(started_at) AS last_attempt_at
+           SELECT count(*)::int AS recorded_attempt_count,count(provider_started_at)::int AS provider_attempt_count,
+                  min(started_at) AS first_attempt_at,max(started_at) AS last_attempt_at
              FROM survey_email_attempts WHERE delivery_id=d.id
          ) a ON true
         WHERE d.survey_id=$1 AND d.organization_id=$2 ${keyset}

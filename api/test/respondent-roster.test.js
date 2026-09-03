@@ -8,6 +8,8 @@ const {
   temporaryName,
   mutateRoster,
   parseRespondentCsv,
+  MAX_ROSTER_SIZE,
+  MAX_BATCH_SIZE,
 } = require('../respondent-roster');
 
 const surveyId = '11111111-1111-4111-8111-111111111111';
@@ -202,6 +204,23 @@ test('forced failures at every mutation phase roll back rows, revision, addition
   }
 });
 
+test('roster and mutation limits allow exactly 1,500 respondents', () => {
+  assert.equal(MAX_ROSTER_SIZE, 1500);
+  assert.equal(MAX_BATCH_SIZE, 1500);
+  const addition = (index) => ({ name: `Person${index}`, email: `person${index}@example.test`, language: 'English', canRespond: true });
+  const maximumCommand = normalizeCommand({ expectedRevision: 0, additions: Array.from({ length: 1500 }, (_, index) => addition(index + 1)) });
+  assert.equal(validateFinalRoster([], maximumCommand).length, 1500);
+  assert.throws(
+    () => normalizeCommand({ expectedRevision: 0, additions: Array.from({ length: 1501 }, (_, index) => addition(index + 1)) }),
+    (error) => error.code === 'roster_batch_too_large'
+  );
+  const oversizedExisting = Array.from({ length: 1501 }, (_, index) => respondent(index + 1, `Person${index + 1}`, { contact_info: `person${index + 1}@example.test` }));
+  assert.throws(
+    () => validateFinalRoster(oversizedExisting, normalizeCommand({ expectedRevision: 0, updates: [fields(oversizedExisting[0])] })),
+    (error) => error.code === 'roster_too_large'
+  );
+});
+
 test('validation enforces complete roster formats, strict IDs, lengths, and supported language', () => {
   const row = respondent(1, 'Alice');
   for (const update of [
@@ -213,12 +232,20 @@ test('validation enforces complete roster formats, strict IDs, lengths, and supp
   assert.throws(() => validateFinalRoster([respondent(2, 'Broken', { contact_info: 'bad' })], normalizeCommand({ expectedRevision: 4, additions: [{ name: 'New', email: 'new@example.test', language: 'English', canRespond: true }] })), (error) => error.code === 'respondent_email_invalid');
 });
 
-test('CSV import is additions-only, strict, and occupied names are rejected by final validation', () => {
+test('CSV import is additions-only, strict, bounded, and occupied names are rejected by final validation', () => {
   const additions = parseRespondentCsv('First,Last,Email,Language,Can Respond\nAlice,Smith,alice@example.test,English,false');
   assert.deepEqual(additions, [{ name: 'Alice Smith', email: 'alice@example.test', language: 'English', canRespond: false }]);
   const command = normalizeCommand({ expectedRevision: 4, additions });
   assert.throws(() => validateFinalRoster([respondent(1, 'Alice Smith', { contact_info: 'old@example.test' })], command), (error) => error.code === 'respondent_name_duplicate');
   assert.throws(() => parseRespondentCsv('First,Last,Email,Can Respond\nA,B,a@example.test,maybe'), (error) => error.code === 'respondent_can_respond_invalid');
+  assert.throws(() => parseRespondentCsv('First,Last,Email,Language,Can Respond,"unterminated\nA,B,a@example.test,English,true'), (error) => error.code === 'csv_invalid');
+  assert.throws(() => parseRespondentCsv('First,Last,Email,Email,Language,Can Respond\nA,B,first@example.test,second@example.test,English,true'), (error) => error.code === 'csv_invalid');
+  const csvRows = Array.from({ length: 1501 }, (_, index) => `Person,${index + 1},person${index + 1}@example.test,English,true`);
+  assert.equal(parseRespondentCsv(`First,Last,Email,Language,Can Respond\n${csvRows.slice(0, 1500).join('\n')}`).length, 1500);
+  assert.throws(
+    () => parseRespondentCsv(`First,Last,Email,Language,Can Respond\n${csvRows.join('\n')}`),
+    (error) => error.code === 'roster_batch_too_large' && error.status === 413
+  );
 });
 
 test('temporary internal names are bounded and avoid current/final names', () => {

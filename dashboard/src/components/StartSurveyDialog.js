@@ -153,7 +153,7 @@ const StartSurveyDialog = ({ open, survey, onClose, onAccepted, unsavedChanges =
             {blockers.length > 0 && <Alert severity="error"><Typography variant="subtitle2">Launch blockers</Typography>{blockers.map((entry, index) => <div key={entry.code || index}>{messageText(entry)}</div>)}</Alert>}
             {warnings.length > 0 && <Alert severity="warning"><Typography variant="subtitle2">Warnings</Typography>{warnings.map((entry, index) => <div key={entry.code || index}>{messageText(entry)}</div>)}</Alert>}
             <Divider />
-            <Typography variant="body2">Confirming will activate this survey when the durable launch is accepted. Delivery progress will appear on the dashboard.</Typography>
+            <Typography variant="body2">Confirming will launch this survey when the durable invitation launch is accepted. Delivery progress will appear on the dashboard.</Typography>
           </Stack>
         )}
       </DialogContent>

@@ -6,34 +6,50 @@ import "@network-survey/frontend-shared/src/surveyRuntime.css";
 // SurveyJS runtime themes are applied to each model via applyTheme().
 import { Alert, Box, Autocomplete, TextField, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import api from '../api/axios';
-import { Serializer, Question, Model } from 'survey-core';
+import { Serializer, Model } from 'survey-core';
 import { Survey } from 'survey-react-ui';
 import { ReactQuestionFactory } from 'survey-react-ui';
-import { DraggableRankingQuestion } from '@network-survey/frontend-react';
+import {
+  attachDraggableRankingRenderer,
+  DraggableRankingQuestion,
+} from '@network-survey/frontend-react';
 import {
   applyProductionSurveyTheme,
   PRODUCTION_SURVEY_CLASS_NAME,
   PRODUCTION_SURVEY_WRAPPER_SX,
+  QuestionDraggableRankingModel,
   TAGBOX_PAGE_SIZE,
   TAGBOX_PLACEHOLDER
 } from '@network-survey/frontend-shared';
-import ReactDOM from 'react-dom/client';
 import {
   restrictSurveyToolbox,
   setSurveyToolboxItem,
   SUPPORTED_SURVEY_TOOLBOX_TYPES,
 } from '../utils/surveyToolbox';
 import { hideQuestionValueName } from '../utils/surveyCreatorMetadata';
+import {
+  configureDraggableRankingChoiceEditor,
+  configureDraggableRankingDefinitionEditor,
+  configureDraggableRankingDefinitionVisibility,
+  normalizeDraggableRankingDefinitions,
+  registerDraggableRankingDefinitionMetadata,
+  validateDraggableRankingDefinitionProperty,
+} from '../utils/draggableRankingDefinitions';
 import { serializeFlatSurveySchema } from '../utils/surveySchemaSerialization';
-import { lifecycleStatus, surveyId } from './surveyLifecycle';
+import { releaseSurveyModel, replaceSurveyContextModel } from '../utils/surveyModelLifecycle';
+import { lifecycleLabel, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
-// Define and register custom question class for draggableranking
-class QuestionDraggableRankingModel extends Question {
-  getType() {
-    return 'draggableranking';
-  }
-}
+// ItemValue metadata must exist before Survey Creator constructs any choices.
+registerDraggableRankingDefinitionMetadata();
+
+export const configureProductionSurveyPresentation = (surveyModel) => {
+  applyProductionSurveyTheme(surveyModel);
+  surveyModel.showQuestionNumbers = false;
+  surveyModel.showProgressBar = 'bottom';
+  surveyModel.progressBarType = 'questions';
+};
+
 // Register class without inline properties, then define choices property correctly
 Serializer.addClass(
   'draggableranking',
@@ -61,8 +77,6 @@ ReactQuestionFactory.Instance.registerQuestion('draggableranking', props => (
     valueSource="question"
   />
 ));
-
-const draggableQuestionRoots = new WeakMap();
 
 const configureTagboxPropertyMetadata = (() => {
   let configured = false;
@@ -193,19 +207,9 @@ const normalizeTagboxElements = (elements) => {
   });
 };
 
-const cleanupDraggableQuestionRoot = (question) => {
-  if (!question) return;
-  const root = draggableQuestionRoots.get(question);
-  if (root) {
-    root.unmount();
-    draggableQuestionRoots.delete(question);
-  }
-};
-
 const cleanupDraggableSurveyRoots = (survey) => {
   if (!survey || typeof survey.getAllQuestions !== 'function') return;
   survey.getAllQuestions().forEach((question) => {
-    cleanupDraggableQuestionRoot(question);
     if (question?._claMaxSelectionWatcher && question.onPropertyChanged?.remove) {
       question.onPropertyChanged.remove(question._claMaxSelectionWatcher);
       delete question._claMaxSelectionWatcher;
@@ -224,6 +228,59 @@ Serializer.removeProperty('survey', 'description');
 Serializer.removeProperty('survey', 'logo');
 hideQuestionValueName();
 
+const creatorOptions = {
+  showLogicTab: false,
+  showJSONEditorTab: false,
+  isAutoSave: false,
+  showPagesPanel: false,
+  pageEditMode: 'single',
+  showTitle: false,
+  showDescription: false,
+  showLogo: false,
+  questionTypes: [...SUPPORTED_SURVEY_TOOLBOX_TYPES],
+};
+
+export const createConfiguredSurveyCreator = () => {
+  const creator = new SurveyCreator(creatorOptions);
+  creator.onSetPropertyEditorOptions.add(configureDraggableRankingChoiceEditor);
+  creator.onPropertyShowing.add(configureDraggableRankingDefinitionVisibility);
+  creator.onPropertyEditorCreated.add(configureDraggableRankingDefinitionEditor);
+  creator.onPropertyDisplayCustomError.add(validateDraggableRankingDefinitionProperty);
+  setSurveyToolboxItem(creator.toolbox, {
+    name: 'draggableranking',
+    iconName: 'icon-tagbox',
+    title: 'Draggable Ranking',
+    json: {
+      type: 'draggableranking',
+      name: 'draggableranking1',
+      title: 'Draggable Ranking',
+      choices: [
+        { value: 'item1', text: 'Item 1' },
+        { value: 'item2', text: 'Item 2' }
+      ]
+    }
+  });
+  setSurveyToolboxItem(creator.toolbox, {
+    name: 'tagbox',
+    iconName: 'icon-tagbox',
+    title: 'People Tagbox',
+    json: {
+      type: 'tagbox',
+      name: 'tagbox1',
+      title: 'Select people',
+      isRequired: true,
+      claMaxSelections: 0,
+      placeholder: TAGBOX_PLACEHOLDER,
+      allowAddNewTag: false,
+      choices: [],
+      choicesLazyLoadEnabled: true,
+      choicesLazyLoadPageSize: TAGBOX_PAGE_SIZE
+    }
+  });
+  restrictSurveyToolbox(creator.toolbox);
+  return creator;
+};
+
 const SurveyEditor = () => {
   const { canEditSurvey } = useAuth();
   const [surveys, setSurveys] = useState([]);
@@ -235,8 +292,10 @@ const SurveyEditor = () => {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewSurveyModel, setPreviewSurveyModel] = useState(null);
   const [previewError, setPreviewError] = useState(null);
+  const [creator, setCreator] = useState(null);
   const creatorRef = useRef(null);
   const surveyHooksRef = useRef(new Map());
+  const surveyContextModelsRef = useRef(new Map());
   const selectedSurveyRef = useRef(null);
   const selectedSurveyRecord = surveys.find((survey) => surveyId(survey) === selectedSurvey || survey.name === selectedSurvey) || null;
   const lifecycleLocked = Boolean(selectedSurveyRecord) && lifecycleStatus(selectedSurveyRecord) !== 'draft';
@@ -281,20 +340,18 @@ const SurveyEditor = () => {
       return;
     }
 
+    replaceSurveyContextModel(
+      surveyContextModelsRef.current,
+      surveyHooksRef.current,
+      context,
+      surveyModel,
+      cleanupDraggableSurveyRoots,
+      { disposePrevious: context === 'preview-runtime' }
+    );
+
     const existing = surveyHooksRef.current.get(surveyModel);
     if (existing) {
-      if (existing.lazyLoadHandler) {
-        surveyModel.onChoicesLazyLoad.remove(existing.lazyLoadHandler);
-      }
-      if (existing.questionAddedHandler) {
-        surveyModel.onQuestionAdded.remove(existing.questionAddedHandler);
-      }
-      if (existing.questionRemovedHandler) {
-        surveyModel.onQuestionRemoved.remove(existing.questionRemovedHandler);
-      }
-      if (existing.afterRenderHandler) {
-        surveyModel.onAfterRenderQuestion.remove(existing.afterRenderHandler);
-      }
+      existing.cleanup?.();
       surveyHooksRef.current.delete(surveyModel);
     }
 
@@ -308,7 +365,6 @@ const SurveyEditor = () => {
 
     const questionRemovedHandler = (_, options) => {
       if (options?.question) {
-        cleanupDraggableQuestionRoot(options.question);
         if (options.question._claMaxSelectionWatcher && options.question.onPropertyChanged?.remove) {
           options.question.onPropertyChanged.remove(options.question._claMaxSelectionWatcher);
           delete options.question._claMaxSelectionWatcher;
@@ -355,118 +411,27 @@ const SurveyEditor = () => {
     surveyModel.onQuestionAdded.add(questionAddedHandler);
     surveyModel.onQuestionRemoved.add(questionRemovedHandler);
 
-    let afterRenderHandler = null;
-    if (context !== 'designer') {
-      afterRenderHandler = (survey, options) => {
-        if (!options?.question || options.question.getType() !== 'draggableranking') {
-          return;
-        }
-
-        const contentElement =
-          options.htmlElement?.querySelector?.('.sd-question__content') || options.htmlElement;
-        if (!contentElement) {
-          return;
-        }
-
-        cleanupDraggableQuestionRoot(options.question);
-
-        const container = document.createElement('div');
-        container.className = 'draggable-ranking-host';
-        contentElement.innerHTML = '';
-        contentElement.appendChild(container);
-
-        if (!options.question.title && options.question.name) {
-          options.question.title = options.question.name;
-        }
-
-        const root = ReactDOM.createRoot(container);
-        draggableQuestionRoots.set(options.question, root);
-        root.render(
-          <DraggableRankingQuestion
-            question={options.question}
-            value={options.question.value || []}
-            onChange={(val) => (options.question.value = val)}
-            valueSource="question"
-          />
-        );
-      };
-      surveyModel.onAfterRenderQuestion.add(afterRenderHandler);
-    }
+    // Creator's Preview tab and the custom Demo Survey intentionally share the
+    // exact production renderer used by the respondent application.
+    const disposeDraggableRenderer = context === 'designer'
+      ? null
+      : attachDraggableRankingRenderer(surveyModel);
 
     const cleanup = () => {
       surveyModel.onChoicesLazyLoad.remove(lazyLoadHandler);
       surveyModel.onQuestionAdded.remove(questionAddedHandler);
       surveyModel.onQuestionRemoved.remove(questionRemovedHandler);
-      if (afterRenderHandler) {
-        surveyModel.onAfterRenderQuestion.remove(afterRenderHandler);
-      }
+      disposeDraggableRenderer?.();
     };
 
     surveyHooksRef.current.set(surveyModel, {
       lazyLoadHandler,
       questionAddedHandler,
       questionRemovedHandler,
-      afterRenderHandler,
       cleanup,
       context
     });
   }, []);
-
-  // SurveyJS Creator setup
-  const creatorOptions = {
-    showLogicTab: false,
-    showJSONEditorTab: false,
-    isAutoSave: false,
-    showPagesPanel: false,
-    pageEditMode: 'single',
-    showTitle: false, // hide survey title in editor
-    showDescription: false,  // hide survey description in editor
-    showLogo: false,         // hide survey image/logo in editor
-    // Match the API's flat, answer-bearing schema contract. This excludes
-    // nested containers and display-only elements from the authoring UI.
-    questionTypes: [...SUPPORTED_SURVEY_TOOLBOX_TYPES],
-  };
-  if (!creatorRef.current) {
-    creatorRef.current = new SurveyCreator(creatorOptions);
-    // Add custom draggable-ranking question with a JSON template. Remove any
-    // generated item first so the custom item appears exactly once.
-    setSurveyToolboxItem(creatorRef.current.toolbox, {
-      name: 'draggableranking',
-      iconName: 'icon-tagbox',
-      title: 'Draggable Ranking',
-      json: {
-        type: 'draggableranking',
-        name: 'draggableranking1',
-        title: 'Draggable Ranking',
-        choices: [
-          { value: 'item1', text: 'Item 1' },
-          { value: 'item2', text: 'Item 2' }
-        ]
-      }
-    });
-    // Ensure tagbox uses the custom lazy-load configuration without leaving the
-    // default toolbox item alongside it.
-    setSurveyToolboxItem(creatorRef.current.toolbox, {
-      name: 'tagbox',
-      iconName: 'icon-tagbox',
-      title: 'People Tagbox',
-      json: {
-        type: 'tagbox',
-        name: 'tagbox1',
-        title: 'Select people',
-        isRequired: true,
-        claMaxSelections: 0,
-        placeholder: TAGBOX_PLACEHOLDER,
-        allowAddNewTag: false,
-        choices: [],
-        choicesLazyLoadEnabled: true,
-        choicesLazyLoadPageSize: TAGBOX_PAGE_SIZE
-      }
-    });
-    // Defensively remove any defaults introduced by Survey Creator upgrades.
-    restrictSurveyToolbox(creatorRef.current.toolbox);
-  }
-  const creator = creatorRef.current;
 
   const buildNormalizedSurveySchema = useCallback(() => {
     const editorJson = creator?.survey?.toJSON ? creator.survey.toJSON() : creator?.JSON;
@@ -474,7 +439,7 @@ const SurveyEditor = () => {
     const flatSchema = serializeFlatSurveySchema(rawJson);
     return {
       ...flatSchema,
-      elements: normalizeTagboxElements(flatSchema.elements)
+      elements: normalizeDraggableRankingDefinitions(normalizeTagboxElements(flatSchema.elements))
     };
   }, [creator]);
 
@@ -489,7 +454,7 @@ const SurveyEditor = () => {
         configureSurveyModel(options.survey, 'designer');
       }
       if (options.area === 'preview-tab') {
-        applyProductionSurveyTheme(options.survey);
+        configureProductionSurveyPresentation(options.survey);
         configureSurveyModel(options.survey, 'preview');
       }
     };
@@ -505,20 +470,39 @@ const SurveyEditor = () => {
 
   useEffect(() => {
     const hooksMap = surveyHooksRef.current;
+    const contextModels = surveyContextModelsRef.current;
     return () => {
+      const dashboardOwnedModels = new Set(
+        [...contextModels.entries()]
+          .filter(([context]) => context === 'preview-runtime')
+          .map(([, survey]) => survey)
+      );
       hooksMap.forEach((hooks, survey) => {
-        if (hooks?.cleanup) {
-          hooks.cleanup();
-        }
+        hooks?.cleanup?.();
         cleanupDraggableSurveyRoots(survey);
       });
       hooksMap.clear();
+      contextModels.clear();
+      dashboardOwnedModels.forEach((survey) => survey?.dispose?.());
+    };
+  }, []);
+
+  // SurveyCreator owns global/model resources and must be created by an effect:
+  // React Strict Mode may discard render-phase hook state before cleanup exists.
+  useEffect(() => {
+    const instance = createConfiguredSurveyCreator();
+    creatorRef.current = instance;
+    setCreator(instance);
+    return () => {
+      if (creatorRef.current === instance) creatorRef.current = null;
+      instance.dispose?.();
     };
   }, []);
 
   // Normalize the one logical editor page while rejecting unsupported layouts
   // before Survey Creator can silently discard them in single-page mode.
   useEffect(() => {
+    if (!creator) return undefined;
     const controller = new AbortController();
     creator.readOnly = editorReadOnly;
     if (!selectedSurvey) {
@@ -593,10 +577,7 @@ const SurveyEditor = () => {
     try {
       const questions = buildNormalizedSurveySchema();
       const model = new Model(questions);
-      applyProductionSurveyTheme(model);
-      model.showQuestionNumbers = false;
-      model.showProgressBar = 'bottom';
-      model.progressBarType = 'questions';
+      configureProductionSurveyPresentation(model);
 
       configureSurveyModel(model, 'preview-runtime');
       setPreviewSurveyModel(model);
@@ -611,12 +592,12 @@ const SurveyEditor = () => {
 
   const handleClosePreview = () => {
     if (previewSurveyModel) {
-      const hooks = surveyHooksRef.current.get(previewSurveyModel);
-      if (hooks?.cleanup) {
-        hooks.cleanup();
-      }
-      surveyHooksRef.current.delete(previewSurveyModel);
-      cleanupDraggableSurveyRoots(previewSurveyModel);
+      releaseSurveyModel(
+        surveyContextModelsRef.current,
+        surveyHooksRef.current,
+        previewSurveyModel,
+        cleanupDraggableSurveyRoots
+      );
       if (typeof previewSurveyModel.dispose === 'function') {
         previewSurveyModel.dispose();
       }
@@ -659,19 +640,19 @@ const SurveyEditor = () => {
         <Button
           variant="contained"
           onClick={handleSaveSurvey}
-          disabled={!selectedSurvey || saving || editorReadOnly}
+          disabled={!creator || !selectedSurvey || saving || editorReadOnly}
         >
           Save Survey
         </Button>
         <Button
           variant="outlined"
           onClick={handleOpenPreview}
-          disabled={!selectedSurvey || loading}
+          disabled={!creator || !selectedSurvey || loading}
         >
           Demo Survey
         </Button>
       </Box>
-      {lifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Survey design is read-only while this survey is {lifecycleStatus(selectedSurveyRecord)}. You can still preview it.</Alert>}
+      {lifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Survey design is read-only while this survey is {lifecycleLabel(lifecycleStatus(selectedSurveyRecord)).toLowerCase()}. You can still preview it.</Alert>}
       {roleLocked && <Alert severity="info" sx={{ mb: 2 }}>Your role has read-only access to this survey design. You can still preview it.</Alert>}
       {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
       <Box
@@ -684,7 +665,7 @@ const SurveyEditor = () => {
           overflow: 'auto',
         }}
       >
-        {loading ? <CircularProgress /> : <SurveyCreatorComponent creator={creator} />}
+        {loading || !creator ? <CircularProgress /> : <SurveyCreatorComponent creator={creator} />}
       </Box>
       <Dialog
         open={previewOpen}

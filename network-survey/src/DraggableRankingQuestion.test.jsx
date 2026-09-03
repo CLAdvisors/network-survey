@@ -170,6 +170,25 @@ describe('DraggableRankingQuestion', () => {
     expect(screen.getByTestId('drop-ranked')).toHaveAttribute('data-disabled', 'true');
   });
 
+  it('lets long labels wrap without pushing supplement and rank actions onto another row', async () => {
+    const question = createQuestion();
+    question.choices = ['Borrowed-tool stewardship with a deliberately extended title'];
+    render(
+      <DraggableRankingQuestion
+        question={question}
+        value={[]}
+        onChange={vi.fn()}
+        renderChoiceSupplement={() => <button type="button">Definition</button>}
+      />
+    );
+
+    const label = await screen.findByText('Borrowed-tool stewardship with a deliberately extended title');
+    expect(label).toHaveStyle({ flex: '1 1 0', minWidth: '0' });
+    const row = label.parentElement;
+    expect(within(row).getByRole('button', { name: 'Definition' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /Rank:/ })).toBeInTheDocument();
+  });
+
   it('supports a vertical available-options layout', async () => {
     const question = createQuestion();
     render(

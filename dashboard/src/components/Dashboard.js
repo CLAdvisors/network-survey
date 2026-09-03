@@ -14,7 +14,8 @@ import ReminderTemplateEditor from "./ReminderTemplateEditor";
 import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
-import { lifecycleStatus, surveyId } from "./surveyLifecycle";
+import EmailHistory from "./EmailHistory";
+import { lifecycleLabel, lifecycleStatus, surveyId } from "./surveyLifecycle";
 import { surveyOperationGeneration } from "./useSurveyOperationState";
 
 const Dashboard = () => {
@@ -266,11 +267,12 @@ const Dashboard = () => {
 
   return (
     <Box
+      data-testid="dashboard-shell"
       sx={{
-        marginTop: "20px",
-        padding: "40px",
-        marginLeft: "13%",
-        marginRight: "13%",
+        mt: '20px',
+        px: { xs: 1.5, sm: 3, md: 5 },
+        py: { xs: 2, sm: 3, md: 5 },
+        mx: { xs: 1, sm: 2, md: '13%' },
         border: `1px solid ${theme.palette.divider}`,
         borderRadius: "8px",
         boxShadow: theme.palette.mode === "light"
@@ -330,6 +332,7 @@ const Dashboard = () => {
       />
 
       {selectSurvey && <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} />}
+      {selectSurvey && selectedCanViewRespondents && <EmailHistory survey={selectSurvey} />}
 
       {selectSurvey && (
         <CollapsibleSection title="Survey Instructions">
@@ -337,7 +340,7 @@ const Dashboard = () => {
             surveyId={surveyId(selectSurvey)}
             readOnly={selectedReadOnly}
             readOnlyMessage={selectedIsLifecycleLocked
-              ? `Instructions are read-only while this survey is ${lifecycleStatus(selectSurvey)}.`
+              ? `Instructions are read-only while this survey is ${lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.`
               : 'You do not have permission to update these instructions.'}
             onDirtyChange={handleDirtyChange}
             onOperationChange={handleOperationChange}
@@ -346,7 +349,7 @@ const Dashboard = () => {
       )}
 
       <CollapsibleSection title="Survey Questions">
-        {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
+        {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
         <QuestionTable
           rows={questionData}
           loading={questionLoading}
@@ -394,7 +397,7 @@ const Dashboard = () => {
       {(selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations) && (
         <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
           <CollapsibleSection title="Survey Respondents">
-            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleStatus(selectSurvey)}.</Alert>}
+            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
             <RespondentTable
               rows={selectedCanViewRespondents ? respondentData : null}
               revision={selectedCanViewRespondents ? respondentRevision : null}

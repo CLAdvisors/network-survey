@@ -45,6 +45,15 @@ test('shows readiness and queues one truthful idempotent launch', async () => {
   expect(accepted).toHaveBeenCalledWith({ launchId: 'launch-1' });
 });
 
+test('labels the active API lifecycle value as Launched without changing the contract', async () => {
+  api.get.mockResolvedValue({ data: { ...readiness, lifecycleStatus: 'active', canLaunch: false } });
+  render(<StartSurveyDialog open survey={{ id: 'survey-1', name: 'Team Survey' }} onClose={() => {}} onAccepted={() => {}} />);
+
+  expect(await screen.findByText('Lifecycle: Launched')).toBeInTheDocument();
+  expect(screen.queryByText('Lifecycle: Active')).not.toBeInTheDocument();
+  expect(screen.getByText(/Confirming will launch this survey when the durable invitation launch is accepted/)).toBeInTheDocument();
+});
+
 test('blocks launch with an accessible survey-specific warning for all unsaved sections', async () => {
   api.get.mockResolvedValue({ data: readiness });
   const view = render(<StartSurveyDialog

@@ -216,7 +216,7 @@ test('blocks Close Survey from the menu while this survey is dirty or pending', 
   expect(api.post).not.toHaveBeenCalled();
 });
 
-test('an active survey offers status and close, but no launch or reminder bypass', async () => {
+test('a launched survey offers status and close, but no launch or reminder bypass', async () => {
   api.post.mockResolvedValue({ status: 200, data: {} });
   const changed = vi.fn();
   render(<SurveyTableMenuCell row={{ id: 'survey-1', name: 'Leadership Survey', lifecycleStatus: 'active' }} onLifecycleChange={changed} />);

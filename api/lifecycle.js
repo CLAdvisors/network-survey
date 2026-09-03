@@ -455,7 +455,7 @@ function emailHistoryItem(row) {
     },
     status: outcome,
     attempts: Number(row.attempt_count || 0),
-    providerAttempts: Number(row.provider_attempt_count || 0),
+    providerAttempts: row.provider_attempt_count == null ? null : Number(row.provider_attempt_count),
     timestamps: {
       queuedAt: row.created_at || null,
       firstAttemptedAt: row.first_attempt_at || null,

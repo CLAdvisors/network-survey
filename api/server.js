@@ -427,7 +427,8 @@ async function requireAuth(req, res, next) {
 // Large parsers are mounted only on routes that need them. Authoring requests
 // are authoritatively authenticated and rate-limited before larger allocation;
 // the public response route is IP-rate-limited before its bounded parser.
-const rosterJsonParser = express.json({ limit: '5mb' });
+const ROSTER_JSON_LIMIT = '5mb';
+const rosterJsonParser = express.json({ limit: ROSTER_JSON_LIMIT });
 const QUESTION_DEFINITION_JSON_LIMIT = '3mb';
 const questionDefinitionJsonParser = express.json({ limit: QUESTION_DEFINITION_JSON_LIMIT });
 const RESPONSE_JSON_LIMIT = '1mb';
@@ -3617,6 +3618,7 @@ module.exports = {
   SUPPORTED_QUESTION_TYPES,
   DEFINED_RANKING_LIMITS,
   QUESTION_DEFINITION_JSON_LIMIT,
+  ROSTER_JSON_LIMIT,
   RESPONSE_JSON_LIMIT,
   SURVEY_SCHEMA_MAX_BYTES,
   validateSurveyDefinition,

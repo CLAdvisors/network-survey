@@ -198,10 +198,11 @@ class ResendProvider {
 }
 
 async function reserveProviderRateWithAvailabilityInTransaction(client, environment, rate) {
+  const capacity = Math.max(1, Math.ceil(Number(rate) || 1));
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`email-rate-budget:${environment}`]);
   await client.query(`DELETE FROM email_rate_reservations WHERE environment=$1 AND reserved_at<clock_timestamp()-interval '10 minutes'`, [environment]);
-  const used = await client.query(`SELECT count(*)::int AS count,(array_agg(reserved_at ORDER BY reserved_at))[GREATEST(count(*)::int-$2+1,1)]+interval '1 second' AS next_available_at FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()-interval '1 second'`, [environment, rate]);
-  if (Number(used.rows[0]?.count || 0) >= rate) return { reserved: false, nextAvailableAt: used.rows[0].next_available_at };
+  const used = await client.query(`SELECT count(*)::int AS count,(array_agg(reserved_at ORDER BY reserved_at))[GREATEST(count(*)::int-$2+1,1)]+interval '1 second' AS next_available_at FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()-interval '1 second'`, [environment, capacity]);
+  if (Number(used.rows[0]?.count || 0) >= capacity) return { reserved: false, nextAvailableAt: used.rows[0].next_available_at };
   await client.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp())`, [environment]);
   return { reserved: true, nextAvailableAt: null };
 }

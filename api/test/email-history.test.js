@@ -162,11 +162,12 @@ test('zero history and legacy/null snapshots return a stable bounded contract', 
   assert.deepEqual(await listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, {}, SECRET), {
     surveyId: SURVEY_ID, messages: [], pageInfo: { limit: 50, hasMore: false, nextCursor: null },
   });
-  const legacy = historyPool([baseRow({ kind: null, recipient_display_name: null, status: null, updated_at: null })]);
+  const legacy = historyPool([baseRow({ kind: null, recipient_display_name: null, status: null, updated_at: null, provider_attempt_count: undefined })]);
   const response = await listEmailHistory(legacy.pool, { id: 7 }, SURVEY_ID, {}, SECRET);
   assert.equal(response.messages[0].messageType, 'invitation');
   assert.equal(response.messages[0].status.code, 'unknown');
   assert.equal(response.messages[0].recipient.displayName, null);
+  assert.equal(response.messages[0].providerAttempts, null, 'missing rolling-deployment evidence remains unavailable rather than becoming a factual zero');
   await assert.rejects(() => listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, { limit: '0' }, SECRET), error => error.code === 'email_history_limit_invalid');
   await assert.rejects(() => listEmailHistory(empty.pool, { id: 7 }, SURVEY_ID, { status: 'failed' }, SECRET), error => error.code === 'email_history_parameter_invalid');
 });

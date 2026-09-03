@@ -53,6 +53,7 @@ const {
   surveySummaryRespondentCount,
   surveyResponseSummary,
   RESPONSE_JSON_LIMIT,
+  ROSTER_JSON_LIMIT,
 } = require('../server');
 const { displayedRespondentPredicate } = require('../respondent-utils');
 
@@ -1821,7 +1822,7 @@ test('dashboard/admin endpoints require authentication', async () => {
   }
 });
 
-test('JSON parsing accepts maximum roster requests without raising the global limit', async () => {
+test('roster parser budget fits a maximum request while authentication precedes body parsing', async () => {
   const validMaximumBatch = {
     expectedRevision: 0,
     additions: Array.from({ length: 1500 }, (_, index) => {
@@ -1835,6 +1836,7 @@ test('JSON parsing accepts maximum roster requests without raising the global li
     }),
   };
   const maximumBatchBytes = Buffer.byteLength(JSON.stringify(validMaximumBatch));
+  assert.equal(ROSTER_JSON_LIMIT, '5mb');
   assert.ok(maximumBatchBytes > 3 * 1024 * 1024);
   assert.ok(maximumBatchBytes < 5 * 1024 * 1024);
   const maximum = await request(app)

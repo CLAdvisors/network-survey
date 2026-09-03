@@ -146,6 +146,11 @@ test('full provider rate budgets report the first principled reservation time wi
   assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt});
   assert.match(calls.find(({sql})=>/SELECT count/.test(sql)).sql,/array_agg\(reserved_at ORDER BY reserved_at\).*\+interval '1 second' AS next_available_at/);
   assert.equal(calls.some(({sql})=>/INSERT INTO email_rate_reservations/.test(sql)),false);
+
+  const fractionalCalls=[];
+  const fractionalClient={async query(sql,values=[]){fractionalCalls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:2,next_available_at:null}]};return{rowCount:1,rows:[]};}};
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(fractionalClient,'test',2.5),{reserved:true,nextAvailableAt:null});
+  assert.equal(fractionalCalls.find(({sql})=>/SELECT count/.test(sql)).values[1],3,'fractional legacy configuration is normalized to its prior effective capacity');
 });
 
 test('readiness validates the entire audience and exact normalized template coverage', () => {
@@ -232,6 +237,8 @@ test('reminder implementation selects and rechecks only incomplete eligible resp
   assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
   assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
   assert.match(workerSource,/row\.launch_kind!=='reminder'.*email_sent/s);
+  assert.match(workerSource,/COUNT\(provider_started_at\)::int AS provider_attempt_count,COALESCE\(bool_or\(outcome='uncertain'.*AS has_unresolved_provider_attempt/);
+  assert.doesNotMatch(workerSource,/WHERE delivery_id=\$1 AND outcome='uncertain'/);
 });
 
 test('launch fingerprint is canonical and aggregate SQL derives dispatch and distinct provider summary counts', () => {
@@ -244,6 +251,24 @@ test('launch fingerprint is canonical and aggregate SQL derives dispatch and dis
   assert.match(sql, /AS provider_waiting_count/);
   assert.match(sql, /d\.status='accepted' AND d\.provider_delivered_at IS NULL/);
   assert.doesNotMatch(sql, /UPDATE survey_launches/);
+});
+
+test('expired leases count every provider crossing before deciding retry exhaustion', async () => {
+  const calls=[];
+  const previous={id:'delivery-1',status:'leased',attempt_count:9,created_at:'2026-08-04T11:00:00Z',lease_token:'lease-6',launch_kind:'initial'};
+  const client={release(){},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT claiming_enabled,minimum_release/.test(sql))return{rows:[{claiming_enabled:true,minimum_release:null}]};
+    if(/SELECT d\.id,d\.status/.test(sql))return{rows:[previous],rowCount:1};
+    if(/SELECT MIN\(provider_started_at\)/.test(sql))return{rows:[{first_provider_started_at:'2026-08-04T11:30:00Z',provider_attempt_count:6,current_provider_started:true}],rowCount:1};
+    return{rows:[],rowCount:1};
+  }};
+  const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},clock:()=>new Date('2026-08-04T12:00:00Z'),env:{NODE_ENV:'test',EMAIL_MAX_ATTEMPTS:'6'}});
+  assert.equal(await worker.claim(),null);
+  const stats=calls.find(({sql})=>/SELECT MIN\(provider_started_at\)/.test(sql));
+  assert.doesNotMatch(stats.sql,/outcome IN/);
+  assert.deepEqual(stats.values,['delivery-1','lease-6']);
+  assert.ok(calls.some(({sql,values})=>/UPDATE survey_email_deliveries SET status='uncertain'/.test(sql)&&values[1]==='ambiguous_attempts_exhausted'));
+  assert.equal(calls.some(({sql})=>/attempt_count=attempt_count\+1/.test(sql)),false);
 });
 
 test('expired ambiguous attempts never cross the provider idempotency boundary', () => {

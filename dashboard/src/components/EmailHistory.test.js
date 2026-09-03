@@ -59,16 +59,17 @@ test('renders semantic desktop table and responsive cards with privacy-safe stat
   expect(screen.getAllByText('a.very.long.address.for.responsive.layout@example.test').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByLabelText('1 provider attempt')).toBeInTheDocument();
   expect(screen.getByLabelText('3 worker attempts')).toBeInTheDocument();
-  expect(screen.getByText(/Provider attempts count requests that reached the email service/i)).toBeInTheDocument();
+  expect(screen.getByText(/Provider attempts count work that crossed the provider dispatch boundary/i)).toBeInTheDocument();
   expect(screen.getByRole('heading', { level: 2, name: 'Email history' })).toHaveAttribute('tabindex', '-1');
   expect(document.body.textContent).not.toMatch(/respondent[_ -]?token|message body|provider[_ -]?message[_ -]?id|lease[_ -]?token/i);
 });
 
-test('gives repeated messages for the same recipient distinct mobile article names', async () => {
-  api.get.mockResolvedValueOnce(response('survey-1', [message(), message({ campaign: { launchId: 'launch-two', kind: 'initial' } })]));
+test('gives repeated messages for the same recipient distinct mobile article names and preserves unavailable provider counts', async () => {
+  api.get.mockResolvedValueOnce(response('survey-1', [message(), message({ providerAttempts: null, campaign: { launchId: 'launch-two', kind: 'initial' } })]));
   render(<EmailHistory survey={{ id: 'survey-1', name: 'Lifecycle survey' }} />);
   expect(await screen.findByRole('article', { name: /Message 1: Invitation for A Recipient/ })).toBeInTheDocument();
   expect(screen.getByRole('article', { name: /Message 2: Invitation for A Recipient/ })).toBeInTheDocument();
+  expect(screen.getByLabelText('Provider attempts unavailable')).toBeInTheDocument();
 });
 
 test('shows bounded loading, empty, error/retry, and explicit refresh states', async () => {

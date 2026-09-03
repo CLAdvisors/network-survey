@@ -28,7 +28,7 @@ Response shape:
 }
 ```
 
-Recipient name/address come from the immutable delivery snapshot, not the current respondent row. Renames therefore do not rewrite history, and history does not require a respondent join. Null/partial records use explicit unavailable/unknown UI states. `attempts` is the greater of the durable delivery claim counter and recorded worker-attempt rows, preserving internal scheduling diagnostics and accommodating partially migrated records. `providerAttempts` counts only attempt rows with `provider_started_at`, so rate waits and other pre-provider cancellations do not inflate the displayed provider-attempt count.
+Recipient name/address come from the immutable delivery snapshot, not the current respondent row. Renames therefore do not rewrite history, and history does not require a respondent join. Null/partial records use explicit unavailable/unknown UI states. `attempts` is the greater of the durable delivery claim counter and recorded worker-attempt rows, preserving internal scheduling diagnostics and accommodating partially migrated records. `providerAttempts` counts only attempt rows with `provider_started_at`, the durable provider-dispatch boundary marker, so rate waits and other pre-boundary cancellations do not inflate the count. It is `null` only when that projection is absent during a rolling deployment; the UI renders that case as unavailable rather than a factual zero.
 
 ## Status precedence
 

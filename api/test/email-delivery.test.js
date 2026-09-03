@@ -141,15 +141,16 @@ test('retained provider-boundary clients reserve rate capacity without reconnect
 
 test('full provider rate budgets report the first principled reservation time without reserving', async () => {
   const calls=[];
+  const observedAt=new Date('2026-08-04T12:00:00.000Z');
   const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
-  const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:5,next_available_at:nextAvailableAt}]};return{rowCount:1,rows:[]};}};
-  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt});
+  const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:5,next_available_at:nextAvailableAt,observed_at:observedAt}]};return{rowCount:1,rows:[]};}};
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt,retryAfterMs:250});
   assert.match(calls.find(({sql})=>/SELECT count/.test(sql)).sql,/array_agg\(reserved_at ORDER BY reserved_at\).*\+interval '1 second' AS next_available_at/);
   assert.equal(calls.some(({sql})=>/INSERT INTO email_rate_reservations/.test(sql)),false);
 
   const fractionalCalls=[];
   const fractionalClient={async query(sql,values=[]){fractionalCalls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:2,next_available_at:null}]};return{rowCount:1,rows:[]};}};
-  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(fractionalClient,'test',2.5),{reserved:true,nextAvailableAt:null});
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(fractionalClient,'test',2.5),{reserved:true,nextAvailableAt:null,retryAfterMs:0});
   assert.equal(fractionalCalls.find(({sql})=>/SELECT count/.test(sql)).values[1],3,'fractional legacy configuration is normalized to its prior effective capacity');
 });
 
@@ -395,6 +396,24 @@ test('provider failures back off by provider crossings rather than inflated work
     assert.ok(retry);
     assert.equal(retry.values[2],1000,'one provider crossing receives first-attempt backoff despite twelve worker claims');
   }
+});
+
+test('rate wait applies bounded worker backpressure after provider-boundary cleanup returns', async () => {
+  const events=[];
+  let resume;
+  const sleeping=new Promise(resolve=>{resume=resolve;});
+  const worker=new DeliveryWorker({pool:{},provider:{},random:()=>0,env:{NODE_ENV:'test'},sleepFn:async(delay)=>{events.push(`sleep:${delay}`);await sleeping;}});
+  worker.claim=async()=>({id:'delivery-1'});
+  worker.startProviderRequest=async()=>{events.push('boundary-returned');return{action:'rate_wait',retryAfterMs:495};};
+  const processing=worker.processOne().then(()=>events.push('processed'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(events,['boundary-returned','sleep:500']);
+  resume();
+  await processing;
+  assert.deepEqual(events,['boundary-returned','sleep:500','processed']);
+  for(const invalid of [undefined,null,'',-1,NaN,5000])assert.equal(worker.rateWaitDelay(invalid),1000);
+  assert.equal(worker.rateWaitDelay(0),5);
+  assert.equal(worker.rateWaitDelay(1100),1105);
 });
 
 test('worker retry backoff is bounded and uses injected randomness', () => {

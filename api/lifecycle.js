@@ -22,6 +22,7 @@ const MAX_EMAIL_HISTORY_CURSOR_LENGTH = 1024;
 const ROLE_RANK = { viewer: 10, analyst: 20, editor: 30, admin: 40, owner: 50 };
 let authoritativeSurveyValidator = null;
 const setSurveyDefinitionValidator = (validator) => { authoritativeSurveyValidator = validator; };
+const HOSTED_ENVIRONMENTS = new Set(['staging', 'prod', 'prod-secondary']);
 const SUPPORTED_LANGUAGES = new Set([
   'english', 'spanish', 'french', 'german', 'italian', 'portuguese',
   'dutch', 'polish', 'russian', 'japanese', 'chinese', 'korean',
@@ -35,6 +36,7 @@ function environmentName(env = process.env) {
   const value = env.EMAIL_WORKER_ENV || env.NODE_ENV || 'local';
   return value === 'production' ? 'prod' : value === 'development' || value === 'dev' ? 'local' : value;
 }
+function isHostedEnvironment(environment) { return HOSTED_ENVIRONMENTS.has(environment); }
 function normalizeLanguage(value) { return String(value || '').trim().toLowerCase(); }
 function fingerprint(input) { return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex'); }
 function canRole(role, minimum) { return (ROLE_RANK[role] || 0) >= ROLE_RANK[minimum]; }
@@ -604,4 +606,4 @@ async function updateSurveyInstructions(pool, user, surveyId, value, expectedVal
   });
 }
 
-module.exports={LifecycleError,publicError,environmentName,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,evaluateReminderReadiness,getReadiness,getReminderReadiness,listReminderTemplates,saveReminderTemplate,launchReminder,launchSurvey,listLaunches,listEmailHistory,transitionSurvey,withEditableSurvey,getSurveyInstructions,updateSurveyInstructions,aggregateSelect,emailHistoryOutcome,emailHistoryItem,encodeEmailHistoryCursor,decodeEmailHistoryCursor,setSurveyDefinitionValidator};
+module.exports={LifecycleError,publicError,environmentName,isHostedEnvironment,normalizeLanguage,fingerprint,strictAudit,loadAuthorizedSurvey,evaluateReadiness,evaluateReminderReadiness,getReadiness,getReminderReadiness,listReminderTemplates,saveReminderTemplate,launchReminder,launchSurvey,listLaunches,listEmailHistory,transitionSurvey,withEditableSurvey,getSurveyInstructions,updateSurveyInstructions,aggregateSelect,emailHistoryOutcome,emailHistoryItem,encodeEmailHistoryCursor,decodeEmailHistoryCursor,setSurveyDefinitionValidator};

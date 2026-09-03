@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
+const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient } = require('../email');
 const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
@@ -23,6 +23,22 @@ test('invitation rendering escapes templates and emits equivalent accessible HTM
   assert.equal((payload.html.match(new RegExp(token, 'g')) || []).length, 1);
   assert.equal((payload.text.match(new RegExp(token, 'g')) || []).length, 1);
   assert.doesNotMatch(payload.html, /stripe|lorem ipsum/i);
+});
+
+test('prod-secondary accepts only its isolated Resend identity', () => {
+  const valid = { EMAIL_WORKER_ENV:'prod-secondary', RESEND_PROVIDER_ACCOUNT_SCOPE:PROD_SECONDARY_SCOPE, SURVEY_EMAIL_SENDER:PROD_SECONDARY_SENDER, SURVEY_EMAIL_REPLY_TO:PROD_SECONDARY_REPLY_TO, RESEND_CREDENTIAL_LOAD_ENABLED:'false', RESEND_WEBHOOK_INGEST_ENABLED:'false' };
+  assert.doesNotThrow(() => validateProdSecondaryResendConfig(valid));
+  assert.throws(() => validateProdSecondaryResendConfig({...valid,RESEND_KEY:'legacy'}), /legacy RESEND_KEY/);
+  assert.throws(() => validateProdSecondaryResendConfig({...valid,RESEND_PROVIDER_ACCOUNT_SCOPE:'network-survey-resend-prod'}), /RESEND_PROVIDER_ACCOUNT_SCOPE/);
+  assert.throws(() => validateProdSecondaryResendConfig({...valid,SURVEY_EMAIL_SENDER:'CLA Survey <survey@cladvisors.com>'}), /SURVEY_EMAIL_SENDER/);
+  assert.throws(() => validateProdSecondaryResendConfig({...valid,RESEND_CREDENTIAL_LOAD_ENABLED:'true'}), /RESEND_API_KEY/);
+  assert.doesNotThrow(() => validateProdSecondaryResendConfig({EMAIL_WORKER_ENV:'staging'}));
+});
+
+test('synchronous sender identity changes only for prod-secondary', () => {
+  assert.deepEqual(synchronousEmailIdentity({EMAIL_WORKER_ENV:'prod-secondary'}),{sender:PROD_SECONDARY_SENDER,replyTo:PROD_SECONDARY_REPLY_TO});
+  assert.deepEqual(synchronousEmailIdentity({EMAIL_WORKER_ENV:'prod'}),{sender:'CLA Survey <survey@cladvisors.com>',replyTo:null});
+  assert.deepEqual(synchronousEmailIdentity({EMAIL_WORKER_ENV:'staging',SURVEY_EMAIL_SENDER:'unexpected'}),{sender:'CLA Survey <survey@cladvisors.com>',replyTo:null});
 });
 
 test('current invitations include the approved privacy notice and accessible policy link', () => {

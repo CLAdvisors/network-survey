@@ -3,16 +3,26 @@
 const path=require('path'),fs=require('fs'),crypto=require('crypto'),{spawnSync}=require('child_process');
 require(path.join(process.cwd(),'node_modules/dotenv')).config({path:path.join(process.cwd(),'.env.prod')});
 const{Pool}=require(path.join(process.cwd(),'node_modules/pg'));
+const{isHostedEnvironment}=require('./hosted-environments');
 const EVENTS=['email.sent','email.delivered','email.delivery_delayed','email.bounced','email.complained','email.failed','email.suppressed','suppression.added','suppression.removed'];
 const EVENT_HASH=crypto.createHash('sha256').update(EVENTS.slice().sort().join('\n')).digest('hex');
 const command=process.argv[2];const options={};for(let i=3;i<process.argv.length;i+=2){if(!process.argv[i].startsWith('--')||process.argv[i+1]===undefined)throw new Error('options must be --name value pairs');options[process.argv[i].slice(2)]=process.argv[i+1];}
-if(command==='event-hash'){console.log(EVENT_HASH);process.exit(0);}if(!['bootstrap','rotate','retire-previous','status','enable','disable','delete'].includes(command))throw new Error('usage: manage-resend-webhook.js <bootstrap|rotate|retire-previous|status|enable|disable|delete|event-hash> --environment <staging|prod> --url <https-url> --account-scope <scope> --event-set-hash <sha256> --actor <actor> [--confirm <endpoint-id>]');
+if(command==='event-hash'){console.log(EVENT_HASH);process.exit(0);}if(!['bootstrap','rotate','retire-previous','status','enable','disable','delete'].includes(command))throw new Error('usage: manage-resend-webhook.js <bootstrap|rotate|retire-previous|status|enable|disable|delete|event-hash> --environment <staging|prod|prod-secondary> --url <https-url> --account-scope <scope> --event-set-hash <sha256> --actor <actor> [--confirm <endpoint-id>]');
 const environment=options.environment,actor=(options.actor||'').slice(0,255),scope=options['account-scope'],expectedHash=options['event-set-hash'],url=options.url;
-if(!['staging','prod'].includes(environment)||!actor||!scope||!/^[-A-Za-z0-9_]{1,128}$/.test(scope)||expectedHash!==EVENT_HASH)throw new Error('environment, actor, stable account scope, and exact selected event-set hash are required');
+if(!isHostedEnvironment(environment)||!actor||!scope||!/^[-A-Za-z0-9_]{1,128}$/.test(scope)||expectedHash!==EVENT_HASH)throw new Error('environment, actor, stable account scope, and exact selected event-set hash are required');
 if(process.env.EMAIL_WORKER_ENV!==environment)throw new Error('requested environment must exactly match EMAIL_WORKER_ENV loaded on this host');
 let parsedUrl;try{parsedUrl=new URL(url);}catch(_){throw new Error('a valid expected public URL is required');}if(parsedUrl.protocol!=='https:'||parsedUrl.toString()!==url)throw new Error('expected public URL must be canonical HTTPS');
+if(environment==='prod-secondary'){
+  if(scope!=='network-survey-resend-prod-secondary')throw new Error('prod-secondary requires its exact Resend account scope');
+  if(url!=='https://api.cladvisorsurveys.com/api/webhooks/resend')throw new Error('prod-secondary requires its exact webhook URL');
+  if(process.env.AWS_DEFAULT_REGION!=='us-east-1')throw new Error('prod-secondary requires AWS_DEFAULT_REGION=us-east-1');
+  const identity=spawnSync('aws',['sts','get-caller-identity','--query','Account','--output','text'],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
+  if(identity.status!==0||identity.stdout.trim()!=='710054969994')throw new Error('prod-secondary webhook management requires AWS account 710054969994');
+}
 const apiKey=process.env.RESEND_API_KEY;if(!apiKey)throw new Error('RESEND_API_KEY must be loaded in process memory');
 const secretParameter=process.env.RESEND_WEBHOOK_SECRET_PARAMETER,previousSecretParameter=process.env.RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER;if(['bootstrap','rotate','retire-previous'].includes(command)&&!secretParameter)throw new Error('RESEND_WEBHOOK_SECRET_PARAMETER is required');if(['rotate','retire-previous'].includes(command)&&!previousSecretParameter)throw new Error('RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER is required');
+if(environment==='prod-secondary'&&['bootstrap','rotate','retire-previous'].includes(command)&&secretParameter!=='/network-survey/prod-secondary/resend/webhook-secret')throw new Error('prod-secondary requires its exact webhook secret parameter');
+if(environment==='prod-secondary'&&['rotate','retire-previous'].includes(command)&&previousSecretParameter!=='/network-survey/prod-secondary/resend/webhook-previous-secret')throw new Error('prod-secondary requires its exact previous webhook secret parameter');
 const urlHash=crypto.createHash('sha256').update(url).digest('hex');
 const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
 async function provider(method,route,body){const response=await fetch(`https://api.resend.com${route}`,{method,headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const text=await response.text();if(!response.ok)throw new Error(`Resend ${method} ${route} failed with HTTP ${response.status}`);return text?JSON.parse(text):{};}

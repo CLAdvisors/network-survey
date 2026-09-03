@@ -5,6 +5,7 @@ const fs = require('fs');
 const dotenv = require(path.join(process.cwd(), 'node_modules/dotenv'));
 dotenv.config({ path: path.join(process.cwd(), '.env.prod') });
 const { Pool } = require(path.join(process.cwd(), 'node_modules/pg'));
+const { HOSTED_ENVIRONMENTS_DESCRIPTION, isHostedEnvironment } = require('./hosted-environments');
 
 if (!['true', 'false'].includes(process.argv[2])) {
   throw new Error('usage: set-email-claiming.js <true|false> [reason]');
@@ -13,8 +14,8 @@ if (!['true', 'false'].includes(process.argv[2])) {
 const enabled = process.argv[2] === 'true';
 const environment = process.env.EMAIL_WORKER_ENV;
 const expectedRevision = process.env.EXPECTED_RELEASE_REVISION;
-if (!['staging', 'prod'].includes(environment)) {
-  throw new Error('EMAIL_WORKER_ENV must be staging or prod');
+if (!isHostedEnvironment(environment)) {
+  throw new Error(`EMAIL_WORKER_ENV must be one of: ${HOSTED_ENVIRONMENTS_DESCRIPTION}`);
 }
 if (enabled && !expectedRevision) {
   throw new Error('EXPECTED_RELEASE_REVISION is required when enabling email claiming');

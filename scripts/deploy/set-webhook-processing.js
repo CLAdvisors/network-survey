@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const dotenv = require(path.join(process.cwd(), 'node_modules/dotenv'));
 dotenv.config({ path: path.join(process.cwd(), '.env.prod') });
 const { Pool } = require(path.join(process.cwd(), 'node_modules/pg'));
+const { HOSTED_ENVIRONMENTS_DESCRIPTION, isHostedEnvironment } = require('./hosted-environments');
 
 const [enabledArg, revisionArg, actorArg, ...reasonParts] = process.argv.slice(2);
 if (!['true', 'false'].includes(enabledArg) || !/^\d+$/.test(revisionArg || '') || !actorArg || reasonParts.length === 0) {
@@ -18,7 +19,7 @@ const release = process.env.EXPECTED_RELEASE_REVISION || '';
 const deploymentId = process.env.EXPECTED_DEPLOYMENT_ID || '';
 const actor = actorArg.slice(0, 255);
 const reason = reasonParts.join(' ').slice(0, 500);
-if (!['staging', 'prod'].includes(environment)) throw new Error('EMAIL_WORKER_ENV must be staging or prod');
+if (!isHostedEnvironment(environment)) throw new Error(`EMAIL_WORKER_ENV must be one of: ${HOSTED_ENVIRONMENTS_DESCRIPTION}`);
 if (enabled && (!release || !deploymentId)) throw new Error('enabling requires EXPECTED_RELEASE_REVISION and EXPECTED_DEPLOYMENT_ID');
 
 const pool = new Pool({

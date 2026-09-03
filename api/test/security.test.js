@@ -45,6 +45,7 @@ const {
   normalizeQuestionNames,
   formatRespondentChoice,
   isTrustedStateChangingOrigin,
+  trustCloudFrontViewerProtocol,
   configuredCorsOrigins,
   buildSurveyUrl,
   displayedRespondentCountExpression,
@@ -166,6 +167,7 @@ test('new survey links use the canonical HTTPS origin while CORS retains legacy 
     'https://survey.cladvisorsurveys.com/?surveyName=Leadership+%26+Team&userId=secret%2Ftoken'
   );
   assert.throws(() => buildSurveyUrl('http://survey.cladvisorsurveys.com', { userId: 'token' }, 'prod'), /HTTPS/);
+  assert.throws(() => buildSurveyUrl('http://survey.cladvisorsurveys.com', { userId: 'token' }, 'prod-secondary'), /HTTPS/);
   assert.throws(() => buildSurveyUrl('https://user:password@survey.example.test', { userId: 'token' }), /without credentials/);
   assert.deepEqual(configuredCorsOrigins({
     FRONTEND_URL: 'https://dashboard.example.test/',
@@ -1857,6 +1859,20 @@ test('JSON parsing accepts maximum roster requests without raising the global li
   assert.equal(responseOversized.body.error, 'request_too_large');
 });
 
+test('CloudFront viewer protocol is trusted only through the explicit target runtime gate', () => {
+  const disabled = { headers: { 'cloudfront-forwarded-proto': 'https', 'x-forwarded-proto': 'http' } };
+  assert.equal(trustCloudFrontViewerProtocol(disabled, {}), false);
+  assert.equal(disabled.headers['x-forwarded-proto'], 'http');
+
+  const nonHttps = { headers: { 'cloudfront-forwarded-proto': 'http', 'x-forwarded-proto': 'http' } };
+  assert.equal(trustCloudFrontViewerProtocol(nonHttps, { TRUST_CLOUDFRONT_VIEWER_PROTO: 'true' }), false);
+  assert.equal(nonHttps.headers['x-forwarded-proto'], 'http');
+
+  const trusted = { headers: { 'cloudfront-forwarded-proto': 'https', 'x-forwarded-proto': 'http' } };
+  assert.equal(trustCloudFrontViewerProtocol(trusted, { TRUST_CLOUDFRONT_VIEWER_PROTO: 'true' }), true);
+  assert.equal(trusted.headers['x-forwarded-proto'], 'https');
+});
+
 test('public signup can be disabled by ALLOW_PUBLIC_SIGNUP=false', async () => {
   const res = await request(app)
     .post('/api/register')
@@ -2066,6 +2082,7 @@ test('CLA organization migration preserves survey data and enforces stable child
     'v1_8_bulk_survey_reminders.sql',
     'v1_9_reminder_provider_account_binding.sql',
     'v1_10_editable_survey_instructions.sql',
+    'v1_8_prod_secondary_controls.sql',
     'v1_11_survey_email_history_pagination.sql',
   ];
   const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
@@ -2171,14 +2188,17 @@ test('rollback capability validation permits no-reminder artifacts, rejects shar
   t.after(()=>fs.rmSync(release,{recursive:true,force:true}));
   fs.mkdirSync(path.join(release,'deploy'));
   const base={format_version:1,webhook_ingest:1,webhook_projection:1,suppression_enforcement:1,schema:{webhook_delivery_truth:1}};
-  const validate=marker=>{
+  const validate=(marker,...args)=>{
     fs.writeFileSync(path.join(release,'deploy','CAPABILITIES.json'),JSON.stringify(marker));
-    return spawnSync(process.execPath,[path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),release],{encoding:'utf8'});
+    return spawnSync(process.execPath,[path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),release,...args],{encoding:'utf8'});
   };
   assert.equal(validate(base).status,0,'artifact without reminder launch support is safe when no database floor is requested');
   const shared=validate({...base,reminder_provider_boundary:1});
   assert.notEqual(shared.status,0);assert.match(shared.stderr,/unsafe shared reminder queue/);
   assert.equal(validate({...base,reminder_provider_boundary:2}).status,0);
+  const unisolated=validate({...base,reminder_provider_boundary:3},'--require-prod-secondary-resend-isolation');
+  assert.notEqual(unisolated.status,0);assert.match(unisolated.stderr,/prod-secondary Resend isolation/);
+  assert.equal(validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1},'--require-prod-secondary-resend-isolation').status,0);
 });
 
 test('rollback database validation uses the installed runtime and enforces provider-binding capability 3', (t) => {

@@ -232,12 +232,20 @@ test('validation enforces complete roster formats, strict IDs, lengths, and supp
   assert.throws(() => validateFinalRoster([respondent(2, 'Broken', { contact_info: 'bad' })], normalizeCommand({ expectedRevision: 4, additions: [{ name: 'New', email: 'new@example.test', language: 'English', canRespond: true }] })), (error) => error.code === 'respondent_email_invalid');
 });
 
-test('CSV import is additions-only, strict, and occupied names are rejected by final validation', () => {
+test('CSV import is additions-only, strict, bounded, and occupied names are rejected by final validation', () => {
   const additions = parseRespondentCsv('First,Last,Email,Language,Can Respond\nAlice,Smith,alice@example.test,English,false');
   assert.deepEqual(additions, [{ name: 'Alice Smith', email: 'alice@example.test', language: 'English', canRespond: false }]);
   const command = normalizeCommand({ expectedRevision: 4, additions });
   assert.throws(() => validateFinalRoster([respondent(1, 'Alice Smith', { contact_info: 'old@example.test' })], command), (error) => error.code === 'respondent_name_duplicate');
   assert.throws(() => parseRespondentCsv('First,Last,Email,Can Respond\nA,B,a@example.test,maybe'), (error) => error.code === 'respondent_can_respond_invalid');
+  assert.throws(() => parseRespondentCsv('First,Last,Email,Language,Can Respond,"unterminated\nA,B,a@example.test,English,true'), (error) => error.code === 'csv_invalid');
+  assert.throws(() => parseRespondentCsv('First,Last,Email,Email,Language,Can Respond\nA,B,first@example.test,second@example.test,English,true'), (error) => error.code === 'csv_invalid');
+  const csvRows = Array.from({ length: 1501 }, (_, index) => `Person,${index + 1},person${index + 1}@example.test,English,true`);
+  assert.equal(parseRespondentCsv(`First,Last,Email,Language,Can Respond\n${csvRows.slice(0, 1500).join('\n')}`).length, 1500);
+  assert.throws(
+    () => parseRespondentCsv(`First,Last,Email,Language,Can Respond\n${csvRows.join('\n')}`),
+    (error) => error.code === 'roster_batch_too_large' && error.status === 413
+  );
 });
 
 test('temporary internal names are bounded and avoid current/final names', () => {

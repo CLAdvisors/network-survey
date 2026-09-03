@@ -2727,9 +2727,9 @@ app.post('/api/updateTargets', async (req, res) => {
   try {
     const { surveyName, csvData, expectedRevision } = req.body || {};
     if (!surveyName) return res.status(400).json({ error: 'survey_required', message: 'Survey identifier is required.' });
-    const additions = respondentRoster.parseRespondentCsv(csvData);
     const survey = await resolveSurveyForUser(req, res, { surveyName, allowedRoles: EDITOR_ROLES });
     if (!survey) return;
+    const additions = respondentRoster.parseRespondentCsv(csvData);
     const result = await respondentRoster.mutateRoster(pool, req.user, survey.id, { expectedRevision, additions });
     res.set('X-Roster-Revision', String(result.revision));
     res.status(200).json({ message: 'Respondents imported successfully.', ...result, processedCount: additions.length });

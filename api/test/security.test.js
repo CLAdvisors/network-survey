@@ -1837,6 +1837,8 @@ test('roster parser budget fits a maximum request while authentication precedes 
   };
   const maximumBatchBytes = Buffer.byteLength(JSON.stringify(validMaximumBatch));
   assert.equal(ROSTER_JSON_LIMIT, '5mb');
+  const serverSource = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /app\.post\('\/api\/updateTargets'[\s\S]+resolveSurveyForUser\(req, res,[\s\S]+parseRespondentCsv\(csvData\)/);
   assert.ok(maximumBatchBytes > 3 * 1024 * 1024);
   assert.ok(maximumBatchBytes < 5 * 1024 * 1024);
   const maximum = await request(app)

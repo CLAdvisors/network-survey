@@ -208,8 +208,16 @@ async function mutateRoster(pool, user, surveyId, command, hooks) {
 
 function parseRespondentCsv(csvData) {
   if (typeof csvData !== 'string' || !csvData.trim()) throw rosterError(400, 'csv_required', 'CSV data is required.');
-  const result = Papa.parse(csvData, { header: true, skipEmptyLines: 'greedy', transformHeader: (header) => String(header).trim() });
-  if (result.errors.length) throw rosterError(400, 'csv_invalid', 'The respondent CSV could not be parsed.', { row: result.errors[0].row });
+  const result = Papa.parse(csvData, {
+    header: true,
+    skipEmptyLines: 'greedy',
+    preview: MAX_BATCH_SIZE + 1,
+    transformHeader: (header) => String(header).trim(),
+  });
+  if (result.errors.length || (result.meta.renamedHeaders && Object.keys(result.meta.renamedHeaders).length)) {
+    throw rosterError(400, 'csv_invalid', 'The respondent CSV could not be parsed.', { row: result.errors[0]?.row ?? 0 });
+  }
+  if (result.data.length > MAX_BATCH_SIZE) throw rosterError(413, 'roster_batch_too_large', `A roster mutation may contain at most ${MAX_BATCH_SIZE} changes.`);
   const additions = result.data.map((row, index) => {
     const first = String(row.First ?? '').trim();
     const last = String(row.Last ?? '').trim();

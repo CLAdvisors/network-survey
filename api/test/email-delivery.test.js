@@ -237,7 +237,7 @@ test('reminder implementation selects and rechecks only incomplete eligible resp
   assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
   assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
   assert.match(workerSource,/row\.launch_kind!=='reminder'.*email_sent/s);
-  assert.match(workerSource,/COUNT\(provider_started_at\)::int AS provider_attempt_count,COALESCE\(bool_or\(outcome='uncertain'.*AS has_unresolved_provider_attempt/);
+  assert.match(workerSource,/MIN\(provider_started_at\) FILTER \(WHERE outcome='uncertain'\) AS first_uncertain_provider_started_at,COUNT\(provider_started_at\)::int AS provider_attempt_count/);
   assert.doesNotMatch(workerSource,/WHERE delivery_id=\$1 AND outcome='uncertain'/);
 });
 
@@ -259,13 +259,14 @@ test('expired leases count every provider crossing before deciding retry exhaust
   const client={release(){},async query(sql,values=[]){calls.push({sql,values});
     if(/SELECT claiming_enabled,minimum_release/.test(sql))return{rows:[{claiming_enabled:true,minimum_release:null}]};
     if(/SELECT d\.id,d\.status/.test(sql))return{rows:[previous],rowCount:1};
-    if(/SELECT MIN\(provider_started_at\)/.test(sql))return{rows:[{first_provider_started_at:'2026-08-04T11:30:00Z',provider_attempt_count:6,current_provider_started:true}],rowCount:1};
+    if(/SELECT MIN\(provider_started_at\)/.test(sql))return{rows:[{first_ambiguous_provider_started_at:'2026-08-04T11:59:00Z',provider_attempt_count:6,current_provider_started:true}],rowCount:1};
     return{rows:[],rowCount:1};
   }};
   const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},clock:()=>new Date('2026-08-04T12:00:00Z'),env:{NODE_ENV:'test',EMAIL_MAX_ATTEMPTS:'6'}});
   assert.equal(await worker.claim(),null);
   const stats=calls.find(({sql})=>/SELECT MIN\(provider_started_at\)/.test(sql));
-  assert.doesNotMatch(stats.sql,/outcome IN/);
+  assert.match(stats.sql,/MIN\(provider_started_at\) FILTER \(WHERE outcome='uncertain' OR \(lease_token=\$2 AND outcome='in_progress'\)\) AS first_ambiguous_provider_started_at/);
+  assert.doesNotMatch(stats.sql,/WHERE delivery_id=\$1 AND outcome/);
   assert.deepEqual(stats.values,['delivery-1','lease-6']);
   assert.ok(calls.some(({sql,values})=>/UPDATE survey_email_deliveries SET status='uncertain'/.test(sql)&&values[1]==='ambiguous_attempts_exhausted'));
   assert.equal(calls.some(({sql})=>/attempt_count=attempt_count\+1/.test(sql)),false);
@@ -327,7 +328,7 @@ test('cancellation after an ambiguous provider result stays terminal uncertain w
     const current={id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1',status:'reminder_leased',attempt_count:1,created_at:'2026-08-04T11:00:00Z',cancellation_requested_at:'2026-08-04T12:00:01Z'};
     const client={release(){},async query(sql,values=[]){calls.push({sql,values});
       if(/SELECT \* FROM survey_email_deliveries/.test(sql))return{rows:[current],rowCount:1};
-      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
+      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_ambiguous_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
       return{rows:[],rowCount:1};
     }};
     const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},clock:()=>new Date('2026-08-04T12:00:02Z'),env:{NODE_ENV:'test'}});
@@ -384,11 +385,12 @@ test('provider failures back off by provider crossings rather than inflated work
     const current={id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1',status:'leased',attempt_count:12,created_at:'2026-08-04T11:00:00Z',cancellation_requested_at:null};
     const client={release(){},async query(sql,values=[]){calls.push({sql,values});
       if(/SELECT \* FROM survey_email_deliveries/.test(sql))return{rows:[current],rowCount:1};
-      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
+      if(/SELECT COUNT\(provider_started_at\)/.test(sql))return{rows:[{provider_attempt_count:1,first_ambiguous_provider_started_at:'2026-08-04T12:00:00Z'}],rowCount:1};
       return{rows:[],rowCount:1};
     }};
     const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},random:()=>0.5,clock:()=>new Date('2026-08-04T12:00:01Z'),env:{NODE_ENV:'test'}});
     await worker.finalizeFailure(current,error);
+    assert.match(calls.find(({sql})=>/SELECT COUNT\(provider_started_at\)/.test(sql)).sql,/MIN\(provider_started_at\) FILTER \(WHERE outcome='uncertain' OR \(lease_token=\$2 AND outcome='in_progress'\)\) AS first_ambiguous_provider_started_at/);
     const retry=calls.find(({sql})=>/next_attempt_at=now\(\)\+\(\$3::text\|\|' milliseconds'\)/.test(sql));
     assert.ok(retry);
     assert.equal(retry.values[2],1000,'one provider crossing receives first-attempt backoff despite twelve worker claims');

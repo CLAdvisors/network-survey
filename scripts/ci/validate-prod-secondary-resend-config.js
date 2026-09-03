@@ -25,7 +25,8 @@ for(const value of [
   'RESEND_WEBHOOK_INGEST_ENABLED=${var.enable_resend_webhook_ingest}',
 ]) required(moduleMain,value,'target module');
 for(const value of ['enable_resend_credentials    = false','enable_resend_webhook_ingest = false']) required(tfvars,value,'prod-secondary.tfvars');
-for(const value of ['var.enable_resend_credentials ? [','var.enable_resend_webhook_ingest ? [','ssm:resourceTag/Environment','ssm:resourceTag/App','ssm:resourceTag/Stack']) required(moduleMain,value,'conditional target IAM');
+for(const value of ['var.enable_resend_credentials ? [','var.enable_resend_webhook_ingest ? [','ssm:resourceTag/Environment','ssm:resourceTag/App','ssm:resourceTag/Stack','tag:GetResources']) required(moduleMain,value,'conditional target IAM');
+if(moduleMain.includes('resourcegroupstaggingapi:GetResources'))throw new Error('target deploy IAM uses an invalid Resource Groups Tagging API action name');
 required(remoteDeploy,'RUNTIME_EMAIL_ENV" = "prod-secondary','remote deploy');
 for(const value of ['prod-secondary must not use the legacy RESEND_KEY','credential is present while loading is disabled','webhook secret is present while ingestion is disabled']) required(emailRuntime,value,'email runtime');
 for(const value of ['https://api.cladvisorsurveys.com/api/webhooks/resend','710054969994','/network-survey/prod-secondary/resend/webhook-secret']) required(webhookManagement,value,'webhook management');

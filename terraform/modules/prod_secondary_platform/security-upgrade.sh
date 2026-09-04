@@ -24,12 +24,22 @@ trap 'on_error "$?"' ERR
 trap 'on_error 124' TERM INT
 
 echo "ONA_SECURITY_UPGRADE_STARTED at=$started_at"
+: "${TARGET_GROUP_ARN:?TARGET_GROUP_ARN is required}"
+healthy_targets=$(timeout --signal=TERM --kill-after=5s 30s \
+  aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
+    --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text)
+[ "$healthy_targets" -ge 2 ] || {
+  echo "Refusing security upgrade with only $healthy_targets healthy target(s)" >&2
+  exit 1
+}
+curl -fsS --connect-timeout 2 --max-time 5 http://localhost:3000/health >/dev/null
 /usr/local/sbin/ona-apt update
 # unattended-upgrade applies only origins allowed by Ubuntu's reviewed policy.
 # Keep it low priority and bounded so package-repository trouble cannot starve
 # the API indefinitely. Reboots remain an explicit rolling operator action.
 timeout --signal=TERM --kill-after=30s 600s \
   nice -n 15 ionice -c 3 unattended-upgrade --verbose
+curl -fsS --connect-timeout 2 --max-time 10 http://localhost:3000/health >/dev/null
 
 finished_at=$(date --utc +%FT%TZ)
 printf '{"status":"succeeded","started_at":"%s","finished_at":"%s"}\n' \

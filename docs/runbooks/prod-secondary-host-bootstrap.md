@@ -33,7 +33,7 @@ Security updates are not disabled. The default randomized timers are replaced by
 - AZ suffix `b`: Saturday 07:15 UTC;
 - any future/unknown suffix: Saturday 08:15 UTC.
 
-The timer is non-persistent, has zero random delay, and invokes an explicit `Ubuntu:jammy-security` unattended-upgrade allow-list with low CPU/I/O priority and a 10-minute command deadline. The enclosing service allows enough time for bounded apt repair/update plus the upgrade and records TERM/INT as failures. Automatic reboot is disabled. Success/failure state is written to `/var/lib/ona-bootstrap/security-upgrade-status.json`; output is shipped to the `host-maintenance` log group and failures alarm through SNS.
+The timer is non-persistent, has zero random delay, and refuses to start unless the local API and both ALB targets are healthy. It invokes an explicit `Ubuntu:jammy-security` unattended-upgrade allow-list with low CPU/I/O priority and a 10-minute command deadline, then verifies local API health again. The enclosing service allows enough time for bounded apt repair/update plus the upgrade and records TERM/INT as failures. Automatic reboot is disabled. Success/failure state is written to `/var/lib/ona-bootstrap/security-upgrade-status.json`; output is shipped to the `host-maintenance` log group and failures alarm through SNS.
 
 Operators must review pending reboots and perform them as a rolling ASG operation, preserving one healthy target. A future image pipeline should replace mutable patching with a regularly rebuilt, vulnerability-scanned, immutable AMI containing pinned runtime dependencies. Until that exists, the bounded staggered timer is the replacement patching strategy.
 

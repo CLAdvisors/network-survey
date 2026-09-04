@@ -176,6 +176,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment="TARGET_GROUP_ARN=${target_group_arn}"
 ExecStart=/usr/local/sbin/ona-security-upgrade
 Nice=15
 IOSchedulingClass=idle

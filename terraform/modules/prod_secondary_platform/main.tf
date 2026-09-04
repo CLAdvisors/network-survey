@@ -1103,6 +1103,13 @@ data "aws_iam_policy_document" "app" {
   }
 
   statement {
+    sid       = "ReadTargetHealthForSafeMaintenance"
+    effect    = "Allow"
+    actions   = ["elasticloadbalancing:DescribeTargetHealth"]
+    resources = ["*"]
+  }
+
+  statement {
     sid       = "WriteRuntimeLogs"
     effect    = "Allow"
     actions   = ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"]
@@ -1196,6 +1203,7 @@ resource "aws_launch_template" "app" {
     environment                = var.environment
     apt_helper                 = file("${path.module}/apt-helper.sh")
     security_upgrade           = file("${path.module}/security-upgrade.sh")
+    target_group_arn           = aws_lb_target_group.api.arn
     api_log_group              = aws_cloudwatch_log_group.runtime["api"].name
     bootstrap_log_group        = aws_cloudwatch_log_group.runtime["bootstrap"].name
     email_worker_log_group     = aws_cloudwatch_log_group.runtime["email-worker"].name

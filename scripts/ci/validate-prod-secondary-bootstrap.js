@@ -54,6 +54,8 @@ for (const value of [
   'nice -n 15 ionice -c 3 unattended-upgrade --verbose',
   'ONA_SECURITY_UPGRADE_FAILED',
   'security-upgrade-status.json',
+  'describe-target-health',
+  'healthy_targets" -ge 2',
   "trap 'on_error 124' TERM INT",
 ]) required(securityUpgrade, value, securityPath);
 
@@ -70,6 +72,8 @@ if (/if\s+aws s3 cp/.test(cloudInit)) throw new Error('missing release artifact 
 for (const value of ['ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
 
 for (const value of [
+  'elasticloadbalancing:DescribeTargetHealth',
+  'target_group_arn           = aws_lb_target_group.api.arn',
   'aws_cloudwatch_log_metric_filter" "bootstrap_failure',
   'aws_cloudwatch_metric_alarm" "bootstrap_failure',
   'aws_cloudwatch_log_metric_filter" "security_upgrade_failure',
@@ -90,6 +94,7 @@ const substitutions = {
   aws_region: 'us-east-1',
   apt_helper: aptHelper,
   security_upgrade: securityUpgrade,
+  target_group_arn: 'arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/test/1234',
   config_bucket: 'config-bucket',
   config_key: 'configs/runtime.env',
   artifacts_bucket: 'artifacts-bucket',

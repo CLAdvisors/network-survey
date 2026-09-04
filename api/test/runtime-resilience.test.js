@@ -66,6 +66,7 @@ test('hung database query fails its health deadline and concurrent probes are si
 test('database retry classification is narrow and does not hide programming failures', () => {
   assert.equal(isTransientDatabaseError({ code:'57014' }), true);
   assert.equal(isTransientDatabaseError({ code:'ECONNRESET' }), true);
+  assert.equal(isTransientDatabaseError(new Error('Query read timeout')), true);
   assert.equal(isTransientDatabaseError(new TypeError('broken invariant')), false);
 });
 
@@ -155,6 +156,26 @@ test('provider deadline covers a slow response body and remains ambiguous/idempo
   assert.equal(observedKey, 'delivery/stable-key');
 });
 
+test('provider preserves a known HTTP rejection when its body times out', async () => {
+  const provider = new ResendProvider({
+    apiKey:'test-key',
+    timeoutMs:20,
+    fetchImpl:async (url, options) => ({
+      ok:false,
+      status:429,
+      headers:{ get:(name) => name === 'retry-after' ? '7' : null },
+      json:() => new Promise((resolve, reject) => options.signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      })),
+    }),
+  });
+  await assert.rejects(provider.send({}, { idempotencyKey:'known-rejection' }), (error) => (
+    error.code === 'http_429' && error.status === 429 && error.retryAfter === '7' && !error.uncertain
+  ));
+});
+
 test('liveness is dependency-free while readiness fails closed on DB or pool saturation', async () => {
   const response = () => ({
     statusCode: null,
@@ -174,7 +195,7 @@ test('liveness is dependency-free while readiness fails closed on DB or pool sat
   assert.deepEqual(ready.body, { status:'error', database:'unavailable', pool:'saturated' });
 });
 
-test('runtime telemetry emits the process start before a fast crash can occur', () => {
+test('runtime telemetry emits the process start synchronously when runtime starts', () => {
   const records = [];
   const originalLog = console.log;
   console.log = (line) => records.push(JSON.parse(line));
@@ -190,6 +211,23 @@ test('runtime telemetry emits the process start before a fast crash can occur', 
   assert.equal(records.length, 1);
   assert.equal(records[0].ProcessStartCount, 1);
   assert.equal(records[0].Process, 'fast-crash-test');
+});
+
+test('runtime telemetry reports bounded database dependency failure', async () => {
+  const records = [];
+  const originalLog = console.log;
+  console.log = (line) => records.push(JSON.parse(line));
+  try {
+    const telemetry = startRuntimeTelemetry({
+      pool:{ query:async () => { throw new Error('database unavailable'); }, totalCount:0, idleCount:0, waitingCount:0, options:{ max:10 } },
+      processName:'dependency-test',
+      env:{ EMAIL_WORKER_ENV:'test', HEALTH_DB_TIMEOUT_MS:'10' },
+      intervalMs:5,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    telemetry.stop();
+  } finally { console.log = originalLog; }
+  assert.ok(records.some((record) => record.DbDependencyHealthy === 0));
 });
 
 test('PM2 restart policy contains crash churn and scopes RSS tripwires to reviewed hosts', () => {
@@ -226,7 +264,11 @@ test('prod-secondary replacement health is process-only and activation controls 
   assert.match(terraform, /path\s+= "\/live"/);
   assert.match(terraform, /health_check_type\s+= "ELB"/);
   assert.match(terraform, /health_check_grace_period\s+= 1800/);
+  assert.match(terraform, /instance_warmup\s+= 2700/);
+  assert.match(terraform, /metric_name\s+= "DbDependencyHealthy"/);
   assert.match(terraform, /max_healthy_percentage\s+= 150/);
+  const sharedBackendVariables = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/api_backend/variables.tf'), 'utf8');
+  assert.match(sharedBackendVariables, /variable "health_check_path"[\s\S]*default\s+= "\/health"/);
   for (const gate of ['EMAIL_CLAIMING_ENABLED=false', 'EMAIL_SENDING_ENABLED=false', 'WEBHOOK_PROCESSING_ENABLED=false']) {
     assert.match(terraform, new RegExp(gate));
   }

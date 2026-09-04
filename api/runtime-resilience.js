@@ -53,7 +53,7 @@ function isTransientDatabaseError(error) {
   const code = String(error?.code || '').toUpperCase();
   if (/^(08|53)/.test(code) || ['40001', '40P01', '57014', '57P01', '57P02', '57P03'].includes(code)) return true;
   if (['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'RUNTIME_TIMEOUT'].includes(code)) return true;
-  return /connection terminated|connection timeout|timeout exceeded when trying to connect|remaining connection slots/i.test(String(error?.message || ''));
+  return /query read timeout|connection terminated|connection timeout|timeout exceeded when trying to connect|remaining connection slots/i.test(String(error?.message || ''));
 }
 
 function poolSnapshot(pool) {
@@ -171,7 +171,7 @@ function startRuntimeTelemetry({ pool, processName, env = process.env, intervalM
   const histogram = monitorEventLoopDelay({ resolution: 20 });
   histogram.enable();
   let first = true;
-  const emit = () => {
+  const emit = (dependencyHealthy) => {
     const memory = process.memoryUsage();
     const snapshot = poolSnapshot(pool);
     const lagMs = Number.isFinite(histogram.max) ? Math.round(histogram.max / 1e6) : 0;
@@ -190,14 +190,18 @@ function startRuntimeTelemetry({ pool, processName, env = process.env, intervalM
         DbPoolActive: snapshot.active,
         DbPoolIdle: snapshot.idle,
         DbPoolWaiting: snapshot.waiting,
+        ...(dependencyHealthy === undefined ? {} : { DbDependencyHealthy: dependencyHealthy ? 1 : 0 }),
       },
     });
     first = false;
   };
-  // Emit before entering any worker loop/listener. Even an immediate crash is
-  // visible to restart-churn metrics rather than only the later heartbeat alarm.
+  // Emit before entering the worker loop/listener. Failures that happen earlier
+  // in configuration/bootstrap remain covered by PM2 logs and heartbeat loss.
   emit();
-  const scheduler = createNonOverlappingScheduler(emit, {
+  const scheduler = createNonOverlappingScheduler(async () => {
+    const dependency = await probeDatabase(pool, boundedInteger(env.HEALTH_DB_TIMEOUT_MS, 2000, 250, 30000));
+    emit(dependency.ok);
+  }, {
     intervalMs,
     initialDelayMs: intervalMs,
     onError: (error) => console.error('Runtime telemetry failed:', error.message),

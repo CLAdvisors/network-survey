@@ -177,17 +177,17 @@ class ResendProvider {
     } catch (error) {
       const cause = error?.cause;
       const detail = [error?.message, cause?.message, cause?.code].filter(Boolean).join(' ');
-      if (error?.name === 'AbortError') {
-        throw new ProviderError('Provider request timed out', { code:'timeout', uncertain:true });
-      }
-      // A known HTTP rejection keeps its status semantics even if its error
-      // body is malformed. A 2xx/body or network failure remains ambiguous.
+      // Once a non-2xx status is known, retain its definitive HTTP and
+      // Retry-After semantics even if its body stalls until the deadline.
       if (response && !response.ok) {
         throw new ProviderError(`Provider returned HTTP ${response.status}`, {
           code: `http_${response.status}`,
           status: response.status,
           retryAfter: response.headers?.get?.('retry-after') || null,
         });
+      }
+      if (error?.name === 'AbortError') {
+        throw new ProviderError('Provider request timed out', { code:'timeout', uncertain:true });
       }
       throw new ProviderError(detail || 'Provider network or response-body failure', {
         code: String(cause?.code || (response ? 'invalid_response_body' : 'network_error')).toLowerCase(),

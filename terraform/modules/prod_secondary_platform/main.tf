@@ -1080,6 +1080,26 @@ resource "aws_cloudwatch_metric_alarm" "db_pool_waiting" {
   tags                = var.common_tags
 }
 
+resource "aws_cloudwatch_metric_alarm" "db_dependency" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}-${each.key}-db-dependency"
+  alarm_description   = "At least one ${each.key} process could not complete its bounded PostgreSQL probe for three minutes."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "DbDependencyHealthy"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Minimum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
 resource "aws_cloudwatch_log_metric_filter" "kernel_oom" {
   name           = "${var.name_prefix}-kernel-oom"
   log_group_name = aws_cloudwatch_log_group.runtime["host"].name
@@ -1484,9 +1504,9 @@ resource "aws_autoscaling_group" "app" {
     strategy = "Rolling"
 
     preferences {
-      # Do not count a replacement as warm while ELB health is still protected by
-      # the bootstrap grace period; retain both old healthy targets until then.
-      instance_warmup        = 1800
+      # Retain both old healthy targets through the 30-minute bootstrap/ELB
+      # grace and a further 15-minute post-readiness soak.
+      instance_warmup        = 2700
       min_healthy_percentage = 100
       max_healthy_percentage = 150
     }

@@ -697,6 +697,26 @@ resource "aws_cloudwatch_metric_alarm" "runtime_pressure" {
   tags                = var.common_tags
 }
 
+resource "aws_cloudwatch_metric_alarm" "db_dependency" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}${each.key}-db-dependency"
+  alarm_description   = "${each.key} could not complete its bounded PostgreSQL probe for three minutes."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "DbDependencyHealthy"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Minimum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
 resource "aws_cloudwatch_log_metric_filter" "kernel_oom" {
   name           = "${var.name_prefix}kernel-oom"
   log_group_name = aws_cloudwatch_log_group.runtime["host"].name

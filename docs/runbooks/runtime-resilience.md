@@ -19,7 +19,7 @@ The prod-secondary ASG retains ELB replacement health so a host that fails boots
 
 ## Signals and first response
 
-CloudWatch Agent publishes EC2 memory, swap, root disk use/free inodes and ships PM2 plus kernel logs (not broad syslog content). Application EMF publishes process starts/heartbeat/RSS, event-loop lag, and DB pool active/idle/waiting. Alarms cover host pressure, EC2 status, process telemetry loss/restart churn/RSS, event-loop lag, pool waits, kernel OOM/critical logs, ALB target health, ASG capacity, and RDS CPU/storage.
+CloudWatch Agent publishes EC2 memory, swap, root disk use/free inodes and ships PM2 plus kernel logs (not broad syslog content). Application EMF publishes process starts/heartbeat/RSS, event-loop lag, DB pool active/idle/waiting, and a bounded PostgreSQL dependency result. Alarms cover host pressure, EC2 status, process telemetry loss/restart churn/RSS, event-loop lag, pool waits, direct DB dependency failure, kernel OOM/critical logs, ALB target health, ASG capacity, and RDS CPU/storage.
 
 On alarm:
 
@@ -35,7 +35,7 @@ PRs #61 and #62 are merged, and this change is rebased onto them. The combined l
 
 Before any Terraform apply changes the target-group path, publish and deploy the `/live`-capable artifact to both existing hosts and verify `curl -fsS http://localhost:3000/live` through approved SSM on each one. Applying `/live` while either host runs an older artifact would make both targets unhealthy outside the instance-refresh surge guard; abort rather than relying on replacement bootstrap.
 
-After that prerequisite, roll out one prod-secondary ASG instance at a time with outbound controls left as-is. Before continuing, require: `/live` 200, `/ready` 200, exact release, fresh worker heartbeats, no PM2 restart loop, stable RSS below warning thresholds, zero pool waiters, and no new OOM/critical logs. Then observe at least 15 minutes before the second host.
+After that prerequisite, roll out one prod-secondary ASG instance at a time with outbound controls left as-is. The 45-minute instance warmup covers the 30-minute bootstrap/health grace plus a minimum 15-minute post-readiness soak before automatic refresh continuation. Require: `/live` 200, `/ready` 200, exact release, fresh worker heartbeats, no PM2 restart loop, stable RSS below warning thresholds, zero pool waiters, and no new OOM/critical logs.
 
 Abort if either host exceeds three starts in 15 minutes, readiness remains unavailable for five minutes, pool waiters persist three minutes, RSS reaches a PM2 tripwire, any OOM occurs, delivery ambiguity rises unexpectedly, or both ALB targets become unhealthy. Leave delivery controls paused where the deploy safety flow paused them.
 
@@ -46,9 +46,9 @@ Application rollback is the existing capability-checked immutable artifact rollb
 This PR intentionally does **not** duplicate the merged host patch automation; the bootstrap hardening in `main` owns apt/security-update behavior. A future operator workflow should:
 
 1. Verify two healthy targets, healthy RDS, no deploy/refresh, current backups, and adequate remaining-host capacity. Freeze deploys.
-2. Select exactly one instance and enable ASG scale-in protection. Put it in `Standby` **with desired capacity unchanged** so a replacement is available, or deregister it and wait the full target-group drain delay. Never drain both hosts.
+2. Select exactly one instance and enable ASG scale-in protection. Put it in `Standby` while **decrementing desired capacity** so ELB health cannot replace the intentionally drained host; verify the other target has sufficient capacity and wait the full target-group drain delay. Never deregister an InService instance directly and never drain both hosts.
 3. Confirm no in-flight API requests on that target. Pause local PM2 workers gracefully and wait past the longest provider timeout/lease-sensitive operation; do not force-kill a provider-boundary attempt.
 4. Run the bootstrap branch's bounded, locked security-upgrade command. Record package changes and whether `/var/run/reboot-required` exists. Abort on package-manager timeout, disk pressure, dependency outage, or if the other target degrades.
 5. If required, reboot only the drained instance. Require EC2/SSM/CloudWatch recovery, bootstrap status success, PM2 stable uptime, `/live` and `/ready` success, exact release, fresh paused/expected worker heartbeats, and no OOM/critical logs.
-6. Re-register/exit standby, wait for ALB healthy status and a 15-minute soak, then remove scale-in protection. Only then repeat for the other AZ.
+6. Exit Standby (which restores desired capacity), wait for ALB healthy status and a 15-minute soak, then remove scale-in protection. Only then repeat for the other AZ.
 7. If rejoin fails, keep the host out of service, preserve logs, and let a deliberate single-instance ASG replacement occur. Abort the maintenance window; never compensate by rebooting the healthy peer.

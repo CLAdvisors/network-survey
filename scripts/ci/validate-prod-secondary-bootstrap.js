@@ -100,7 +100,7 @@ for (const value of [
   'min_healthy_percentage = 100',
   'max_healthy_percentage = 150',
   'health_check_grace_period = 1800',
-  'instance_warmup        = 1800',
+  'instance_warmup        = 2700',
   'user_data = base64gzip(',
   'data "aws_ami" "pinned"',
   'values = [var.ami_id]',

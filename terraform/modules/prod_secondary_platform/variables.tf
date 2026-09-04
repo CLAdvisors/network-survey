@@ -71,7 +71,7 @@ variable "db_subnet_cidrs" {
 variable "instance_type" {
   description = "EC2 instance type used by the private ASG."
   type        = string
-  default     = "t3.micro"
+  default     = "t3.small"
 }
 
 variable "ami_id" {

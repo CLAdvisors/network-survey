@@ -141,15 +141,17 @@ test('retained provider-boundary clients reserve rate capacity without reconnect
 
 test('full provider rate budgets report the first principled reservation time without reserving', async () => {
   const calls=[];
+  const observedAt=new Date('2026-08-04T12:00:00.000Z');
   const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
-  const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:5,next_available_at:nextAvailableAt}]};return{rowCount:1,rows:[]};}};
-  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt});
+  const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:5,next_available_at:nextAvailableAt,observed_at:observedAt}]};return{rowCount:1,rows:[]};}};
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt,retryAfterMs:250});
   assert.match(calls.find(({sql})=>/SELECT count/.test(sql)).sql,/array_agg\(reserved_at ORDER BY reserved_at\).*\+interval '1 second' AS next_available_at/);
+  assert.ok(calls.some(({sql})=>/UPDATE email_rate_reservations SET reserved_at=clock_timestamp\(\).*reserved_at>clock_timestamp\(\)/.test(sql)),'future reservations are conservatively normalized under the rate lock');
   assert.equal(calls.some(({sql})=>/INSERT INTO email_rate_reservations/.test(sql)),false);
 
   const fractionalCalls=[];
   const fractionalClient={async query(sql,values=[]){fractionalCalls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:2,next_available_at:null}]};return{rowCount:1,rows:[]};}};
-  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(fractionalClient,'test',2.5),{reserved:true,nextAvailableAt:null});
+  assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(fractionalClient,'test',2.5),{reserved:true,nextAvailableAt:null,retryAfterMs:0});
   assert.equal(fractionalCalls.find(({sql})=>/SELECT count/.test(sql)).values[1],3,'fractional legacy configuration is normalized to its prior effective capacity');
 });
 
@@ -370,8 +372,8 @@ test('worker cancellation helpers cannot erase a previously ambiguous provider a
   const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
   await worker.releaseWithoutSend(releaseClient,{id:'delivery-1',lease_token:'lease-3'},'provider_rate_wait',nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN CASE WHEN d\.status='reminder_leased' THEN 'reminder_retry_wait' ELSE 'retry_wait'/);
-  assert.match(releaseCalls[1].sql,/GREATEST\(COALESCE\(\$4::timestamptz/);
-  assert.doesNotMatch(releaseCalls[1].sql,/100 milliseconds/);
+  assert.match(releaseCalls[1].sql,/GREATEST\(LEAST\(COALESCE\(\$4::timestamptz,statement_timestamp\(\)\+interval '1 second'\),statement_timestamp\(\)\+interval '1100 milliseconds'\),statement_timestamp\(\)\)/);
+  assert.doesNotMatch(releaseCalls[1].sql,/interval '100 milliseconds'/);
   assert.equal(releaseCalls[1].values[3],nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN d\.last_error_code ELSE \$3/);
 });
@@ -395,6 +397,52 @@ test('provider failures back off by provider crossings rather than inflated work
     assert.ok(retry);
     assert.equal(retry.values[2],1000,'one provider crossing receives first-attempt backoff despite twelve worker claims');
   }
+});
+
+test('provider-boundary unlock failures discard pooled sessions across every sender', async () => {
+  const calls=[];
+  const unlockFailure=new Error('unlock transport failed');
+  let releasedWith;
+  const client={release(error){releasedWith=error;},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT claiming_enabled,minimum_release/.test(sql))return{rows:[{claiming_enabled:true,minimum_release:null}]};
+    if(/SELECT sending_enabled,minimum_release/.test(sql))return{rows:[{sending_enabled:true,minimum_release:null}]};
+    if(/SELECT id,name,lifecycle_status,archived_at FROM survey/.test(sql))return{rows:[{id:'survey-1',name:'Survey',lifecycle_status:'active',archived_at:null}]};
+    if(/JOIN respondent/.test(sql))return{rows:[]};
+    if(/pg_advisory_unlock/.test(sql)&&String(values[0]).startsWith('survey-provider-boundary:'))throw unlockFailure;
+    return{rows:[],rowCount:1};
+  }};
+  const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},env:{NODE_ENV:'test'}});
+  assert.deepEqual(await worker.startProviderRequest({id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1'}),{action:'stale'});
+  assert.equal(releasedWith,unlockFailure);
+  const unlocks=calls.filter(({sql})=>/pg_advisory_unlock/.test(sql));
+  assert.deepEqual(unlocks.map(({values})=>values[0]),['survey-provider-boundary:survey-1','email-provider-boundary:test']);
+  for(const filename of ['server.js','webhook-worker.js']){
+    const source=fs.readFileSync(path.join(__dirname,'..',filename),'utf8');
+    assert.match(source,/unlockAdvisoryLocksAndRelease/);
+    assert.doesNotMatch(source,/pg_advisory_unlock/);
+  }
+});
+
+test('rate wait applies bounded worker backpressure after provider-boundary cleanup returns', async () => {
+  const events=[];
+  let resume;
+  const sleeping=new Promise(resolve=>{resume=resolve;});
+  const worker=new DeliveryWorker({pool:{},provider:{},random:()=>0,env:{NODE_ENV:'test'},sleepFn:async(delay)=>{events.push(`sleep:${delay}`);await sleeping;}});
+  worker.claim=async()=>({id:'delivery-1'});
+  worker.startProviderRequest=async()=>{events.push('boundary-returned');return{action:'rate_wait',retryAfterMs:495};};
+  const processing=worker.processOne().then(()=>events.push('processed'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(events,['boundary-returned','sleep:500']);
+  resume();
+  await processing;
+  assert.deepEqual(events,['boundary-returned','sleep:500','processed']);
+  for(const invalid of [undefined,null,'',-1,NaN,5000])assert.equal(worker.rateWaitDelay(invalid),1000);
+  const nextAvailableAt=new Date('2026-08-04T12:00:00.500Z');
+  assert.equal(worker.rateWaitNextAttemptAt({retryAfterMs:500,nextAvailableAt}),nextAvailableAt);
+  for(const invalid of [undefined,null,-1,NaN,5000])assert.equal(worker.rateWaitNextAttemptAt({retryAfterMs:invalid,nextAvailableAt}),null);
+  assert.equal(worker.rateWaitNextAttemptAt({retryAfterMs:500,nextAvailableAt:'invalid'}),null);
+  assert.equal(worker.rateWaitDelay(0),5);
+  assert.equal(worker.rateWaitDelay(1100),1105);
 });
 
 test('worker retry backoff is bounded and uses injected randomness', () => {

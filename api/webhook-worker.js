@@ -5,7 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const dotenvFlow = require('dotenv-flow');
 const { Pool } = require('pg');
-const { ResendProvider, reserveProviderRateOnClient, DEFAULT_SENDER } = require('./email');
+const { ResendProvider, reserveProviderRateOnClient, unlockAdvisoryLocksAndRelease, DEFAULT_SENDER } = require('./email');
 const { SELECTED_EVENT_TYPES } = require('./webhooks');
 const { emitMetrics } = require('./email-metrics');
 
@@ -755,8 +755,7 @@ class WebhookWorker {
       await client.query(`UPDATE email_webhook_canary_state SET status='retry_wait',next_run_at=now()+interval '15 minutes',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,last_error_code='canary_send_failed',last_error_message=$3,updated_at=now() WHERE environment=$1 AND lease_token=$2`, [this.environment,canary.lease_token,bounded(error.message)]).catch(()=>{});
       this.lastError=bounded(error.message);
     } finally {
-      if (boundaryLocked) await client.query(`SELECT pg_advisory_unlock(hashtextextended($1,0))`, [`email-provider-boundary:${this.environment}`]).catch(()=>{});
-      client.release();
+      await unlockAdvisoryLocksAndRelease(client, [boundaryLocked ? `email-provider-boundary:${this.environment}` : null]);
     }
   }
 

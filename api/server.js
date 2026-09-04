@@ -15,7 +15,7 @@ const { Model, Serializer, Question } = require('survey-core');
 
 dotenvFlow.config();
 
-const { ResendProvider, reserveProviderRateOnClient, synchronousEmailIdentity, validateProdSecondaryResendConfig } = require('./email');
+const { ResendProvider, reserveProviderRateOnClient, synchronousEmailIdentity, unlockAdvisoryLocksAndRelease, validateProdSecondaryResendConfig } = require('./email');
 validateProdSecondaryResendConfig(process.env);
 const emailIdentity = synchronousEmailIdentity(process.env);
 const lifecycle = require('./lifecycle');
@@ -91,9 +91,7 @@ async function invokeSynchronousProvider(toAddress, factory) {
     await reserveSynchronousEmailRate(client);
     return await factory();
   } finally {
-    if (addressLocked) await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))', [addressKey]).catch(() => {});
-    if (globalLocked) await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))', [globalKey]).catch(() => {});
-    client.release();
+    await unlockAdvisoryLocksAndRelease(client, [addressLocked ? addressKey : null, globalLocked ? globalKey : null]);
   }
 }
 

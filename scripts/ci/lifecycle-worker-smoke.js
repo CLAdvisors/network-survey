@@ -67,8 +67,11 @@ const pool = new Pool(poolConfig);
     await schedulingClient.query('BEGIN');
     const seeded=(await schedulingClient.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES('test-rate-schedule',clock_timestamp()) RETURNING reserved_at`)).rows[0];
     const denied=await reserveProviderRateWithAvailabilityInTransaction(schedulingClient,'test-rate-schedule',1);
+    const observedAfter=(await schedulingClient.query(`SELECT clock_timestamp() AS value`)).rows[0].value;
     assert.equal(denied.reserved,false);
     assert.equal(new Date(denied.nextAvailableAt).getTime(),new Date(seeded.reserved_at).getTime()+1000,'rate-wait retry must target expiry of the oldest active reservation');
+    const minimumRemaining=Math.max(0,new Date(denied.nextAvailableAt).getTime()-new Date(observedAfter).getTime());
+    assert.ok(denied.retryAfterMs>=minimumRemaining-1&&denied.retryAfterMs<=1000,`database-derived retry duration ${denied.retryAfterMs}ms was outside [${minimumRemaining-1},1000]`);
     await schedulingClient.query('ROLLBACK');
   }finally{schedulingClient.release();}
 
@@ -128,6 +131,79 @@ const pool = new Pool(poolConfig);
   // Real PostgreSQL reminder races: reject overlapping campaigns and let a
   // completion holding the shared survey boundary cancel before provider I/O.
   await pool.query(`UPDATE survey_email_deliveries SET status='cancelled',last_error_code='ci_cleanup' WHERE status IN ('pending','retry_wait','reminder_pending','reminder_retry_wait')`);
+
+  // A continuously due backlog must park each process after an authoritative
+  // rate denial instead of walking and rewriting every queued delivery.
+  const backlogSurvey=(await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id) SELECT 'CI Rate Backlog','Rate backlog',now(),'{"elements":[{"type":"text","name":"question_1"}]}'::jsonb,organization_id FROM survey WHERE id=$1 RETURNING *`,[process.env.SURVEY_ID])).rows[0];
+  await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) SELECT 'Backlog Person '||n,'backlog-'||n||'@example.test',$1,$2,true,'ci-backlog-token-'||n,'English',false FROM generate_series(1,12) n`,[backlogSurvey.name,backlogSurvey.id]);
+  await pool.query(`INSERT INTO email(survey_name,survey_id,lang,text) VALUES($1,$2,'English','Rate backlog invitation')`,[backlogSurvey.name,backlogSurvey.id]);
+  const backlogLaunch=await lifecycle.launchSurvey(pool,actor,backlogSurvey.id,{kind:'initial',idempotencyKey:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},{...worker.env,SURVEY_DELIVERY_V2_ENABLED:'true',RESEND_API_KEY:'fake-only'});
+  assert.equal(backlogLaunch.target_count,12);
+  const backlogEnvironment=`test-backlog-${backlogSurvey.id}`;
+  let backlogProviderSequence=0;
+  const backlogProvider={send:async()=>({id:`ci-backlog-provider-${++backlogProviderSequence}`})};
+  const backlogEnv={...worker.env,EMAIL_RATE_BUDGET_ENV:backlogEnvironment,EMAIL_RATE_PER_SECOND:'2'};
+  // Distant future fixture reservations emulate clock/corruption anomalies. The
+  // limiter must conservatively normalize them, deny once per process, then recover
+  // naturally without operator cleanup.
+  await pool.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp()+interval '1 hour'),($1,clock_timestamp()+interval '1 hour')`,[backlogEnvironment]);
+  let parkedCount=0;
+  let signalAllParked;
+  const allParked=new Promise(resolve=>{signalAllParked=resolve;});
+  let releaseParked;
+  const parkedGate=new Promise(resolve=>{releaseParked=resolve;});
+  const park=async(delay)=>{assert.ok(delay>=5&&delay<=1125,`rate wait must remain bounded, observed ${delay}ms`);parkedCount+=1;if(parkedCount===2)signalAllParked();await parkedGate;};
+  const parkedWorkers=[
+    new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,sleepFn:park,instanceId:'ci-backlog-parked-worker-1'}),
+    new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,sleepFn:park,instanceId:'ci-backlog-parked-worker-2'}),
+  ];
+  const lockProbe=await pool.connect();
+  const parkedRuns=parkedWorkers.map(parkedWorker=>parkedWorker.run());
+  try{
+    await Promise.race([allParked,new Promise((_,reject)=>setTimeout(()=>reject(new Error('workers did not park after rate denial')),3000))]);
+    const parkedStats=(await pool.query(`SELECT count(*)::int AS attempts,count(*) FILTER (WHERE a.error_message='provider_rate_wait')::int AS rate_waits,count(*) FILTER (WHERE d.status='leased')::int AS leased,bool_and(d.next_attempt_at<=clock_timestamp()+interval '2 seconds') AS bounded_due FROM survey_email_attempts a JOIN survey_email_deliveries d ON d.id=a.delivery_id WHERE d.survey_id=$1`,[backlogSurvey.id])).rows[0];
+    assert.deepEqual(parkedStats,{attempts:2,rate_waits:2,leased:0,bounded_due:true},'full budget should park each process after one row without walking or durably stranding the backlog');
+    const parkedAddresses=(await pool.query(`SELECT d.to_address FROM survey_email_attempts a JOIN survey_email_deliveries d ON d.id=a.delivery_id WHERE d.survey_id=$1 AND a.error_message='provider_rate_wait' ORDER BY d.to_address`,[backlogSurvey.id])).rows.map(({to_address})=>String(to_address).trim().toLowerCase());
+    const lockKeys=[
+      `email-provider-boundary:${worker.environment}`,
+      `survey-provider-boundary:${backlogSurvey.id}`,
+      `email-rate-budget:${backlogEnvironment}`,
+      ...parkedAddresses.map(address=>`email-suppression-boundary:${backlogEnv.RESEND_PROVIDER_ACCOUNT_SCOPE}:${address}`),
+    ];
+    for(const key of lockKeys){
+      assert.equal((await lockProbe.query(`SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired`,[key])).rows[0].acquired,true,`parked worker retained ${key}`);
+      await lockProbe.query(`SELECT pg_advisory_unlock(hashtextextended($1,0))`,[key]);
+    }
+  }finally{
+    lockProbe.release();
+    parkedWorkers.forEach(parkedWorker=>parkedWorker.stop());
+    releaseParked();
+    await Promise.allSettled(parkedRuns);
+  }
+  const normalizedFutureCount=Number((await pool.query(`SELECT count(*)::int AS count FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()`,[backlogEnvironment])).rows[0].count);
+  assert.equal(normalizedFutureCount,0,'future reservations must recover without operator cleanup');
+
+  const backlogWorkers=[
+    new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,instanceId:'ci-backlog-worker-1'}),
+    new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,instanceId:'ci-backlog-worker-2'}),
+  ];
+  const backlogDeadline=Date.now()+30000;
+  const drainBacklog=async(backlogWorker)=>{
+    while(Date.now()<backlogDeadline){
+      const remaining=Number((await pool.query(`SELECT count(*)::int AS count FROM survey_email_deliveries WHERE survey_id=$1 AND status IN ('pending','retry_wait','leased')`,[backlogSurvey.id])).rows[0].count);
+      if(remaining===0)return;
+      if(!await backlogWorker.processOne())await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    throw new Error('rate backlog did not drain within 30 seconds');
+  };
+  await Promise.all(backlogWorkers.map(drainBacklog));
+  const backlogStats=(await pool.query(`SELECT count(DISTINCT d.id) FILTER (WHERE d.status='accepted')::int AS accepted,count(a.provider_started_at)::int AS provider_attempts,count(*) FILTER (WHERE a.error_message='provider_rate_wait')::int AS rate_waits,count(DISTINCT d.id) FILTER (WHERE a.provider_started_at IS NOT NULL)::int AS provider_deliveries FROM survey_email_deliveries d JOIN survey_email_attempts a ON a.delivery_id=d.id WHERE d.survey_id=$1`,[backlogSurvey.id])).rows[0];
+  assert.equal(backlogStats.accepted,12);
+  assert.equal(backlogStats.provider_attempts,12);
+  assert.equal(backlogStats.provider_deliveries,12);
+  const peakWindow=Number((await pool.query(`SELECT COALESCE(max((SELECT count(*) FROM email_rate_reservations b WHERE b.environment=a.environment AND b.reserved_at>a.reserved_at-interval '1 second' AND b.reserved_at<=a.reserved_at)),0)::int AS peak FROM email_rate_reservations a WHERE a.environment=$1`,[backlogEnvironment])).rows[0].peak);
+  assert.ok(peakWindow<=2,`cross-process sliding-window limit exceeded: ${peakWindow}`);
+
   const reminderSurvey=(await pool.query(`INSERT INTO survey(name,title,creation_date,questions,organization_id,lifecycle_status,started_at) SELECT 'CI Reminder Race','Reminder',now(),'{}'::jsonb,organization_id,'active',now() FROM survey WHERE id=$1 RETURNING *`,[process.env.SURVEY_ID])).rows[0];
   const reminderRespondent=(await pool.query(`INSERT INTO respondent(name,contact_info,survey_name,survey_id,can_respond,uuid,lang,email_sent) VALUES('Reminder Person','reminder@example.test',$1,$2,true,'ci-existing-reminder-token','English',true) RETURNING respondent_id`,[reminderSurvey.name,reminderSurvey.id])).rows[0];
   await pool.query(`INSERT INTO survey_reminder_templates(survey_id,language,subject,body_text,updated_by_user_id) VALUES($1,'english','Reminder','Please complete the survey.',$2)`,[reminderSurvey.id,actor.id]);

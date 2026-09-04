@@ -1,9 +1,7 @@
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const { nanoid } = require('nanoid');
-const { Pool } = require('pg');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const Papa = require('papaparse');
@@ -23,6 +21,7 @@ const respondentRoster = require('./respondent-roster');
 const { effectiveInstructions } = require('./survey-instructions');
 const { createResendWebhookHandler } = require('./webhooks');
 const { displayedRespondentPredicate, displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
+const { createPool, createDependencyProbe, createHealthHandlers, startRuntimeTelemetry } = require('./runtime-resilience');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -34,17 +33,7 @@ if (!Serializer.findClass('draggableranking')) {
 }
 lifecycle.setSurveyDefinitionValidator(validateSurveyDefinition);
 
-const pool = new Pool({
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME || 'ONA',
-  ssl: process.env.DB_SSL === 'true'
-    ? { ca: process.env.DB_SSL_CA ? fs.readFileSync(process.env.DB_SSL_CA, 'utf8') : undefined,
-        rejectUnauthorized: Boolean(process.env.DB_SSL_CA) }
-    : undefined,
-});
+const pool = createPool(process.env);
 const directSurveyProvider = resendApiKey ? new ResendProvider({ apiKey: resendApiKey }) : null;
 
 async function reserveSynchronousEmailRate(client) {
@@ -153,6 +142,18 @@ async function executeQuery(query, values = []) {
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
+const dependencyProbe = createDependencyProbe(pool, {
+  timeoutMs: Math.max(250, Number(process.env.HEALTH_DB_TIMEOUT_MS || 2000)),
+});
+// Register health before sessions/body parsing so probes are cheap and cannot
+// trigger session-store DB work from attacker-supplied cookies. Liveness is
+// dependency-free: shared DB failure must not ask the ASG to destroy hosts.
+const { liveness:livenessHandler, dependencies:dependencyHealthHandler } = createHealthHandlers(pool, { probe:dependencyProbe });
+app.get('/live', livenessHandler);
+app.get('/ready', dependencyHealthHandler);
+app.get('/health/dependencies', dependencyHealthHandler);
+// Backward-compatible dependency health used by deploy verification, not ALB.
+app.get('/health', dependencyHealthHandler);
 
 function getDashboardBaseUrl() {
   return (process.env.DASHBOARD_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
@@ -3563,21 +3564,22 @@ app.get('/', async (req, res) => {
   res.status(200).json({ message: 'Health Check: All Good!.' });
 });
 
-app.get('/health', async (req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.status(200).json({ status: 'ok', database: 'ok' });
-  } catch (error) {
-    console.error('Health check failed:', error.message);
-    res.status(503).json({ status: 'error', database: 'unavailable' });
-  }
-});
-
-
 if (require.main === module) {
-  app.listen(port, () => {
+  const telemetry = startRuntimeTelemetry({ pool, processName:'api', env:process.env });
+  const server = app.listen(port, () => {
     console.log(`Server is running on port: ${port}`);
   });
+  let stopping = false;
+  const shutdown = (signal) => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`Received ${signal}; draining API connections`);
+    telemetry.stop();
+    server.close(() => pool.end().finally(() => process.exit(0)));
+    setTimeout(() => process.exit(1), 9000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 module.exports = {
@@ -3631,6 +3633,8 @@ module.exports = {
   insertEmails,
   configuredCorsOrigins,
   buildSurveyUrl,
+  dependencyHealthHandler,
+  livenessHandler,
   displayedRespondentCountExpression,
   isLegacyPlaceholderRespondent,
   surveySummaryRespondentCount,

@@ -64,6 +64,15 @@ locals {
     "DB_MANAGED_SECRET_ARN=${aws_db_instance.postgres.master_user_secret[0].secret_arn}",
     "DB_SSL=true",
     "DB_SSL_CA=/opt/service/certs/rds-global-bundle.pem",
+    "DB_POOL_MAX=10",
+    "DB_POOL_MAX_LIFETIME_SECONDS=1800",
+    "DB_POOL_ACQUIRE_TIMEOUT_MS=3000",
+    "DB_QUERY_TIMEOUT_MS=10000",
+    "DB_STATEMENT_TIMEOUT_MS=9000",
+    "DB_IDLE_TRANSACTION_TIMEOUT_MS=15000",
+    "DB_SOCKET_KEEPALIVE_DELAY_MS=5000",
+    "HEALTH_DB_TIMEOUT_MS=2000",
+    "RUNTIME_METRIC_NAMESPACE=NetworkSurvey/Runtime",
     "SESSION_SECRET_PARAMETER=/network-survey/prod-secondary/api/session-secret",
     "SESSION_COOKIE_NAME=prodSecondarySessionId",
     "TRUST_CLOUDFRONT_VIEWER_PROTO=true",
@@ -536,7 +545,7 @@ resource "aws_lb_target_group" "api" {
     healthy_threshold   = 2
     interval            = 30
     matcher             = "200"
-    path                = "/health"
+    path                = "/live"
     port                = "traffic-port"
     protocol            = "HTTP"
     timeout             = 5
@@ -733,7 +742,7 @@ resource "aws_db_instance" "postgres" {
 }
 
 resource "aws_cloudwatch_log_group" "runtime" {
-  for_each = toset(["api", "bootstrap", "email-worker", "host-maintenance", "webhook-worker"])
+  for_each = toset(["api", "bootstrap", "email-worker", "host", "host-maintenance", "webhook-worker"])
 
   name              = "/network-survey/prod-secondary/${each.value}"
   retention_in_days = 30
@@ -913,6 +922,205 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage" {
   period              = 300
   statistic           = "Minimum"
   treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+locals {
+  runtime_processes = toset(["api", "email-worker", "webhook-worker"])
+  process_memory_alarm_bytes = {
+    api              = 335544320 # 320 MiB, before PM2's 352 MiB restart tripwire
+    "email-worker"   = 157286400 # 150 MiB, before PM2's 176 MiB restart tripwire
+    "webhook-worker" = 157286400
+  }
+  host_alarms = {
+    memory = { metric = "mem_used_percent", comparison = "GreaterThanThreshold", threshold = 85, statistic = "Maximum", description = "Host memory usage exceeded 85 percent." }
+    swap   = { metric = "swap_used_percent", comparison = "GreaterThanThreshold", threshold = 20, statistic = "Maximum", description = "Host swap usage exceeded 20 percent." }
+    disk   = { metric = "disk_used_percent", comparison = "GreaterThanThreshold", threshold = 80, statistic = "Maximum", description = "Root disk usage exceeded 80 percent." }
+    inodes = { metric = "disk_inodes_free", comparison = "LessThanThreshold", threshold = 10000, statistic = "Minimum", description = "Root filesystem has fewer than 10000 free inodes." }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "host" {
+  for_each = local.host_alarms
+
+  alarm_name          = "${var.name_prefix}-host-${each.key}"
+  alarm_description   = each.value.description
+  namespace           = "NetworkSurvey/Host"
+  metric_name         = each.value.metric
+  dimensions          = { AutoScalingGroupName = aws_autoscaling_group.app.name }
+  comparison_operator = each.value.comparison
+  threshold           = each.value.threshold
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = each.value.statistic
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "ec2_status" {
+  alarm_name          = "${var.name_prefix}-ec2-status-check"
+  alarm_description   = "An application host is failing EC2 status checks. ASG replacement is intentionally based only on this host-level signal."
+  namespace           = "AWS/EC2"
+  metric_name         = "StatusCheckFailed"
+  dimensions          = { AutoScalingGroupName = aws_autoscaling_group.app.name }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  period              = 60
+  statistic           = "Maximum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "process_heartbeat" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}-${each.key}-heartbeat"
+  alarm_description   = "Fewer than two ${each.key} processes reported across the fixed two-host ASG for three minutes."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "ProcessHeartbeat"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "LessThanThreshold"
+  threshold           = 2
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Sum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "process_restart_churn" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}-${each.key}-restart-churn"
+  alarm_description   = "${each.key} started more than three times in 15 minutes; inspect PM2 logs before replacing hosts."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "ProcessStartCount"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 3
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  period              = 900
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "process_memory" {
+  for_each = local.process_memory_alarm_bytes
+
+  alarm_name          = "${var.name_prefix}-${each.key}-memory"
+  alarm_description   = "${each.key} RSS is approaching its reviewed PM2 restart tripwire."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "ProcessRssBytes"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = each.value
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Maximum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "event_loop_lag" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}-${each.key}-event-loop-lag"
+  alarm_description   = "${each.key} event-loop lag exceeded 500ms for three minutes."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "EventLoopLagMilliseconds"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 500
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Maximum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "db_pool_waiting" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}-${each.key}-db-pool-waiting"
+  alarm_description   = "${each.key} has waited for a PostgreSQL pool client for three minutes."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "DbPoolWaiting"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Maximum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "kernel_oom" {
+  name           = "${var.name_prefix}-kernel-oom"
+  log_group_name = aws_cloudwatch_log_group.runtime["host"].name
+  pattern        = "?\"Out of memory\" ?\"Killed process\" ?oom-kill"
+
+  metric_transformation {
+    name      = "KernelOomCount"
+    namespace = "NetworkSurvey/Host"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "critical_system" {
+  name           = "${var.name_prefix}-critical-system"
+  log_group_name = aws_cloudwatch_log_group.runtime["host"].name
+  pattern        = "?panic ?segfault ?\"I/O error\" ?EXT4-fs"
+
+  metric_transformation {
+    name      = "CriticalSystemLogCount"
+    namespace = "NetworkSurvey/Host"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "critical_host_logs" {
+  for_each = {
+    oom      = { metric = "KernelOomCount", description = "Kernel OOM activity detected; inspect process RSS and PM2 restart history immediately." }
+    critical = { metric = "CriticalSystemLogCount", description = "Kernel panic, segfault, filesystem, or I/O error pattern detected." }
+  }
+
+  alarm_name          = "${var.name_prefix}-host-${each.key}-logs"
+  alarm_description   = each.value.description
+  namespace           = "NetworkSurvey/Host"
+  metric_name         = each.value.metric
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  period              = 60
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.operations.arn]
   ok_actions          = [aws_sns_topic.operations.arn]
   tags                = var.common_tags
@@ -1121,6 +1329,26 @@ data "aws_iam_policy_document" "app" {
     actions   = ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"]
     resources = [for group in aws_cloudwatch_log_group.runtime : "${group.arn}:*"]
   }
+
+  statement {
+    sid       = "ReadOwnAutoScalingDimensions"
+    effect    = "Allow"
+    actions   = ["ec2:DescribeTags"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "PublishHostMetrics"
+    effect    = "Allow"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["NetworkSurvey/Host"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "app" {
@@ -1213,6 +1441,7 @@ resource "aws_launch_template" "app" {
     api_log_group              = aws_cloudwatch_log_group.runtime["api"].name
     bootstrap_log_group        = aws_cloudwatch_log_group.runtime["bootstrap"].name
     email_worker_log_group     = aws_cloudwatch_log_group.runtime["email-worker"].name
+    host_log_group             = aws_cloudwatch_log_group.runtime["host"].name
     host_maintenance_log_group = aws_cloudwatch_log_group.runtime["host-maintenance"].name
     webhook_worker_log_group   = aws_cloudwatch_log_group.runtime["webhook-worker"].name
   }))
@@ -1234,12 +1463,14 @@ resource "aws_launch_template" "app" {
 }
 
 resource "aws_autoscaling_group" "app" {
-  name                      = "${var.name_prefix}-app"
-  min_size                  = 2
-  desired_capacity          = 2
-  max_size                  = 3
-  vpc_zone_identifier       = aws_subnet.app[*].id
-  target_group_arns         = [aws_lb_target_group.api.arn]
+  name                = "${var.name_prefix}-app"
+  min_size            = 2
+  desired_capacity    = 2
+  max_size            = 3
+  vpc_zone_identifier = aws_subnet.app[*].id
+  target_group_arns   = [aws_lb_target_group.api.arn]
+  # ELB replacement remains useful for failed bootstrap/process startup, but
+  # its /live signal is dependency-free so a shared DB stall cannot replace hosts.
   health_check_type         = "ELB"
   health_check_grace_period = 1800
   enabled_metrics           = ["GroupInServiceInstances"]

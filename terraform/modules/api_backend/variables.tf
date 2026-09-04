@@ -427,7 +427,7 @@ variable "alb_tags" {
 variable "health_check_path" {
   description = "Target group health check path."
   type        = string
-  default     = "/health"
+  default     = "/live"
 }
 
 variable "health_check_protocol" {

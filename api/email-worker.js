@@ -2,15 +2,13 @@
 
 const os = require('os');
 const crypto = require('crypto');
-const fs = require('fs');
 const dotenvFlow = require('dotenv-flow');
-const { Pool } = require('pg');
 const { ResendProvider, buildInvitationPayload, payloadHash, classifyProviderError, sanitizeProviderMessage, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease } = require('./email');
 const { environmentName } = require('./lifecycle');
+const { createPool, createNonOverlappingScheduler, startRuntimeTelemetry } = require('./runtime-resilience');
 
 dotenvFlow.config();
 
-function createPool(env=process.env){return new Pool({user:env.DB_USER,password:env.DB_PASSWORD,host:env.DB_HOST,port:env.DB_PORT,database:env.DB_NAME||'ONA',ssl:env.DB_SSL==='true'?{ca:env.DB_SSL_CA?fs.readFileSync(env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(env.DB_SSL_CA)}:undefined});}
 const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));
 const isOutsideProviderIdempotencyWindow=(startedAt,now,hours)=>Boolean(startedAt)&&new Date(startedAt).getTime()<=new Date(now).getTime()-hours*3600000;
 const canRetryAmbiguous=({firstProviderStartedAt,providerAttemptCount,createdAt,now,idempotencyHours,maxAttempts,maxAgeHours})=>Boolean(firstProviderStartedAt)&&!isOutsideProviderIdempotencyWindow(firstProviderStartedAt,now,idempotencyHours)&&Number(providerAttemptCount)<maxAttempts&&new Date(createdAt).getTime()>new Date(now).getTime()-maxAgeHours*3600000;
@@ -108,7 +106,7 @@ class DeliveryWorker {
       else await this.finalizeTerminal(client,current,'failed',error.code||'provider_error',error.message);await client.query('COMMIT');}catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}}
   async finalizeAccepted(row,providerId){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await this.finalizeTerminal(client,row,'accepted',null,null,providerId);if(result.rowCount&&row.launch_kind!=='reminder')await client.query(`UPDATE respondent SET email_sent=true WHERE respondent_id=$1 AND survey_id=$2`,[row.respondent_id,row.survey_id]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}}
   async processOne(){const delivery=await this.claim();if(!delivery)return false;const started=await this.startProviderRequest(delivery);if(started.action!=='send'){if(started.action==='rate_wait')await this.sleep(this.rateWaitDelay(started.retryAfterMs));return true;}const outcome=await started.providerResult;if(outcome.error)await this.finalizeFailure(started.row,outcome.error);else await this.finalizeAccepted(started.row,outcome.result.id);return true;}
-  async run(){const heartbeatMs=Math.max(3000,Number(this.env.EMAIL_HEARTBEAT_MS||10000));const timer=setInterval(()=>this.heartbeat().catch((e)=>{this.lastError=e.message;}),heartbeatMs);try{while(!this.stopped){this.claiming=await this.control();await this.heartbeat();if(!this.claiming){await this.sleep(1000);continue;}const didWork=await this.processOne();if(!didWork)await this.sleep(Number(this.env.EMAIL_IDLE_MS||750));}}finally{clearInterval(timer);this.claiming=false;await this.heartbeat().catch(()=>{});}}
+  async run(){const heartbeatMs=Math.max(3000,Number(this.env.EMAIL_HEARTBEAT_MS||10000));const heartbeat=createNonOverlappingScheduler(()=>this.heartbeat(),{intervalMs:heartbeatMs,initialDelayMs:0,onError:(e)=>{this.lastError=e.message;}});const telemetry=startRuntimeTelemetry({pool:this.pool,processName:'email-worker',env:this.env});try{while(!this.stopped){try{this.claiming=await this.control();if(!this.claiming){await this.sleep(1000);continue;}const didWork=await this.processOne();this.lastError=null;if(!didWork)await this.sleep(Number(this.env.EMAIL_IDLE_MS||750));}catch(error){this.claiming=false;this.lastError=error.message;await this.sleep(Math.max(250,Number(this.env.DB_STALL_RETRY_MS||1000)));}}}finally{await heartbeat.stop();telemetry.stop();this.claiming=false;await this.heartbeat().catch(()=>{});}}
   stop(){this.stopped=true;}
 }
 

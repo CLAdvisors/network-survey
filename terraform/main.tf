@@ -116,7 +116,7 @@ data "aws_ami" "ubuntu" {
 }
 
 resource "aws_cloudwatch_log_group" "runtime" {
-  for_each          = toset(["api", "email-worker", "webhook-worker"])
+  for_each          = toset(["api", "email-worker", "webhook-worker", "host"])
   name              = "/network-survey/${local.environment}/${each.value}"
   retention_in_days = 30
   tags              = local.common_tags
@@ -139,6 +139,7 @@ resource "aws_instance" "backend" {
     api_log_group            = aws_cloudwatch_log_group.runtime["api"].name
     email_worker_log_group   = aws_cloudwatch_log_group.runtime["email-worker"].name
     webhook_worker_log_group = aws_cloudwatch_log_group.runtime["webhook-worker"].name
+    host_log_group           = aws_cloudwatch_log_group.runtime["host"].name
   })
 
   lifecycle {
@@ -406,6 +407,18 @@ data "aws_iam_policy_document" "s3_access_policy" {
       "logs:PutLogEvents",
     ]
     resources = [for group in aws_cloudwatch_log_group.runtime : "${group.arn}:*"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["NetworkSurvey/Host"]
+    }
   }
 
   statement {

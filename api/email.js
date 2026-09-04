@@ -201,6 +201,7 @@ async function reserveProviderRateWithAvailabilityInTransaction(client, environm
   const capacity = Math.max(1, Math.ceil(Number(rate) || 1));
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`email-rate-budget:${environment}`]);
   await client.query(`DELETE FROM email_rate_reservations WHERE environment=$1 AND reserved_at<clock_timestamp()-interval '10 minutes'`, [environment]);
+  await client.query(`UPDATE email_rate_reservations SET reserved_at=clock_timestamp() WHERE environment=$1 AND reserved_at>clock_timestamp()`, [environment]);
   const used = await client.query(`SELECT count(*)::int AS count,(array_agg(reserved_at ORDER BY reserved_at))[GREATEST(count(*)::int-$2+1,1)]+interval '1 second' AS next_available_at,clock_timestamp() AS observed_at FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()-interval '1 second'`, [environment, capacity]);
   if (Number(used.rows[0]?.count || 0) >= capacity) {
     const retryAfterMs = Math.max(0, new Date(used.rows[0].next_available_at).getTime() - new Date(used.rows[0].observed_at).getTime());
@@ -232,6 +233,16 @@ async function reserveProviderRate(pool, environment, rate) {
   finally { client.release(); }
 }
 
+async function unlockAdvisoryLocksAndRelease(client, keys) {
+  let unlockError = null;
+  for (const key of keys) {
+    if (!key) continue;
+    try { await client.query(`SELECT pg_advisory_unlock(hashtextextended($1,0))`, [key]); }
+    catch (error) { unlockError = unlockError || error; }
+  }
+  client.release(unlockError || undefined);
+}
+
 function classifyProviderError(error) {
   const status = Number(error?.status || 0);
   if (error?.uncertain || error?.code === 'concurrent_idempotent_requests' || status >= 500) return 'ambiguous';
@@ -240,4 +251,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction };
+module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease };

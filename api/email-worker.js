@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const dotenvFlow = require('dotenv-flow');
 const { Pool } = require('pg');
-const { ResendProvider, buildInvitationPayload, payloadHash, classifyProviderError, sanitizeProviderMessage, reserveProviderRateWithAvailabilityInTransaction } = require('./email');
+const { ResendProvider, buildInvitationPayload, payloadHash, classifyProviderError, sanitizeProviderMessage, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease } = require('./email');
 const { environmentName } = require('./lifecycle');
 
 dotenvFlow.config();
@@ -85,10 +85,7 @@ class DeliveryWorker {
       catch(error){providerResult={error};}
       return {action:'send',row,providerResult};
     }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{
-      if(addressBoundaryLock)await client.query(`SELECT pg_advisory_unlock(hashtextextended($1,0))`,[addressBoundaryKey]).catch(()=>{});
-      if(surveyBoundaryLock)await client.query(`SELECT pg_advisory_unlock(hashtextextended($1,0))`,[`survey-provider-boundary:${delivery.survey_id}`]).catch(()=>{});
-      if(globalBoundaryLock)await client.query(`SELECT pg_advisory_unlock(hashtextextended($1,0))`,[`email-provider-boundary:${this.environment}`]).catch(()=>{});
-      client.release();
+      await unlockAdvisoryLocksAndRelease(client,[addressBoundaryLock?addressBoundaryKey:null,surveyBoundaryLock?`survey-provider-boundary:${delivery.survey_id}`:null,globalBoundaryLock?`email-provider-boundary:${this.environment}`:null]);
     }}
   async releaseWithoutSend(client,row,reason,nextAttemptAt=null){await client.query(`UPDATE survey_email_attempts SET outcome='cancelled',finished_at=now(),error_message=$3 WHERE delivery_id=$1 AND lease_token=$2 AND outcome='in_progress'`,[row.id,row.lease_token,reason]);await client.query(`UPDATE survey_email_deliveries d SET status=CASE WHEN EXISTS(SELECT 1 FROM survey_email_attempts a WHERE a.delivery_id=d.id AND a.outcome='uncertain' AND a.provider_started_at IS NOT NULL) THEN CASE WHEN d.status='reminder_leased' THEN 'reminder_retry_wait' ELSE 'retry_wait' END WHEN d.status='reminder_leased' THEN 'reminder_pending' ELSE 'pending' END,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=CASE WHEN $3='provider_rate_wait' THEN GREATEST(LEAST(COALESCE($4::timestamptz,statement_timestamp()+interval '1 second'),statement_timestamp()+interval '1100 milliseconds'),statement_timestamp()) ELSE now() END,updated_at=now(),last_error_code=CASE WHEN EXISTS(SELECT 1 FROM survey_email_attempts a WHERE a.delivery_id=d.id AND a.outcome='uncertain' AND a.provider_started_at IS NOT NULL) THEN d.last_error_code ELSE $3 END WHERE d.id=$1 AND d.status IN ('leased','reminder_leased') AND d.lease_token=$2`,[row.id,row.lease_token,reason,nextAttemptAt]);}
   async cancel(client,row,reason){await client.query(`UPDATE survey_email_attempts SET outcome='cancelled',finished_at=now(),error_message=$3 WHERE delivery_id=$1 AND lease_token=$2 AND outcome='in_progress'`,[row.id,row.lease_token,reason]);await client.query(`UPDATE survey_email_deliveries d SET status=CASE WHEN EXISTS(SELECT 1 FROM survey_email_attempts a WHERE a.delivery_id=d.id AND a.outcome='uncertain' AND a.provider_started_at IS NOT NULL) THEN 'uncertain' ELSE 'cancelled' END,dispatch_failed_at=CASE WHEN EXISTS(SELECT 1 FROM survey_email_attempts a WHERE a.delivery_id=d.id AND a.outcome='uncertain' AND a.provider_started_at IS NOT NULL) THEN COALESCE(d.dispatch_failed_at,now()) ELSE d.dispatch_failed_at END,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now(),last_error_code=CASE WHEN EXISTS(SELECT 1 FROM survey_email_attempts a WHERE a.delivery_id=d.id AND a.outcome='uncertain' AND a.provider_started_at IS NOT NULL) THEN d.last_error_code ELSE $3 END WHERE d.id=$1 AND d.status IN ('leased','reminder_leased') AND d.lease_token=$2`,[row.id,row.lease_token,reason]);}

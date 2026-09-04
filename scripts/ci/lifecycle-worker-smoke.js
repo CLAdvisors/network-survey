@@ -143,16 +143,16 @@ const pool = new Pool(poolConfig);
   let backlogProviderSequence=0;
   const backlogProvider={send:async()=>({id:`ci-backlog-provider-${++backlogProviderSequence}`})};
   const backlogEnv={...worker.env,EMAIL_RATE_BUDGET_ENV:backlogEnvironment,EMAIL_RATE_PER_SECOND:'2'};
-  // Distant future fixture reservations keep the budget deterministically full even
-  // through a paused CI runner. This stage intentionally exercises the bounded
-  // fallback; the transaction test above covers a normal database-derived delay.
+  // Distant future fixture reservations emulate clock/corruption anomalies. The
+  // limiter must conservatively normalize them, deny once per process, then recover
+  // naturally without operator cleanup.
   await pool.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp()+interval '1 hour'),($1,clock_timestamp()+interval '1 hour')`,[backlogEnvironment]);
   let parkedCount=0;
   let signalAllParked;
   const allParked=new Promise(resolve=>{signalAllParked=resolve;});
   let releaseParked;
   const parkedGate=new Promise(resolve=>{releaseParked=resolve;});
-  const park=async(delay)=>{assert.equal(delay,1000,'out-of-range database availability must use the bounded fallback');parkedCount+=1;if(parkedCount===2)signalAllParked();await parkedGate;};
+  const park=async(delay)=>{assert.ok(delay>=5&&delay<=1125,`rate wait must remain bounded, observed ${delay}ms`);parkedCount+=1;if(parkedCount===2)signalAllParked();await parkedGate;};
   const parkedWorkers=[
     new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,sleepFn:park,instanceId:'ci-backlog-parked-worker-1'}),
     new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,sleepFn:park,instanceId:'ci-backlog-parked-worker-2'}),
@@ -180,7 +180,8 @@ const pool = new Pool(poolConfig);
     releaseParked();
     await Promise.allSettled(parkedRuns);
   }
-  await pool.query(`DELETE FROM email_rate_reservations WHERE environment=$1`,[backlogEnvironment]);
+  const normalizedFutureCount=Number((await pool.query(`SELECT count(*)::int AS count FROM email_rate_reservations WHERE environment=$1 AND reserved_at>clock_timestamp()`,[backlogEnvironment])).rows[0].count);
+  assert.equal(normalizedFutureCount,0,'future reservations must recover without operator cleanup');
 
   const backlogWorkers=[
     new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,instanceId:'ci-backlog-worker-1'}),

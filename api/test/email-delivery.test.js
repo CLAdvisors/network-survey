@@ -146,6 +146,7 @@ test('full provider rate budgets report the first principled reservation time wi
   const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT count/.test(sql))return{rows:[{count:5,next_available_at:nextAvailableAt,observed_at:observedAt}]};return{rowCount:1,rows:[]};}};
   assert.deepEqual(await reserveProviderRateWithAvailabilityInTransaction(client,'test',5),{reserved:false,nextAvailableAt,retryAfterMs:250});
   assert.match(calls.find(({sql})=>/SELECT count/.test(sql)).sql,/array_agg\(reserved_at ORDER BY reserved_at\).*\+interval '1 second' AS next_available_at/);
+  assert.ok(calls.some(({sql})=>/UPDATE email_rate_reservations SET reserved_at=clock_timestamp\(\).*reserved_at>clock_timestamp\(\)/.test(sql)),'future reservations are conservatively normalized under the rate lock');
   assert.equal(calls.some(({sql})=>/INSERT INTO email_rate_reservations/.test(sql)),false);
 
   const fractionalCalls=[];
@@ -395,6 +396,30 @@ test('provider failures back off by provider crossings rather than inflated work
     const retry=calls.find(({sql})=>/next_attempt_at=now\(\)\+\(\$3::text\|\|' milliseconds'\)/.test(sql));
     assert.ok(retry);
     assert.equal(retry.values[2],1000,'one provider crossing receives first-attempt backoff despite twelve worker claims');
+  }
+});
+
+test('provider-boundary unlock failures discard pooled sessions across every sender', async () => {
+  const calls=[];
+  const unlockFailure=new Error('unlock transport failed');
+  let releasedWith;
+  const client={release(error){releasedWith=error;},async query(sql,values=[]){calls.push({sql,values});
+    if(/SELECT claiming_enabled,minimum_release/.test(sql))return{rows:[{claiming_enabled:true,minimum_release:null}]};
+    if(/SELECT sending_enabled,minimum_release/.test(sql))return{rows:[{sending_enabled:true,minimum_release:null}]};
+    if(/SELECT id,name,lifecycle_status,archived_at FROM survey/.test(sql))return{rows:[{id:'survey-1',name:'Survey',lifecycle_status:'active',archived_at:null}]};
+    if(/JOIN respondent/.test(sql))return{rows:[]};
+    if(/pg_advisory_unlock/.test(sql)&&String(values[0]).startsWith('survey-provider-boundary:'))throw unlockFailure;
+    return{rows:[],rowCount:1};
+  }};
+  const worker=new DeliveryWorker({pool:{connect:async()=>client},provider:{},env:{NODE_ENV:'test'}});
+  assert.deepEqual(await worker.startProviderRequest({id:'delivery-1',survey_id:'survey-1',lease_token:'lease-1'}),{action:'stale'});
+  assert.equal(releasedWith,unlockFailure);
+  const unlocks=calls.filter(({sql})=>/pg_advisory_unlock/.test(sql));
+  assert.deepEqual(unlocks.map(({values})=>values[0]),['survey-provider-boundary:survey-1','email-provider-boundary:test']);
+  for(const filename of ['server.js','webhook-worker.js']){
+    const source=fs.readFileSync(path.join(__dirname,'..',filename),'utf8');
+    assert.match(source,/unlockAdvisoryLocksAndRelease/);
+    assert.doesNotMatch(source,/pg_advisory_unlock/);
   }
 });
 

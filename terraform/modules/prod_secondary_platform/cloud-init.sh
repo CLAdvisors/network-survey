@@ -47,11 +47,14 @@ trap 'on_error 124 "$LINENO"' TERM
 exec 9>/run/lock/ona-bootstrap.lock
 flock -w 30 9 || { echo 'ONA_BOOTSTRAP_LOCK_TIMEOUT' >&2; on_error 75 "$LINENO"; }
 
-PRIOR_BOOTSTRAP_SUCCEEDED=false
-if grep -q '"status":"succeeded"' "$STATUS_FILE" 2>/dev/null; then
-  PRIOR_BOOTSTRAP_SUCCEEDED=true
+HOST_HAS_BEEN_READY=false
+# This marker is written only after the complete deploy contract succeeds. Unlike
+# status.json, a later failed rerun must not erase the fact that the prior release
+# is still serving safely through remote-deploy's rollback behavior.
+if [ -s "$STATUS_DIR/deployed-revision" ]; then
+  HOST_HAS_BEEN_READY=true
 fi
-if [ "$PRIOR_BOOTSTRAP_SUCCEEDED" = false ]; then
+if [ "$HOST_HAS_BEEN_READY" = false ]; then
   # A fresh or previously failed host must remain unreachable from the ALB until
   # release, worker, and control verification all complete.
   ufw --force delete allow 3000 >/dev/null 2>&1 || true

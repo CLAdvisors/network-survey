@@ -1,5 +1,6 @@
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const { gzipSync } = require('zlib');
 
 const read = file => fs.readFileSync(file, 'utf8');
 const required = (text, value, file) => {
@@ -10,10 +11,12 @@ const templatePath = 'terraform/modules/prod_secondary_platform/cloud-init.sh';
 const aptPath = 'terraform/modules/prod_secondary_platform/apt-helper.sh';
 const securityPath = 'terraform/modules/prod_secondary_platform/security-upgrade.sh';
 const mainPath = 'terraform/modules/prod_secondary_platform/main.tf';
+const remoteDeployPath = 'scripts/deploy/remote-deploy.sh';
 const cloudInit = read(templatePath);
 const aptHelper = read(aptPath);
 const securityUpgrade = read(securityPath);
 const main = read(mainPath);
+const remoteDeploy = read(remoteDeployPath);
 
 for (const [text, file] of [[cloudInit, templatePath], [aptHelper, aptPath], [securityUpgrade, securityPath]]) {
   if (/set\s+-[^\n]*x/.test(text)) throw new Error(`${file} must not enable shell tracing`);
@@ -24,6 +27,7 @@ if (cloudInit.includes('ec2.archive.ubuntu.com') || aptHelper.includes('ec2.arch
 
 for (const value of [
   'APT_MIRRORS=(archive.ubuntu.com us.archive.ubuntu.com)',
+  String.raw`security\\.ubuntu\\.com/ubuntu/?`,
   'Acquire::Retries "2"',
   'Acquire::http::Timeout "10"',
   'timeout --signal=TERM --kill-after=15s 60s apt-get -q update',
@@ -57,11 +61,13 @@ for (const value of [
   'ONA_BOOTSTRAP_FAILED',
   'ONA_BOOTSTRAP_SUCCEEDED',
   '/var/lib/ona-bootstrap/status.json',
-  'sleep 1500',
+  'flock -w 30 9',
   'latest-compatible.tar.gz',
   'timeout --signal=TERM --kill-after=30s 600s',
 ]) required(cloudInit, value, templatePath);
 if (/if\s+aws s3 cp/.test(cloudInit)) throw new Error('missing release artifact must fail bootstrap');
+
+for (const value of ['ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
 
 for (const value of [
   'aws_cloudwatch_log_metric_filter" "bootstrap_failure',
@@ -76,6 +82,8 @@ for (const value of [
   'min_healthy_percentage = 100',
   'max_healthy_percentage = 150',
   'health_check_grace_period = 1800',
+  'instance_warmup        = 1800',
+  'user_data = base64gzip(',
 ]) required(main, value, mainPath);
 
 const substitutions = {
@@ -96,6 +104,8 @@ const rendered = cloudInit.replace(/\$\{([a-z_]+)\}/g, (token, key) => {
   if (!(key in substitutions)) throw new Error(`unknown Terraform template variable ${token}`);
   return substitutions[key];
 });
+const compressedBytes = gzipSync(rendered).byteLength;
+if (compressedBytes > 16384) throw new Error(`compressed EC2 user data is ${compressedBytes} bytes; limit is 16384`);
 const syntax = spawnSync('bash', ['-n'], { input: rendered, encoding: 'utf8' });
 if (syntax.status !== 0) throw new Error(`rendered cloud-init shell syntax failed:\n${syntax.stderr}`);
 for (const [file, text] of [[aptPath, aptHelper], [securityPath, securityUpgrade]]) {

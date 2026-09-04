@@ -13,7 +13,10 @@ configure_mirror() {
   local source_file
   for source_file in "${APT_SOURCES[@]}"; do
     [ -f "$source_file" ] || continue
-    sed -Ei "s|https?://([[:alnum:].-]+\\.)?archive\\.ubuntu\\.com/ubuntu/?|http://$mirror/ubuntu|g" "$source_file"
+    sed -Ei \
+      -e "s|https?://([[:alnum:].-]+\\.)?archive\\.ubuntu\\.com/ubuntu/?|http://$mirror/ubuntu|g" \
+      -e "s|https?://security\\.ubuntu\\.com/ubuntu/?|http://$mirror/ubuntu|g" \
+      "$source_file"
   done
 }
 

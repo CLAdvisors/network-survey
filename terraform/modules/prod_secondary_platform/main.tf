@@ -1186,7 +1186,9 @@ resource "aws_launch_template" "app" {
     }
   }
 
-  user_data = base64encode(templatefile("${path.module}/cloud-init.sh", {
+  # Cloud-init transparently expands gzip user data. Compression leaves ample
+  # headroom below EC2's 16 KiB decoded user-data API limit.
+  user_data = base64gzip(templatefile("${path.module}/cloud-init.sh", {
     config_bucket              = aws_s3_bucket.runtime["config"].bucket
     config_key                 = "configs/.env.prod-secondary"
     artifacts_bucket           = aws_s3_bucket.runtime["artifacts"].bucket
@@ -1237,7 +1239,9 @@ resource "aws_autoscaling_group" "app" {
     strategy = "Rolling"
 
     preferences {
-      instance_warmup        = 300
+      # Do not count a replacement as warm while ELB health is still protected by
+      # the bootstrap grace period; retain both old healthy targets until then.
+      instance_warmup        = 1800
       min_healthy_percentage = 100
       max_healthy_percentage = 150
     }

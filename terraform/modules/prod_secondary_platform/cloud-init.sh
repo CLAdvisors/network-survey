@@ -15,7 +15,6 @@ BOOTSTRAP_LOG=/var/log/ona-bootstrap.log
 STATUS_DIR=/var/lib/ona-bootstrap
 STATUS_FILE=/var/lib/ona-bootstrap/status.json
 CURRENT_STEP=initializing
-WATCHDOG_PID=
 mkdir -p "$STATUS_DIR"
 touch "$BOOTSTRAP_LOG"
 chmod 0640 "$BOOTSTRAP_LOG"
@@ -34,7 +33,6 @@ on_error() {
   local exit_code=$1
   local line=$2
   trap - ERR TERM
-  if [ -n "$WATCHDOG_PID" ]; then kill "$WATCHDOG_PID" 2>/dev/null || true; fi
   printf '{"status":"failed","step":"%s","failed_at":"%s","exit_code":%d,"line":%d}\n' \
     "$CURRENT_STEP" "$(date --utc +%FT%TZ)" "$exit_code" "$line" > "$STATUS_FILE"
   echo "ONA_BOOTSTRAP_FAILED step=$CURRENT_STEP exit_code=$exit_code line=$line" >&2
@@ -43,12 +41,11 @@ on_error() {
 trap 'on_error "$?" "$LINENO"' ERR
 trap 'on_error 124 "$LINENO"' TERM
 
-# Enforce one bootstrap at a time and a hard overall deadline below the ASG's
-# health grace period. A failed host never passes the ALB /health readiness gate.
+# Enforce one bootstrap at a time. Every network operation has its own deadline;
+# the ASG health grace is the outer readiness deadline. A failed host never passes
+# the ALB /health gate, while a planned refresh retains both old healthy targets.
 exec 9>/run/lock/ona-bootstrap.lock
 flock -w 30 9 || { echo 'ONA_BOOTSTRAP_LOCK_TIMEOUT' >&2; on_error 75 "$LINENO"; }
-( sleep 1500; echo 'ONA_BOOTSTRAP_WATCHDOG_EXPIRED' >&2; kill -TERM "$$" ) &
-WATCHDOG_PID=$!
 
 set_step disable-default-apt-timers
 # Ubuntu's randomized apt timers previously overlapped on both app hosts and can
@@ -256,5 +253,3 @@ printf '{"status":"succeeded","step":"complete","finished_at":"%s"}\n' \
   "$(date --utc +%FT%TZ)" > "$STATUS_FILE"
 echo 'ONA_BOOTSTRAP_SUCCEEDED'
 trap - ERR TERM
-kill "$WATCHDOG_PID" 2>/dev/null || true
-wait "$WATCHDOG_PID" 2>/dev/null || true

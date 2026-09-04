@@ -18,8 +18,8 @@ The launch template now:
 - rewrites only Ubuntu archive source URLs and tries `archive.ubuntu.com`, then `us.archive.ubuntu.com`; the EC2 regional mirror is never selected;
 - applies apt retries plus connect/read timeouts and wraps update/install operations in process deadlines;
 - repairs interrupted dpkg configuration before each retry, uses atomic temporary downloads, and tolerates a clean rerun;
-- gives the overall bootstrap a 25-minute watchdog and a 30-minute ASG health grace period, while expensive network/deploy steps also have shorter deadlines; the extra grace is a safety margin, not the mirror fix;
-- requires the capability-verified `latest-compatible.tar.gz` artifact and a successful bounded `remote-deploy.sh`; an artifact-less or half-installed host cannot become ALB healthy;
+- bounds each external network operation and uses a 30-minute ASG health-grace/readiness deadline; the extra grace is a safety margin, not the mirror fix, and planned refreshes retain both old healthy targets for the full warmup;
+- requires the capability-verified `latest-compatible.tar.gz` artifact and a successful bounded `remote-deploy.sh`; a host-level deployment lock serializes bootstrap, CI, rollback, and operator deployments, and an artifact-less or half-installed host cannot become ALB healthy;
 - writes a secret-free state marker to `/var/lib/ona-bootstrap/status.json` and stable step/failure markers to `/var/log/ona-bootstrap.log` and the EC2 console;
 - forwards bootstrap and maintenance logs to dedicated encrypted CloudWatch log groups once the agent is available, with SNS-backed failure alarms.
 

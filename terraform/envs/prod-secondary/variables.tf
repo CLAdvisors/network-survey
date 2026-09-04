@@ -45,9 +45,13 @@ variable "instance_type" {
 }
 
 variable "ami_id" {
-  description = "Optional reviewed Ubuntu 22.04 AMI ID. Pin this before an approved apply for reproducibility."
+  description = "Reviewed current prod-secondary AMI ID supplied through the protected GitHub environment. Required to prevent moving-latest image changes."
   type        = string
-  default     = null
+
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]{8,17}$", var.ami_id))
+    error_message = "ami_id must be an explicit EC2 AMI ID."
+  }
 }
 
 variable "alb_allowed_ipv4_cidrs" {

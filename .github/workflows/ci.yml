@@ -221,6 +221,9 @@ jobs:
       - name: Validate prod-secondary bootstrap contract
         run: node scripts/ci/validate-prod-secondary-bootstrap.js
 
+      - name: Test prod-secondary apt helper
+        run: bash scripts/ci/test-prod-secondary-apt-helper.sh
+
       - name: Install API dependencies
         run: npm ci --workspaces=false
         working-directory: api

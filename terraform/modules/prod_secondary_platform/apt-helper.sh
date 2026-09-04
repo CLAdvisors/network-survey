@@ -3,10 +3,13 @@
 set -euo pipefail
 
 APT_MIRRORS=(archive.ubuntu.com us.archive.ubuntu.com)
-APT_SOURCES=(/etc/apt/sources.list)
+APT_ROOT=${ONA_APT_ROOT:-}
+APT_SOURCES=("$APT_ROOT/etc/apt/sources.list")
+APT_PARTIAL_DIR="$APT_ROOT/var/lib/apt/lists/partial"
+APT_LOCK=${ONA_APT_LOCK:-/run/lock/ona-apt.lock}
 while IFS= read -r source_file; do
   APT_SOURCES+=("$source_file")
-done < <(find /etc/apt/sources.list.d -maxdepth 1 -type f \( -name '*.list' -o -name '*.sources' \) -print 2>/dev/null | sort)
+done < <(find "$APT_ROOT/etc/apt/sources.list.d" -maxdepth 1 -type f \( -name '*.list' -o -name '*.sources' \) -print 2>/dev/null | sort)
 
 configure_mirror() {
   local mirror=$1
@@ -24,7 +27,7 @@ repair_dpkg() {
   # A prior timeout may leave configured packages waiting on dependencies. This
   # first pass handles the common case; the post-index fix-broken pass converges
   # dependency failures without declaring a half-configured host ready.
-  timeout --signal=TERM --kill-after=15s 45s dpkg --configure -a || true
+  timeout --signal=TERM --kill-after=15s 45s "${ONA_DPKG:-dpkg}" --configure -a || true
 }
 
 apt_for_mirror() {
@@ -35,20 +38,22 @@ apt_for_mirror() {
   configure_mirror "$mirror"
   echo "apt: trying $operation with mirror $mirror"
   repair_dpkg
-  rm -rf /var/lib/apt/lists/partial/*
-  timeout --signal=TERM --kill-after=15s 60s apt-get -q update || return 1
+  rm -rf "$APT_PARTIAL_DIR"/*
+  timeout --signal=TERM --kill-after=15s 60s "${ONA_APT_GET:-apt-get}" -q update || return 1
   timeout --signal=TERM --kill-after=15s 120s \
-    apt-get -q -y --no-install-recommends --fix-broken install || return 1
-  timeout --signal=TERM --kill-after=15s 45s dpkg --configure -a || return 1
+    "${ONA_APT_GET:-apt-get}" -q -y --no-install-recommends --fix-broken install || return 1
+  timeout --signal=TERM --kill-after=15s 45s "${ONA_DPKG:-dpkg}" --configure -a || return 1
   if [ "$operation" = install ]; then
     # Keep mirror/network failure out of the dpkg mutation phase. A timed-out
     # download can safely fall back before installation begins.
     timeout --signal=TERM --kill-after=15s 180s \
-      apt-get -q -y --no-install-recommends --download-only install "$@" || return 1
+      "${ONA_APT_GET:-apt-get}" -q -y --no-install-recommends --download-only install "$@" || return 1
     timeout --signal=TERM --kill-after=30s 120s \
-      apt-get -q -y --no-install-recommends --no-download install "$@" || return 1
+      "${ONA_APT_GET:-apt-get}" -q -y --no-install-recommends --no-download install "$@" || return 1
   fi
-  [ -z "$(dpkg --audit)" ] || return 1
+  local audit
+  audit=$("${ONA_DPKG:-dpkg}" --audit) || return 1
+  [ -z "$audit" ] || return 1
 }
 
 operation=${1:-}
@@ -66,7 +71,7 @@ case "$operation" in
     ;;
 esac
 
-exec 9>/run/lock/ona-apt.lock
+exec 9>"$APT_LOCK"
 flock -w 30 9
 
 for mirror in "${APT_MIRRORS[@]}"; do

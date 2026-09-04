@@ -44,11 +44,14 @@ jobs:
         env:
           EXPECTED_ACCOUNT_ID: '710054969994'
           ROLE_ARN: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          PROD_SECONDARY_AMI_ID: ${{ vars.PROD_SECONDARY_AMI_ID }}
         run: |
           set -euo pipefail
           case "$ROLE_ARN" in arn:aws:iam::${EXPECTED_ACCOUNT_ID}:role/*) ;; *) echo 'prod-secondary role belongs to the wrong account' >&2; exit 1;; esac
           test "$(aws sts get-caller-identity --query Account --output text)" = "$EXPECTED_ACCOUNT_ID" || { echo 'Refusing apply outside prod-secondary account' >&2; exit 1; }
           test "$AWS_REGION" = us-east-1 || { echo 'prod-secondary region must be us-east-1' >&2; exit 1; }
+          [[ "$PROD_SECONDARY_AMI_ID" =~ ^ami-[0-9a-f]{8,17}$ ]] || { echo 'PROD_SECONDARY_AMI_ID must pin the reviewed current image' >&2; exit 1; }
+          echo "TF_VAR_ami_id=$PROD_SECONDARY_AMI_ID" >> "$GITHUB_ENV"
 
       - name: Resolve Terraform environment
         id: env

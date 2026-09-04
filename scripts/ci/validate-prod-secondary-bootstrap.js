@@ -12,11 +12,17 @@ const aptPath = 'terraform/modules/prod_secondary_platform/apt-helper.sh';
 const securityPath = 'terraform/modules/prod_secondary_platform/security-upgrade.sh';
 const mainPath = 'terraform/modules/prod_secondary_platform/main.tf';
 const remoteDeployPath = 'scripts/deploy/remote-deploy.sh';
+const applyWorkflowPath = '.github/workflows/terraform-apply.yml';
+const planWorkflowPath = '.github/workflows/terraform-plan.yml';
+const moduleVariablesPath = 'terraform/modules/prod_secondary_platform/variables.tf';
 const cloudInit = read(templatePath);
 const aptHelper = read(aptPath);
 const securityUpgrade = read(securityPath);
 const main = read(mainPath);
 const remoteDeploy = read(remoteDeployPath);
+const applyWorkflow = read(applyWorkflowPath);
+const planWorkflow = read(planWorkflowPath);
+const moduleVariables = read(moduleVariablesPath);
 
 for (const [text, file] of [[cloudInit, templatePath], [aptHelper, aptPath], [securityUpgrade, securityPath]]) {
   if (/set\s+-[^\n]*x/.test(text)) throw new Error(`${file} must not enable shell tracing`);
@@ -30,12 +36,12 @@ for (const value of [
   String.raw`security\\.ubuntu\\.com/ubuntu/?`,
   'Acquire::Retries "2"',
   'Acquire::http::Timeout "10"',
-  'timeout --signal=TERM --kill-after=15s 60s apt-get -q update',
+  'timeout --signal=TERM --kill-after=15s 60s "${ONA_APT_GET:-apt-get}" -q update',
   '--fix-broken install',
-  'dpkg --audit',
+  '"${ONA_DPKG:-dpkg}" --audit',
   '--download-only install',
   '--no-download install',
-  'dpkg --configure -a',
+  '"${ONA_DPKG:-dpkg}" --configure -a',
 ]) required(`${aptHelper}\n${cloudInit}`, value, 'apt bootstrap');
 
 for (const value of [
@@ -66,8 +72,14 @@ for (const value of [
   'flock -w 30 9',
   'latest-compatible.tar.gz',
   'timeout --signal=TERM --kill-after=30s 600s',
+  'deployed-revision',
+  'set_step open-readiness',
+  'ufw allow 3000',
+  'timeout --signal=TERM --kill-after=30s 120s dpkg -i',
 ]) required(cloudInit, value, templatePath);
 if (/if\s+aws s3 cp/.test(cloudInit)) throw new Error('missing release artifact must fail bootstrap');
+if (/artifact_revision.*current_revision/s.test(cloudInit)) throw new Error('API health/revision must not bypass complete deployment verification');
+if (cloudInit.indexOf('ufw allow 3000') < cloudInit.indexOf('remote-deploy.sh')) throw new Error('ALB port must remain closed until deployment succeeds');
 
 for (const value of ['if [ "$ENVIRONMENT" = "prod-secondary" ]; then', 'ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
 
@@ -88,7 +100,17 @@ for (const value of [
   'health_check_grace_period = 1800',
   'instance_warmup        = 1800',
   'user_data = base64gzip(',
+  'data "aws_ami" "pinned"',
+  'values = [var.ami_id]',
+  'owners      = ["099720109477"]',
+  'values = ["x86_64"]',
+  'image_id      = data.aws_ami.pinned.id',
 ]) required(main, value, mainPath);
+required(moduleVariables, 'Explicitly reviewed prod-secondary AMI ID', moduleVariablesPath);
+if (/most_recent\s*=\s*true/.test(main)) throw new Error('prod-secondary must not resolve a moving latest AMI');
+for (const [workflow, file] of [[applyWorkflow, applyWorkflowPath], [planWorkflow, planWorkflowPath]]) {
+  for (const value of ['PROD_SECONDARY_AMI_ID', 'TF_VAR_ami_id']) required(workflow, value, file);
+}
 
 const substitutions = {
   aws_region: 'us-east-1',
@@ -105,10 +127,14 @@ const substitutions = {
   email_worker_log_group: '/test/email-worker',
   webhook_worker_log_group: '/test/webhook-worker',
 };
-const rendered = cloudInit.replace(/\$\{([a-z_]+)\}/g, (token, key) => {
-  if (!(key in substitutions)) throw new Error(`unknown Terraform template variable ${token}`);
-  return substitutions[key];
-});
+const escapedInterpolation = '__ESCAPED_SHELL_INTERPOLATION__';
+const rendered = cloudInit
+  .replace(/\$\$\{/g, `${escapedInterpolation}{`)
+  .replace(/\$\{([a-z_]+)\}/g, (token, key) => {
+    if (!(key in substitutions)) throw new Error(`unknown Terraform template variable ${token}`);
+    return substitutions[key];
+  })
+  .replaceAll(`${escapedInterpolation}{`, '${');
 const compressedBytes = gzipSync(rendered).byteLength;
 if (compressedBytes > 16384) throw new Error(`compressed EC2 user data is ${compressedBytes} bytes; limit is 16384`);
 const syntax = spawnSync('bash', ['-n'], { input: rendered, encoding: 'utf8' });

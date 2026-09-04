@@ -1,11 +1,14 @@
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
-data "aws_ami" "ubuntu" {
-  count = var.ami_id == null ? 1 : 0
-
-  most_recent = true
+data "aws_ami" "pinned" {
   owners      = ["099720109477"]
+  most_recent = false
+
+  filter {
+    name   = "image-id"
+    values = [var.ami_id]
+  }
 
   filter {
     name   = "name"
@@ -20,6 +23,11 @@ data "aws_ami" "ubuntu" {
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
   }
 }
 
@@ -40,8 +48,6 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_and_cloudfront" {
 }
 
 locals {
-  selected_ami_id = coalesce(var.ami_id, try(data.aws_ami.ubuntu[0].id, null))
-
   bucket_names = {
     config    = "network-survey-prod-secondary-config-${var.account_id}"
     artifacts = "network-survey-prod-secondary-artifacts-${var.account_id}"
@@ -1159,7 +1165,7 @@ resource "aws_iam_instance_profile" "app" {
 
 resource "aws_launch_template" "app" {
   name_prefix   = "${var.name_prefix}-app-"
-  image_id      = local.selected_ami_id
+  image_id      = data.aws_ami.pinned.id
   instance_type = var.instance_type
 
   iam_instance_profile {

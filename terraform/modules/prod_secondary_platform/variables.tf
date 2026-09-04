@@ -75,9 +75,13 @@ variable "instance_type" {
 }
 
 variable "ami_id" {
-  description = "Optional reviewed AMI ID. Null selects the latest Canonical Ubuntu 22.04 x86_64 AMI at plan time."
+  description = "Explicitly reviewed prod-secondary AMI ID. Never resolve a moving latest image during an application infrastructure apply."
   type        = string
-  default     = null
+
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]{8,17}$", var.ami_id))
+    error_message = "ami_id must be an explicit EC2 AMI ID."
+  }
 }
 
 variable "alb_allowed_ipv4_cidrs" {

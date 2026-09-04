@@ -20,7 +20,8 @@ The target-owned bucket and CMK were bootstrapped before initialization. This wo
 - VPC uses public ALB, private app, and isolated DB tiers across two AZs
 - private app subnets have S3/interface endpoints and one per-AZ NAT route for controlled bootstrap/provider egress
 - ASG steady-state capacity is `min=desired=2` with `max=3` for one rolling-refresh surge; instances have no public IP or SSH ingress
-- replacement bootstrap uses bounded deterministic Ubuntu mirror fallback and requires a healthy capability-verified release; randomized Ubuntu apt timers are replaced by bounded AZ-staggered security maintenance
+- the launch template requires an explicitly pinned reviewed AMI; replacement bootstrap uses bounded deterministic Ubuntu mirror fallback and opens ALB host-firewall access only after a healthy capability-verified release
+- randomized Ubuntu apt timers are temporarily replaced by bounded AZ-staggered security maintenance pending the baked-AMI rollout
 - RDS is fresh/empty, encrypted, Multi-AZ, deletion-protected, `prevent_destroy`, and retains automated backups for 35 days
 - RDS generates and manages its master password in Secrets Manager under a target CMK
 - direct ALB CIDR ingress remains empty; the enabled API CloudFront distribution reaches the ALB only through AWS's managed CloudFront origin-facing prefix list

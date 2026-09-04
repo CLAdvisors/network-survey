@@ -47,6 +47,19 @@ trap 'on_error 124 "$LINENO"' TERM
 exec 9>/run/lock/ona-bootstrap.lock
 flock -w 30 9 || { echo 'ONA_BOOTSTRAP_LOCK_TIMEOUT' >&2; on_error 75 "$LINENO"; }
 
+PRIOR_BOOTSTRAP_SUCCEEDED=false
+if grep -q '"status":"succeeded"' "$STATUS_FILE" 2>/dev/null; then
+  PRIOR_BOOTSTRAP_SUCCEEDED=true
+fi
+if [ "$PRIOR_BOOTSTRAP_SUCCEEDED" = false ]; then
+  # A fresh or previously failed host must remain unreachable from the ALB until
+  # release, worker, and control verification all complete.
+  ufw --force delete allow 3000 >/dev/null 2>&1 || true
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw --force enable
+fi
+
 set_step disable-default-apt-timers
 # Ubuntu's randomized apt timers previously overlapped on both app hosts and can
 # consume enough resources to starve health checks when a mirror degrades.
@@ -94,7 +107,11 @@ cloudwatch_deb=$(mktemp /tmp/amazon-cloudwatch-agent.XXXXXX.deb)
 bounded_curl https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb \
   -o "$cloudwatch_deb"
 dpkg-deb --info "$cloudwatch_deb" >/dev/null
-dpkg -i "$cloudwatch_deb"
+timeout --signal=TERM --kill-after=30s 120s dpkg -i "$cloudwatch_deb" || true
+# Converge any interrupted maintainer script/dependency state before trusting the
+# agent installation. ona-apt also verifies dpkg --audit is empty.
+/usr/local/sbin/ona-apt update
+dpkg-query -W -f='$${db:Status-Abbrev}\n' amazon-cloudwatch-agent | grep -qx 'ii '
 rm -f "$cloudwatch_deb"
 
 set_step install-node
@@ -224,11 +241,6 @@ EOF
   -a fetch-config -m ec2 \
   -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
-set_step configure-firewall
-# The security group remains the primary boundary. SSH stays closed; use SSM.
-ufw allow 3000
-ufw --force enable
-
 set_step deploy-release
 BOOTSTRAP_DIR=/tmp/ona-bootstrap
 rm -rf "$BOOTSTRAP_DIR" /tmp/ona-latest.tar.gz
@@ -239,15 +251,20 @@ mkdir -p "$BOOTSTRAP_DIR"
 tar -tzf /tmp/ona-latest.tar.gz >/dev/null
 tar -xzf /tmp/ona-latest.tar.gz -C "$BOOTSTRAP_DIR"
 artifact_revision=$(cat "$BOOTSTRAP_DIR/REVISION")
-current_revision=$(cat "$SERVICE_DIR/current/REVISION" 2>/dev/null || true)
-if [ "$artifact_revision" = "$current_revision" ] && \
-   curl -fsS --connect-timeout 2 --max-time 5 http://localhost:3000/health >/dev/null; then
-  echo "Release $artifact_revision is already healthy; deployment is converged."
-else
-  timeout --signal=TERM --kill-after=30s 600s \
-    bash "$BOOTSTRAP_DIR/deploy/remote-deploy.sh" "$BOOTSTRAP_DIR"
-fi
+# Always run the complete idempotent deploy contract. API health alone is not
+# proof that worker/control handoff completed on an earlier interrupted run.
+timeout --signal=TERM --kill-after=30s 600s \
+  bash "$BOOTSTRAP_DIR/deploy/remote-deploy.sh" "$BOOTSTRAP_DIR"
+deployment_marker=$(mktemp "$STATUS_DIR/.deployed-revision.XXXXXX")
+printf '%s\n' "$artifact_revision" > "$deployment_marker"
+mv "$deployment_marker" "$STATUS_DIR/deployed-revision"
 rm -rf "$BOOTSTRAP_DIR" /tmp/ona-latest.tar.gz
+
+set_step open-readiness
+# The security group remains the primary boundary. SSH stays closed; use SSM.
+# Opening this rule is the final readiness gate for a newly bootstrapped host.
+ufw allow 3000
+ufw --force enable
 
 set_step complete
 printf '{"status":"succeeded","step":"complete","finished_at":"%s"}\n' \

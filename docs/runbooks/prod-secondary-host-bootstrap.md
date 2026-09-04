@@ -19,7 +19,8 @@ The launch template now:
 - applies apt retries plus connect/read timeouts and wraps update/install operations in process deadlines;
 - repairs interrupted dpkg configuration before each retry, uses atomic temporary downloads, and tolerates a clean rerun;
 - bounds each external network operation and uses a 30-minute ASG health-grace/readiness deadline; the extra grace is a safety margin, not the mirror fix, and planned refreshes retain both old healthy targets for the full warmup;
-- requires the capability-verified `latest-compatible.tar.gz` artifact and a successful bounded `remote-deploy.sh`; a host-level deployment lock serializes bootstrap, CI, rollback, and operator deployments, and an artifact-less or half-installed host cannot become ALB healthy;
+- enables the host firewall with port 3000 closed before provisioning and opens it only after the capability-verified `latest-compatible.tar.gz` completes the full `remote-deploy.sh` API/worker/control contract;
+- always reruns the idempotent deploy contract after interruption and records an atomic deployed-revision marker only after full success; a host-level deployment lock serializes bootstrap, CI, rollback, and operator deployments;
 - writes a secret-free state marker to `/var/lib/ona-bootstrap/status.json` and stable step/failure markers to `/var/log/ona-bootstrap.log` and the EC2 console;
 - forwards bootstrap and maintenance logs to dedicated encrypted CloudWatch log groups once the agent is available, with SNS-backed failure alarms.
 
@@ -35,7 +36,13 @@ Security updates are not disabled. The default randomized timers are replaced by
 
 The timer is non-persistent, has zero random delay, and refuses to start unless the local API and both ALB targets are healthy. It invokes an explicit `Ubuntu:jammy-security` unattended-upgrade allow-list with low CPU/I/O priority and a 10-minute command deadline, then verifies local API health again. The enclosing service allows enough time for bounded apt repair/update plus the upgrade and records TERM/INT as failures. Automatic reboot is disabled. Success/failure state is written to `/var/lib/ona-bootstrap/security-upgrade-status.json`; output is shipped to the `host-maintenance` log group and failures alarm through SNS.
 
-Operators must review pending reboots and perform them as a rolling ASG operation, preserving one healthy target. A future image pipeline should replace mutable patching with a regularly rebuilt, vulnerability-scanned, immutable AMI containing pinned runtime dependencies. Until that exists, the bounded staggered timer is the replacement patching strategy.
+Operators must review pending reboots and perform them as a rolling ASG operation, preserving one healthy target. The bounded staggered timer is temporary and must not be manually triggered on both hosts. Within one week, replace mutable patching with a regularly rebuilt, vulnerability-scanned immutable AMI and rolling instance refresh.
+
+## Temporary AMI freeze
+
+Prod-secondary no longer resolves Canonical's moving `most_recent` image during Terraform plans. Before any plan/apply, set the protected GitHub environment variable `PROD_SECONDARY_AMI_ID` to the exact AMI already used by the current launch template, obtained through an approved read-only operator process. The workflows reject an absent or malformed value and pass it as `TF_VAR_ami_id`. Do not apply this change until the plan confirms the launch template retains that exact image.
+
+This freezes image selection; it does not patch the image. The follow-up baked-AMI rollout must build, scan, rehearse, and explicitly promote a replacement ID before a rolling refresh.
 
 ## Rollout
 

@@ -69,7 +69,7 @@ for (const value of [
 ]) required(cloudInit, value, templatePath);
 if (/if\s+aws s3 cp/.test(cloudInit)) throw new Error('missing release artifact must fail bootstrap');
 
-for (const value of ['ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
+for (const value of ['if [ "$ENVIRONMENT" = "prod-secondary" ]; then', 'ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
 
 for (const value of [
   'elasticloadbalancing:DescribeTargetHealth',

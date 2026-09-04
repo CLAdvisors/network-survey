@@ -14,17 +14,19 @@ set -euo pipefail
 
 SOURCE_DIR=${1:?usage: remote-deploy.sh <extracted-artifact-dir>}
 SERVICE_DIR=/opt/service
-# Serialize cloud-init, CI, rollback, and operator deployments on this host.
-# Concurrent release symlink, migration, and control-handoff mutation is unsafe.
-exec 8>/run/lock/ona-deploy.lock
-flock -w 60 8 || { echo 'Another deployment still holds /run/lock/ona-deploy.lock' >&2; exit 75; }
-
 PM2_APP=ona-api
 PM2_WORKER=ona-email-worker
 PM2_WEBHOOK_WORKER=ona-email-webhook-worker
 
 source "$SERVICE_DIR/deploy.env"
 export AWS_DEFAULT_REGION
+
+if [ "$ENVIRONMENT" = "prod-secondary" ]; then
+  # Serialize prod-secondary cloud-init, CI, rollback, and operator deployments.
+  # Concurrent release symlink, migration, and control-handoff mutation is unsafe.
+  exec 8>/run/lock/ona-deploy.lock
+  flock -w 60 8 || { echo 'Another deployment still holds /run/lock/ona-deploy.lock' >&2; exit 75; }
+fi
 
 REVISION=$(cat "$SOURCE_DIR/REVISION")
 RELEASE_CAPABILITY_ARGS=()

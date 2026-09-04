@@ -49,6 +49,13 @@ function createPool(env = process.env) {
   return pool;
 }
 
+function isTransientDatabaseError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  if (/^(08|53)/.test(code) || ['40001', '40P01', '57014', '57P01', '57P02', '57P03'].includes(code)) return true;
+  if (['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'RUNTIME_TIMEOUT'].includes(code)) return true;
+  return /connection terminated|connection timeout|timeout exceeded when trying to connect|remaining connection slots/i.test(String(error?.message || ''));
+}
+
 function poolSnapshot(pool) {
   const total = Number(pool?.totalCount || 0);
   const idle = Number(pool?.idleCount || 0);
@@ -206,6 +213,7 @@ module.exports = {
   createHealthHandlers,
   createNonOverlappingScheduler,
   createPool,
+  isTransientDatabaseError,
   poolConfigFromEnv,
   poolSnapshot,
   probeDatabase,

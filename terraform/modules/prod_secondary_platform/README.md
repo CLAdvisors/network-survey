@@ -16,7 +16,7 @@ It creates:
 - CloudFront HTTPS distributions for the API, dashboard, and survey with optional validated ACM aliases while retaining default-domain access
 - exact `prod-secondary` runtime configuration with an isolated Resend scope/sender/Reply-To and credential, sending, claiming, webhook, bootstrap, cutover, and traffic gates off
 - target-scoped deploy IAM, runtime/host/system log groups, SNS routing, and actionable ALB/ASG/RDS/host/process alarms
-- dependency-free ALB liveness with EC2-only ASG replacement, so shared database incidents fail closed for readiness without destroying both hosts
+- dependency-free ALB liveness for ELB replacement health, so failed bootstrap/process startup is replaced while shared database incidents cannot destroy both hosts
 
 The launch template requires an explicit reviewed AMI ID rather than resolving a moving latest image. It installs the reviewed runtime through per-AZ NAT egress and requires a successful deployment of `latest-compatible.tar.gz` from the target artifact bucket before opening host-firewall access to ALB health checks. Bootstrap uses bounded apt/network operations with deterministic non-EC2 Ubuntu mirror fallback, emits secret-free status and alarm markers, and reruns the complete deploy contract after interruption. Ubuntu's randomized apt timers are temporarily replaced by bounded, low-priority, AZ-staggered weekly security upgrades pending the baked-AMI pipeline; see [`../../../docs/runbooks/prod-secondary-host-bootstrap.md`](../../../docs/runbooks/prod-secondary-host-bootstrap.md).
 

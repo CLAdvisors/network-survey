@@ -12,6 +12,7 @@ const {
   createDependencyProbe,
   createHealthHandlers,
   createNonOverlappingScheduler,
+  isTransientDatabaseError,
   poolConfigFromEnv,
   probeDatabase,
   startRuntimeTelemetry,
@@ -62,6 +63,12 @@ test('hung database query fails its health deadline and concurrent probes are si
   assert.equal(calls, 1, 'failure is briefly cached to avoid a health-check pool stampede');
 });
 
+test('database retry classification is narrow and does not hide programming failures', () => {
+  assert.equal(isTransientDatabaseError({ code:'57014' }), true);
+  assert.equal(isTransientDatabaseError({ code:'ECONNRESET' }), true);
+  assert.equal(isTransientDatabaseError(new TypeError('broken invariant')), false);
+});
+
 test('delivery worker degrades through repeated DB stalls instead of exiting into a restart loop', async () => {
   let sleeps = 0;
   let worker;
@@ -79,6 +86,20 @@ test('delivery worker degrades through repeated DB stalls instead of exiting int
   await worker.run();
   assert.equal(sleeps, 2);
   assert.match(worker.lastError, /statement timeout/);
+});
+
+test('delivery worker surfaces unexpected failures to PM2 containment', async () => {
+  const worker = new DeliveryWorker({
+    pool:{
+      query:async () => { throw new TypeError('broken invariant'); },
+      totalCount:0, idleCount:0, waitingCount:0, options:{ max:10 },
+    },
+    provider:{ send:async () => ({ id:'unused' }) },
+    env:{ EMAIL_WORKER_ENV:'test', RESEND_PROVIDER_ACCOUNT_SCOPE:'local-test' },
+    sleepFn:async () => { throw new Error('unexpected sleep'); },
+    instanceId:'test/programming-failure',
+  });
+  await assert.rejects(worker.run(), /broken invariant/);
 });
 
 test('non-overlapping scheduler does not arm another run while a task is hung', async () => {
@@ -171,8 +192,12 @@ test('runtime telemetry emits the process start before a fast crash can occur', 
   assert.equal(records[0].Process, 'fast-crash-test');
 });
 
-test('PM2 restart policy contains crash churn and keeps aggregate RSS tripwires host-safe', () => {
-  const ecosystem = require('../../scripts/deploy/ecosystem.config');
+test('PM2 restart policy contains crash churn and scopes RSS tripwires to reviewed hosts', () => {
+  const ecosystemPath = require.resolve('../../scripts/deploy/ecosystem.config');
+  const previousEnvironment = process.env.EMAIL_WORKER_ENV;
+  process.env.EMAIL_WORKER_ENV = 'prod-secondary';
+  delete require.cache[ecosystemPath];
+  const ecosystem = require(ecosystemPath);
   assert.deepEqual(ecosystem.apps.map((app) => app.name), [
     'ona-api', 'ona-email-worker', 'ona-email-webhook-worker',
   ]);
@@ -186,6 +211,12 @@ test('PM2 restart policy contains crash churn and keeps aggregate RSS tripwires 
   const totalMiB = ecosystem.apps.reduce((sum, app) => sum + Number.parseInt(app.max_memory_restart, 10), 0);
   assert.equal(totalMiB, 704);
   assert.equal(ecosystem.apps.find((app) => app.name === 'ona-api').kill_timeout, 30000);
+  process.env.EMAIL_WORKER_ENV = 'staging';
+  delete require.cache[ecosystemPath];
+  assert.ok(require(ecosystemPath).apps.every((app) => app.max_memory_restart === undefined));
+  if (previousEnvironment === undefined) delete process.env.EMAIL_WORKER_ENV;
+  else process.env.EMAIL_WORKER_ENV = previousEnvironment;
+  delete require.cache[ecosystemPath];
   const serverSource = fs.readFileSync(path.resolve(__dirname, '../server.js'), 'utf8');
   assert.match(serverSource, /setTimeout\(\(\) => process\.exit\(1\), 28000\)/);
 });
@@ -193,8 +224,9 @@ test('PM2 restart policy contains crash churn and keeps aggregate RSS tripwires 
 test('prod-secondary replacement health is process-only and activation controls remain default-off', () => {
   const terraform = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/prod_secondary_platform/main.tf'), 'utf8');
   assert.match(terraform, /path\s+= "\/live"/);
-  assert.match(terraform, /health_check_type\s+= "EC2"/);
-  assert.doesNotMatch(terraform, /health_check_type\s+= "ELB"/);
+  assert.match(terraform, /health_check_type\s+= "ELB"/);
+  assert.match(terraform, /health_check_grace_period\s+= 1800/);
+  assert.match(terraform, /max_healthy_percentage\s+= 150/);
   for (const gate of ['EMAIL_CLAIMING_ENABLED=false', 'EMAIL_SENDING_ENABLED=false', 'WEBHOOK_PROCESSING_ENABLED=false']) {
     assert.match(terraform, new RegExp(gate));
   }

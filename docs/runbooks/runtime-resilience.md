@@ -6,7 +6,7 @@ All API, delivery-worker, and webhook-worker PostgreSQL pools use bounded acquis
 
 Worker heartbeat and webhook maintenance jobs use completion-based scheduling. A stalled run cannot overlap its successor. Main worker loops treat bounded DB errors as degraded idle operation rather than crashing repeatedly. Delivery leases, provider-boundary records, and stable idempotency keys remain authoritative after interruption.
 
-PM2 requires 30s minimum uptime, limits an unstable process to ten restarts, and exponentially backs off from 1s. RSS restart tripwires are API 352 MiB and each worker 176 MiB (704 MiB aggregate). They are containment tripwires, not reservations, and **must not be rolled out on the current 1 GiB hosts**: merge and complete the `t3.small` rollout in PR #61 first so the OS, PM2, CloudWatch Agent, page cache, and periodic PM2 polling retain safe headroom. Do not lower them without representative survey/provider tests; do not raise them without also resizing the host or proving OS/agent headroom.
+PM2 requires 30s minimum uptime, limits an unstable process to ten restarts, and exponentially backs off from 1s. On prod-secondary only, RSS restart tripwires are API 352 MiB and each worker 176 MiB (704 MiB aggregate). They remain unset on the smaller source-prod/staging hosts. They are containment tripwires, not reservations. The completed prod-secondary `t3.small` rollout provides 2 GiB per host, leaving substantial headroom for Ubuntu, PM2, CloudWatch Agent, page cache, and periodic PM2 polling. Do not lower them without representative survey/provider tests; do not raise them without proving host headroom.
 
 ## Health semantics
 
@@ -15,7 +15,7 @@ PM2 requires 30s minimum uptime, limits an unstable process to ten restarts, and
 - `GET /health/dependencies`: same dependency status for operators.
 - `GET /health`: backward-compatible dependency health used by deploy verification.
 
-The prod-secondary ASG uses EC2 health, not ELB health, for replacement. Therefore a shared RDS/pool incident removes no healthy hosts destructively. PM2 attempts bounded process recovery, ALB liveness removes dead processes from traffic, and alarms require an operator to diagnose persistent application-only failure. Never change ASG health back to `ELB` or point ALB checks at readiness without a reviewed, staggered replacement design.
+The prod-secondary ASG retains ELB replacement health so a host that fails bootstrap or cannot start the API is replaced. Crucially, ELB health now uses dependency-free `/live`, not DB readiness: a shared RDS/pool incident therefore cannot mark both hosts unhealthy and trigger destructive replacement. PM2 attempts bounded process recovery, and the bootstrap branch's 30-minute grace plus one-instance surge preserves recovery capacity. Never point ALB replacement health at `/ready`, `/health`, or another shared-dependency probe.
 
 ## Signals and first response
 
@@ -31,17 +31,19 @@ On alarm:
 
 ## Rollout, abort, and rollback
 
-Sequence this change after the `t3.small` host resize in PR #61 and after rebasing onto `fix/prod-secondary-bootstrap-hardening` (PR #62) so its bounded bootstrap/apt/security-update work remains authoritative. Resolve the shared CloudWatch cloud-init block by retaining both that branch's bootstrap/maintenance logs and this change's host metrics/system logs. Apply no infrastructure from the old root production workspace.
+PRs #61 and #62 are merged, and this change is rebased onto them. The combined launch template retains compressed user data, bounded bootstrap/apt/security-update behavior, bootstrap/maintenance logs and alarms, the 30-minute health grace, one-instance surge refresh, and this change's host metrics/system logs. Apply no infrastructure from the old root production workspace.
 
-Roll out one prod-secondary ASG instance at a time with outbound controls left as-is. Before continuing, require: `/live` 200, `/ready` 200, exact release, fresh worker heartbeats, no PM2 restart loop, stable RSS below warning thresholds, zero pool waiters, and no new OOM/critical logs. Then observe at least 15 minutes before the second host.
+Before any Terraform apply changes the target-group path, publish and deploy the `/live`-capable artifact to both existing hosts and verify `curl -fsS http://localhost:3000/live` through approved SSM on each one. Applying `/live` while either host runs an older artifact would make both targets unhealthy outside the instance-refresh surge guard; abort rather than relying on replacement bootstrap.
+
+After that prerequisite, roll out one prod-secondary ASG instance at a time with outbound controls left as-is. Before continuing, require: `/live` 200, `/ready` 200, exact release, fresh worker heartbeats, no PM2 restart loop, stable RSS below warning thresholds, zero pool waiters, and no new OOM/critical logs. Then observe at least 15 minutes before the second host.
 
 Abort if either host exceeds three starts in 15 minutes, readiness remains unavailable for five minutes, pool waiters persist three minutes, RSS reaches a PM2 tripwire, any OOM occurs, delivery ambiguity rises unexpectedly, or both ALB targets become unhealthy. Leave delivery controls paused where the deploy safety flow paused them.
 
-Application rollback is the existing capability-checked immutable artifact rollback. It does not revert Terraform, schema, or runtime config. Infrastructure rollback restores the prior target-group path and ASG health settings only if doing so cannot reintroduce DB-coupled mass replacement; normally retain `/live` + EC2 health and revert alarms/agent config independently. Never roll schema backward without its separate backup/capability procedure.
+Application rollback is the existing capability-checked immutable artifact rollback. It does not revert Terraform, schema, or runtime config. If reverting to an artifact without `/live`, first restore the target-group path to `/health` while retaining the merged surge/grace settings, then perform the artifact rollback; this temporarily reintroduces DB-coupled replacement risk and requires active observation. Prefer retaining `/live` and reverting alarms/agent config independently. Never roll schema backward without its separate backup/capability procedure.
 
 ## Future drain / patch / reboot / rejoin procedure (documentation only)
 
-This PR intentionally does **not** implement host patch automation; the bootstrap-hardening branch owns apt/security-update behavior. A future operator workflow should:
+This PR intentionally does **not** duplicate the merged host patch automation; the bootstrap hardening in `main` owns apt/security-update behavior. A future operator workflow should:
 
 1. Verify two healthy targets, healthy RDS, no deploy/refresh, current backups, and adequate remaining-host capacity. Freeze deploys.
 2. Select exactly one instance and enable ASG scale-in protection. Put it in `Standby` **with desired capacity unchanged** so a replacement is available, or deregister it and wait the full target-group drain delay. Never drain both hosts.

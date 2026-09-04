@@ -964,7 +964,7 @@ resource "aws_cloudwatch_metric_alarm" "host" {
 
 resource "aws_cloudwatch_metric_alarm" "ec2_status" {
   alarm_name          = "${var.name_prefix}-ec2-status-check"
-  alarm_description   = "An application host is failing EC2 status checks. ASG replacement is intentionally based only on this host-level signal."
+  alarm_description   = "An application host is failing EC2 status checks; correlate with dependency-free ALB liveness before intervention."
   namespace           = "AWS/EC2"
   metric_name         = "StatusCheckFailed"
   dimensions          = { AutoScalingGroupName = aws_autoscaling_group.app.name }
@@ -1463,14 +1463,14 @@ resource "aws_launch_template" "app" {
 }
 
 resource "aws_autoscaling_group" "app" {
-  name                = "${var.name_prefix}-app"
-  min_size            = 2
-  desired_capacity    = 2
-  max_size            = 3
-  vpc_zone_identifier = aws_subnet.app[*].id
-  target_group_arns   = [aws_lb_target_group.api.arn]
   # ELB replacement remains useful for failed bootstrap/process startup, but
   # its /live signal is dependency-free so a shared DB stall cannot replace hosts.
+  name                      = "${var.name_prefix}-app"
+  min_size                  = 2
+  desired_capacity          = 2
+  max_size                  = 3
+  vpc_zone_identifier       = aws_subnet.app[*].id
+  target_group_arns         = [aws_lb_target_group.api.arn]
   health_check_type         = "ELB"
   health_check_grace_period = 1800
   enabled_metrics           = ["GroupInServiceInstances"]

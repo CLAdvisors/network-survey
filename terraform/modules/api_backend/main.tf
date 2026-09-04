@@ -654,7 +654,7 @@ resource "aws_cloudwatch_metric_alarm" "process_memory" {
   for_each = local.process_memory_alarm_bytes
 
   alarm_name          = "${var.name_prefix}${each.key}-memory"
-  alarm_description   = "${each.key} RSS is approaching its reviewed PM2 restart tripwire."
+  alarm_description   = "${each.key} RSS exceeded its reviewed warning threshold; source hosts have no automatic memory restart."
   namespace           = "NetworkSurvey/Runtime"
   metric_name         = "ProcessRssBytes"
   dimensions          = { Environment = var.environment, Process = each.key }

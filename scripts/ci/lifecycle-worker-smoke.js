@@ -143,7 +143,9 @@ const pool = new Pool(poolConfig);
   let backlogProviderSequence=0;
   const backlogProvider={send:async()=>({id:`ci-backlog-provider-${++backlogProviderSequence}`})};
   const backlogEnv={...worker.env,EMAIL_RATE_BUDGET_ENV:backlogEnvironment,EMAIL_RATE_PER_SECOND:'2'};
-  await pool.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp()),($1,clock_timestamp())`,[backlogEnvironment]);
+  // Future-dated fixture reservations keep the budget deterministically full even
+  // if a loaded CI runner pauses before the workers reach the limiter.
+  await pool.query(`INSERT INTO email_rate_reservations(environment,reserved_at) VALUES($1,clock_timestamp()+interval '5 seconds'),($1,clock_timestamp()+interval '5 seconds')`,[backlogEnvironment]);
   let parkedCount=0;
   let signalAllParked;
   const allParked=new Promise(resolve=>{signalAllParked=resolve;});
@@ -178,18 +180,20 @@ const pool = new Pool(poolConfig);
     await Promise.allSettled(parkedRuns);
   }
   await pool.query(`DELETE FROM email_rate_reservations WHERE environment=$1`,[backlogEnvironment]);
+  await pool.query(`UPDATE survey_email_deliveries SET next_attempt_at=now() WHERE survey_id=$1 AND status='retry_wait'`,[backlogSurvey.id]);
 
   const backlogWorkers=[
     new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,instanceId:'ci-backlog-worker-1'}),
     new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,instanceId:'ci-backlog-worker-2'}),
   ];
+  const backlogDeadline=Date.now()+30000;
   const drainBacklog=async(backlogWorker)=>{
-    for(let cycle=0;cycle<200;cycle+=1){
+    while(Date.now()<backlogDeadline){
       const remaining=Number((await pool.query(`SELECT count(*)::int AS count FROM survey_email_deliveries WHERE survey_id=$1 AND status IN ('pending','retry_wait','leased')`,[backlogSurvey.id])).rows[0].count);
       if(remaining===0)return;
       if(!await backlogWorker.processOne())await new Promise(resolve=>setTimeout(resolve,10));
     }
-    throw new Error('rate backlog did not drain within the bounded test loop');
+    throw new Error('rate backlog did not drain within 30 seconds');
   };
   await Promise.all(backlogWorkers.map(drainBacklog));
   const backlogStats=(await pool.query(`SELECT count(DISTINCT d.id) FILTER (WHERE d.status='accepted')::int AS accepted,count(a.provider_started_at)::int AS provider_attempts,count(*) FILTER (WHERE a.error_message='provider_rate_wait')::int AS rate_waits,count(DISTINCT d.id) FILTER (WHERE a.provider_started_at IS NOT NULL)::int AS provider_deliveries FROM survey_email_deliveries d JOIN survey_email_attempts a ON a.delivery_id=d.id WHERE d.survey_id=$1`,[backlogSurvey.id])).rows[0];

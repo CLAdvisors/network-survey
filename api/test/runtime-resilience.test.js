@@ -14,6 +14,7 @@ const {
   createNonOverlappingScheduler,
   poolConfigFromEnv,
   probeDatabase,
+  startRuntimeTelemetry,
 } = require('../runtime-resilience');
 
 test('PostgreSQL pool configuration bounds acquisition, statements, queries, idle transactions, and socket keepalive', () => {
@@ -26,6 +27,7 @@ test('PostgreSQL pool configuration bounds acquisition, statements, queries, idl
   });
   assert.equal(config.maxLifetimeSeconds, 1800);
   assert.equal(config.connectionTimeoutMillis, 321);
+  assert.equal(poolConfigFromEnv({ DB_QUERY_TIMEOUT_MS:'' }).query_timeout, 10000);
   assert.equal(config.query_timeout, 654);
   assert.equal(config.statement_timeout, 654, 'server timeout cannot exceed the client query deadline');
   assert.equal(config.idle_in_transaction_session_timeout, 1000); // clamped safe floor
@@ -151,6 +153,24 @@ test('liveness is dependency-free while readiness fails closed on DB or pool sat
   assert.deepEqual(ready.body, { status:'error', database:'unavailable', pool:'saturated' });
 });
 
+test('runtime telemetry emits the process start before a fast crash can occur', () => {
+  const records = [];
+  const originalLog = console.log;
+  console.log = (line) => records.push(JSON.parse(line));
+  try {
+    const telemetry = startRuntimeTelemetry({
+      pool:{ totalCount:0, idleCount:0, waitingCount:0, options:{ max:10 } },
+      processName:'fast-crash-test',
+      env:{ EMAIL_WORKER_ENV:'test' },
+      intervalMs:60000,
+    });
+    telemetry.stop();
+  } finally { console.log = originalLog; }
+  assert.equal(records.length, 1);
+  assert.equal(records[0].ProcessStartCount, 1);
+  assert.equal(records[0].Process, 'fast-crash-test');
+});
+
 test('PM2 restart policy contains crash churn and keeps aggregate RSS tripwires host-safe', () => {
   const ecosystem = require('../../scripts/deploy/ecosystem.config');
   assert.deepEqual(ecosystem.apps.map((app) => app.name), [
@@ -165,6 +185,9 @@ test('PM2 restart policy contains crash churn and keeps aggregate RSS tripwires 
   }
   const totalMiB = ecosystem.apps.reduce((sum, app) => sum + Number.parseInt(app.max_memory_restart, 10), 0);
   assert.equal(totalMiB, 704);
+  assert.equal(ecosystem.apps.find((app) => app.name === 'ona-api').kill_timeout, 30000);
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '../server.js'), 'utf8');
+  assert.match(serverSource, /setTimeout\(\(\) => process\.exit\(1\), 28000\)/);
 });
 
 test('prod-secondary replacement health is process-only and activation controls remain default-off', () => {

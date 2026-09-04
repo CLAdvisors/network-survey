@@ -3576,7 +3576,9 @@ if (require.main === module) {
     console.log(`Received ${signal}; draining API connections`);
     telemetry.stop();
     server.close(() => pool.end().finally(() => process.exit(0)));
-    setTimeout(() => process.exit(1), 9000).unref();
+    // Exceed the 15s provider/body deadline plus bounded DB lock cleanup, but
+    // remain below PM2's API kill timeout.
+    setTimeout(() => process.exit(1), 28000).unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

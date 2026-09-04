@@ -6,7 +6,7 @@ All API, delivery-worker, and webhook-worker PostgreSQL pools use bounded acquis
 
 Worker heartbeat and webhook maintenance jobs use completion-based scheduling. A stalled run cannot overlap its successor. Main worker loops treat bounded DB errors as degraded idle operation rather than crashing repeatedly. Delivery leases, provider-boundary records, and stable idempotency keys remain authoritative after interruption.
 
-PM2 requires 30s minimum uptime, limits an unstable process to ten restarts, and exponentially backs off from 1s. RSS restart tripwires are API 352 MiB and each worker 176 MiB (704 MiB aggregate on the current 1 GiB host). They are containment tripwires, not reservations. Do not lower them without representative survey/provider tests; do not raise them without also resizing the host or proving OS/agent headroom.
+PM2 requires 30s minimum uptime, limits an unstable process to ten restarts, and exponentially backs off from 1s. RSS restart tripwires are API 352 MiB and each worker 176 MiB (704 MiB aggregate). They are containment tripwires, not reservations, and **must not be rolled out on the current 1 GiB hosts**: merge and complete the `t3.small` rollout in PR #61 first so the OS, PM2, CloudWatch Agent, page cache, and periodic PM2 polling retain safe headroom. Do not lower them without representative survey/provider tests; do not raise them without also resizing the host or proving OS/agent headroom.
 
 ## Health semantics
 
@@ -31,7 +31,7 @@ On alarm:
 
 ## Rollout, abort, and rollback
 
-Sequence this change after rebasing onto `fix/prod-secondary-bootstrap-hardening` so its bounded bootstrap/apt/security-update work remains authoritative. Resolve the shared CloudWatch cloud-init block by retaining both that branch's bootstrap/maintenance logs and this change's host metrics/system logs. Apply no infrastructure from the old root production workspace.
+Sequence this change after the `t3.small` host resize in PR #61 and after rebasing onto `fix/prod-secondary-bootstrap-hardening` (PR #62) so its bounded bootstrap/apt/security-update work remains authoritative. Resolve the shared CloudWatch cloud-init block by retaining both that branch's bootstrap/maintenance logs and this change's host metrics/system logs. Apply no infrastructure from the old root production workspace.
 
 Roll out one prod-secondary ASG instance at a time with outbound controls left as-is. Before continuing, require: `/live` 200, `/ready` 200, exact release, fresh worker heartbeats, no PM2 restart loop, stable RSS below warning thresholds, zero pool waiters, and no new OOM/critical logs. Then observe at least 15 minutes before the second host.
 

@@ -6,6 +6,7 @@ const { Pool } = require('pg');
 const { emitMetrics } = require('./email-metrics');
 
 function boundedInteger(value, fallback, minimum, maximum) {
+  if (value === undefined || value === null || String(value).trim() === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, Math.floor(parsed))) : fallback;
 }
@@ -163,7 +164,7 @@ function startRuntimeTelemetry({ pool, processName, env = process.env, intervalM
   const histogram = monitorEventLoopDelay({ resolution: 20 });
   histogram.enable();
   let first = true;
-  const scheduler = createNonOverlappingScheduler(() => {
+  const emit = () => {
     const memory = process.memoryUsage();
     const snapshot = poolSnapshot(pool);
     const lagMs = Number.isFinite(histogram.max) ? Math.round(histogram.max / 1e6) : 0;
@@ -185,7 +186,15 @@ function startRuntimeTelemetry({ pool, processName, env = process.env, intervalM
       },
     });
     first = false;
-  }, { intervalMs, initialDelayMs: 1000, onError: (error) => console.error('Runtime telemetry failed:', error.message) });
+  };
+  // Emit before entering any worker loop/listener. Even an immediate crash is
+  // visible to restart-churn metrics rather than only the later heartbeat alarm.
+  emit();
+  const scheduler = createNonOverlappingScheduler(emit, {
+    intervalMs,
+    initialDelayMs: intervalMs,
+    onError: (error) => console.error('Runtime telemetry failed:', error.message),
+  });
   return {
     stop() { scheduler.stop(); histogram.disable(); },
   };

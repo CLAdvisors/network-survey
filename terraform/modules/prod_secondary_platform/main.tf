@@ -1,11 +1,14 @@
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
-data "aws_ami" "ubuntu" {
-  count = var.ami_id == null ? 1 : 0
-
-  most_recent = true
+data "aws_ami" "pinned" {
   owners      = ["099720109477"]
+  most_recent = false
+
+  filter {
+    name   = "image-id"
+    values = [var.ami_id]
+  }
 
   filter {
     name   = "name"
@@ -20,6 +23,11 @@ data "aws_ami" "ubuntu" {
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
   }
 }
 
@@ -40,8 +48,6 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_and_cloudfront" {
 }
 
 locals {
-  selected_ami_id = coalesce(var.ami_id, try(data.aws_ami.ubuntu[0].id, null))
-
   bucket_names = {
     config    = "network-survey-prod-secondary-config-${var.account_id}"
     artifacts = "network-survey-prod-secondary-artifacts-${var.account_id}"
@@ -727,7 +733,7 @@ resource "aws_db_instance" "postgres" {
 }
 
 resource "aws_cloudwatch_log_group" "runtime" {
-  for_each = toset(["api", "email-worker", "webhook-worker"])
+  for_each = toset(["api", "bootstrap", "email-worker", "host-maintenance", "webhook-worker"])
 
   name              = "/network-survey/prod-secondary/${each.value}"
   retention_in_days = 30
@@ -833,6 +839,62 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   period              = 300
   statistic           = "Average"
   treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "bootstrap_failure" {
+  name           = "${var.name_prefix}-bootstrap-failure"
+  log_group_name = aws_cloudwatch_log_group.runtime["bootstrap"].name
+  pattern        = "ONA_BOOTSTRAP_FAILED"
+
+  metric_transformation {
+    name      = "BootstrapFailure"
+    namespace = "NetworkSurvey/ProdSecondary"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "bootstrap_failure" {
+  alarm_name          = "${var.name_prefix}-bootstrap-failure"
+  alarm_description   = "A prod-secondary instance bootstrap failed after bounded retries."
+  namespace           = "NetworkSurvey/ProdSecondary"
+  metric_name         = "BootstrapFailure"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 1
+  period              = 60
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "security_upgrade_failure" {
+  name           = "${var.name_prefix}-security-upgrade-failure"
+  log_group_name = aws_cloudwatch_log_group.runtime["host-maintenance"].name
+  pattern        = "ONA_SECURITY_UPGRADE_FAILED"
+
+  metric_transformation {
+    name      = "SecurityUpgradeFailure"
+    namespace = "NetworkSurvey/ProdSecondary"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "security_upgrade_failure" {
+  alarm_name          = "${var.name_prefix}-security-upgrade-failure"
+  alarm_description   = "A bounded prod-secondary security upgrade failed."
+  namespace           = "NetworkSurvey/ProdSecondary"
+  metric_name         = "SecurityUpgradeFailure"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 1
+  period              = 60
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.operations.arn]
   ok_actions          = [aws_sns_topic.operations.arn]
   tags                = var.common_tags
@@ -1047,6 +1109,13 @@ data "aws_iam_policy_document" "app" {
   }
 
   statement {
+    sid       = "ReadTargetHealthForSafeMaintenance"
+    effect    = "Allow"
+    actions   = ["elasticloadbalancing:DescribeTargetHealth"]
+    resources = ["*"]
+  }
+
+  statement {
     sid       = "WriteRuntimeLogs"
     effect    = "Allow"
     actions   = ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"]
@@ -1096,7 +1165,7 @@ resource "aws_iam_instance_profile" "app" {
 
 resource "aws_launch_template" "app" {
   name_prefix   = "${var.name_prefix}-app-"
-  image_id      = local.selected_ami_id
+  image_id      = data.aws_ami.pinned.id
   instance_type = var.instance_type
 
   iam_instance_profile {
@@ -1130,15 +1199,22 @@ resource "aws_launch_template" "app" {
     }
   }
 
-  user_data = base64encode(templatefile("${path.module}/cloud-init.sh", {
-    config_bucket            = aws_s3_bucket.runtime["config"].bucket
-    config_key               = "configs/.env.prod-secondary"
-    artifacts_bucket         = aws_s3_bucket.runtime["artifacts"].bucket
-    aws_region               = var.aws_region
-    environment              = var.environment
-    api_log_group            = aws_cloudwatch_log_group.runtime["api"].name
-    email_worker_log_group   = aws_cloudwatch_log_group.runtime["email-worker"].name
-    webhook_worker_log_group = aws_cloudwatch_log_group.runtime["webhook-worker"].name
+  # Cloud-init transparently expands gzip user data. Compression leaves ample
+  # headroom below EC2's 16 KiB decoded user-data API limit.
+  user_data = base64gzip(templatefile("${path.module}/cloud-init.sh", {
+    config_bucket              = aws_s3_bucket.runtime["config"].bucket
+    config_key                 = "configs/.env.prod-secondary"
+    artifacts_bucket           = aws_s3_bucket.runtime["artifacts"].bucket
+    aws_region                 = var.aws_region
+    environment                = var.environment
+    apt_helper                 = file("${path.module}/apt-helper.sh")
+    security_upgrade           = file("${path.module}/security-upgrade.sh")
+    target_group_arn           = aws_lb_target_group.api.arn
+    api_log_group              = aws_cloudwatch_log_group.runtime["api"].name
+    bootstrap_log_group        = aws_cloudwatch_log_group.runtime["bootstrap"].name
+    email_worker_log_group     = aws_cloudwatch_log_group.runtime["email-worker"].name
+    host_maintenance_log_group = aws_cloudwatch_log_group.runtime["host-maintenance"].name
+    webhook_worker_log_group   = aws_cloudwatch_log_group.runtime["webhook-worker"].name
   }))
 
   tag_specifications {
@@ -1161,11 +1237,11 @@ resource "aws_autoscaling_group" "app" {
   name                      = "${var.name_prefix}-app"
   min_size                  = 2
   desired_capacity          = 2
-  max_size                  = 2
+  max_size                  = 3
   vpc_zone_identifier       = aws_subnet.app[*].id
   target_group_arns         = [aws_lb_target_group.api.arn]
   health_check_type         = "ELB"
-  health_check_grace_period = 1200
+  health_check_grace_period = 1800
   enabled_metrics           = ["GroupInServiceInstances"]
 
   launch_template {
@@ -1177,9 +1253,11 @@ resource "aws_autoscaling_group" "app" {
     strategy = "Rolling"
 
     preferences {
-      instance_warmup        = 300
-      min_healthy_percentage = 50
-      max_healthy_percentage = 100
+      # Do not count a replacement as warm while ELB health is still protected by
+      # the bootstrap grace period; retain both old healthy targets until then.
+      instance_warmup        = 1800
+      min_healthy_percentage = 100
+      max_healthy_percentage = 150
     }
 
     triggers = ["tag"]

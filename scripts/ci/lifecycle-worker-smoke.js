@@ -161,8 +161,8 @@ const pool = new Pool(poolConfig);
   const parkedRuns=parkedWorkers.map(parkedWorker=>parkedWorker.run());
   try{
     await Promise.race([allParked,new Promise((_,reject)=>setTimeout(()=>reject(new Error('workers did not park after rate denial')),3000))]);
-    const parkedStats=(await pool.query(`SELECT count(*)::int AS attempts,count(*) FILTER (WHERE a.error_message='provider_rate_wait')::int AS rate_waits,count(*) FILTER (WHERE d.status='leased')::int AS leased FROM survey_email_attempts a JOIN survey_email_deliveries d ON d.id=a.delivery_id WHERE d.survey_id=$1`,[backlogSurvey.id])).rows[0];
-    assert.deepEqual(parkedStats,{attempts:2,rate_waits:2,leased:0},'full budget should park each process after one row, not walk the backlog');
+    const parkedStats=(await pool.query(`SELECT count(*)::int AS attempts,count(*) FILTER (WHERE a.error_message='provider_rate_wait')::int AS rate_waits,count(*) FILTER (WHERE d.status='leased')::int AS leased,bool_and(d.next_attempt_at<=clock_timestamp()+interval '2 seconds') AS bounded_due FROM survey_email_attempts a JOIN survey_email_deliveries d ON d.id=a.delivery_id WHERE d.survey_id=$1`,[backlogSurvey.id])).rows[0];
+    assert.deepEqual(parkedStats,{attempts:2,rate_waits:2,leased:0,bounded_due:true},'full budget should park each process after one row without walking or durably stranding the backlog');
     const parkedAddresses=(await pool.query(`SELECT d.to_address FROM survey_email_attempts a JOIN survey_email_deliveries d ON d.id=a.delivery_id WHERE d.survey_id=$1 AND a.error_message='provider_rate_wait' ORDER BY d.to_address`,[backlogSurvey.id])).rows.map(({to_address})=>String(to_address).trim().toLowerCase());
     const lockKeys=[
       `email-provider-boundary:${worker.environment}`,
@@ -181,7 +181,6 @@ const pool = new Pool(poolConfig);
     await Promise.allSettled(parkedRuns);
   }
   await pool.query(`DELETE FROM email_rate_reservations WHERE environment=$1`,[backlogEnvironment]);
-  await pool.query(`UPDATE survey_email_deliveries SET next_attempt_at=now() WHERE survey_id=$1 AND status IN ('pending','retry_wait')`,[backlogSurvey.id]);
 
   const backlogWorkers=[
     new DeliveryWorker({pool,provider:backlogProvider,env:backlogEnv,random:()=>0,instanceId:'ci-backlog-worker-1'}),

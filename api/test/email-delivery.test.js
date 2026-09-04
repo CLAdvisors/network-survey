@@ -371,8 +371,8 @@ test('worker cancellation helpers cannot erase a previously ambiguous provider a
   const nextAvailableAt=new Date('2026-08-04T12:00:00.250Z');
   await worker.releaseWithoutSend(releaseClient,{id:'delivery-1',lease_token:'lease-3'},'provider_rate_wait',nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN CASE WHEN d\.status='reminder_leased' THEN 'reminder_retry_wait' ELSE 'retry_wait'/);
-  assert.match(releaseCalls[1].sql,/GREATEST\(COALESCE\(\$4::timestamptz/);
-  assert.doesNotMatch(releaseCalls[1].sql,/100 milliseconds/);
+  assert.match(releaseCalls[1].sql,/GREATEST\(LEAST\(COALESCE\(\$4::timestamptz,statement_timestamp\(\)\+interval '1 second'\),statement_timestamp\(\)\+interval '1100 milliseconds'\),statement_timestamp\(\)\)/);
+  assert.doesNotMatch(releaseCalls[1].sql,/interval '100 milliseconds'/);
   assert.equal(releaseCalls[1].values[3],nextAvailableAt);
   assert.match(releaseCalls[1].sql,/THEN d\.last_error_code ELSE \$3/);
 });
@@ -412,6 +412,10 @@ test('rate wait applies bounded worker backpressure after provider-boundary clea
   await processing;
   assert.deepEqual(events,['boundary-returned','sleep:500','processed']);
   for(const invalid of [undefined,null,'',-1,NaN,5000])assert.equal(worker.rateWaitDelay(invalid),1000);
+  const nextAvailableAt=new Date('2026-08-04T12:00:00.500Z');
+  assert.equal(worker.rateWaitNextAttemptAt({retryAfterMs:500,nextAvailableAt}),nextAvailableAt);
+  for(const invalid of [undefined,null,-1,NaN,5000])assert.equal(worker.rateWaitNextAttemptAt({retryAfterMs:invalid,nextAvailableAt}),null);
+  assert.equal(worker.rateWaitNextAttemptAt({retryAfterMs:500,nextAvailableAt:'invalid'}),null);
   assert.equal(worker.rateWaitDelay(0),5);
   assert.equal(worker.rateWaitDelay(1100),1105);
 });

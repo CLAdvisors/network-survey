@@ -218,6 +218,9 @@ jobs:
       - name: Validate prod-secondary Resend isolation contract
         run: node scripts/ci/validate-prod-secondary-resend-config.js
 
+      - name: Validate prod-secondary bootstrap contract
+        run: node scripts/ci/validate-prod-secondary-bootstrap.js
+
       - name: Install API dependencies
         run: npm ci --workspaces=false
         working-directory: api

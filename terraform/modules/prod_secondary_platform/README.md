@@ -7,7 +7,7 @@ It creates:
 - a dedicated VPC across two Availability Zones
 - public ALB, private application, and isolated database subnet tiers
 - S3 and interface endpoints plus one NAT gateway per AZ for controlled package/provider egress
-- a private ASG fixed at `min=desired=max=2`, without public IPs or SSH
+- a private ASG at `min=desired=2`, `max=3` only to permit one safe rolling-refresh surge, without public IPs or SSH
 - a direct-CIDR-fenced ALB whose HTTP origin accepts only the AWS-managed CloudFront origin-facing prefix when public AWS endpoints are enabled
 - a fresh, deletion-protected Multi-AZ PostgreSQL database
 - target-owned workload and RDS CMKs
@@ -17,6 +17,8 @@ It creates:
 - exact `prod-secondary` runtime configuration with an isolated Resend scope/sender/Reply-To and credential, sending, claiming, webhook, bootstrap, cutover, and traffic gates off
 - target-scoped deploy IAM, runtime log groups, SNS routing, and baseline ALB/ASG/RDS alarms
 
-The launch template installs the reviewed runtime through per-AZ NAT egress and bootstraps only `latest-compatible.tar.gz` from the target artifact bucket. The deploy contract retrieves the RDS-managed password transiently, loads Resend secrets only when target-only gates are enabled, validates the exact target identity and parameter paths, and keeps all durable email/webhook controls disabled after fresh migration.
+The launch template installs the reviewed runtime through per-AZ NAT egress and requires a successful deployment of `latest-compatible.tar.gz` from the target artifact bucket before the host can pass ALB health checks. Bootstrap uses bounded apt/network operations with deterministic non-EC2 Ubuntu mirror fallback, emits secret-free status and alarm markers, and is safe to rerun after interrupted package work. Ubuntu's randomized apt timers are replaced by bounded, low-priority, AZ-staggered weekly security upgrades; see [`../../../docs/runbooks/prod-secondary-host-bootstrap.md`](../../../docs/runbooks/prod-secondary-host-bootstrap.md).
+
+The deploy contract retrieves the RDS-managed password transiently, loads Resend secrets only when target-only gates are enabled, validates the exact target identity and parameter paths, and keeps all durable email/webhook controls disabled after fresh migration.
 
 The module does not create DNS, ACM certificates, provider credentials, webhook registrations, bootstrap identities, or production data.

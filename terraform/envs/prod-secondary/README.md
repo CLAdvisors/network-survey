@@ -19,7 +19,8 @@ The target-owned bucket and CMK were bootstrapped before initialization. This wo
 - every managed resource receives `Environment=prod-secondary`; no target resource receives `Environment=prod`
 - VPC uses public ALB, private app, and isolated DB tiers across two AZs
 - private app subnets have S3/interface endpoints and one per-AZ NAT route for controlled bootstrap/provider egress
-- ASG capacity is fixed at `2/2/2`; instances have no public IP or SSH ingress
+- ASG steady-state capacity is `min=desired=2` with `max=3` for one rolling-refresh surge; instances have no public IP or SSH ingress
+- replacement bootstrap uses bounded deterministic Ubuntu mirror fallback and requires a healthy capability-verified release; randomized Ubuntu apt timers are replaced by bounded AZ-staggered security maintenance
 - RDS is fresh/empty, encrypted, Multi-AZ, deletion-protected, `prevent_destroy`, and retains automated backups for 35 days
 - RDS generates and manages its master password in Secrets Manager under a target CMK
 - direct ALB CIDR ingress remains empty; the enabled API CloudFront distribution reaches the ALB only through AWS's managed CloudFront origin-facing prefix list
@@ -30,6 +31,6 @@ The target-owned bucket and CMK were bootstrapped before initialization. This wo
 
 ## Current build state
 
-The target backend, account governance, network, private two-instance ASG, Multi-AZ RDS, encrypted storage, disabled CloudFront distributions, fenced ALB, logs, alarms, and deploy roles have been created in account `710054969994`. The launch template installs the application runtime through per-AZ NAT egress and bootstraps only a capability-verified artifact from the target bucket. Runtime resolves the RDS-managed secret transiently. Resend credential loading and ingestion remain disabled by default; exact target-only parameter permissions are granted only when their corresponding gate is enabled.
+The target backend, account governance, network, private two-instance ASG, Multi-AZ RDS, encrypted storage, disabled CloudFront distributions, fenced ALB, logs, alarms, and deploy roles have been created in account `710054969994`. The launch template installs the application runtime through per-AZ NAT egress and requires a capability-verified artifact from the target bucket. Bootstrap and scheduled host maintenance are bounded and observable as described in [`../../../docs/runbooks/prod-secondary-host-bootstrap.md`](../../../docs/runbooks/prod-secondary-host-bootstrap.md). Runtime resolves the RDS-managed secret transiently. Resend credential loading and ingestion remain disabled by default; exact target-only parameter permissions are granted only when their corresponding gate is enabled.
 
 Direct public ALB ingress, Resend provider registration/key values, and production data remain deliberately absent. See `../../../docs/runbooks/prod-secondary-resend.md` for the separately approved provider and secret preparation sequence. Custom DNS and ACM are active for `api.cladvisorsurveys.com`, `dashboard.cladvisorsurveys.com`, and `surveys.cladvisorsurveys.com`. The protected GitHub `prod-secondary` environment and target-only OIDC variables are configured.

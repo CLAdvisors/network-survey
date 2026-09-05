@@ -184,12 +184,12 @@ jobs:
           # The validator is supplied by this trusted workflow revision, not by
           # either the currently installed or rollback-target artifact.
           TRUSTED_VALIDATOR_B64=$(base64 -w0 scripts/deploy/validate-release-capabilities.js)
-          ISOLATION_FLAG=
+          CAPABILITY_FLAGS=
           if [ "${{ inputs.environment }}" = prod-secondary ]; then
-            ISOLATION_FLAG=--require-prod-secondary-resend-isolation
+            CAPABILITY_FLAGS=--require-prod-secondary-resend-isolation
           fi
 
-          jq -n --arg bucket "$BUCKET" --arg sha "$SHA" --arg region "$AWS_REGION" --arg validator "$TRUSTED_VALIDATOR_B64" --arg isolation "$ISOLATION_FLAG" '{
+          jq -n --arg bucket "$BUCKET" --arg sha "$SHA" --arg region "$AWS_REGION" --arg validator "$TRUSTED_VALIDATOR_B64" --arg capability_flags "$CAPABILITY_FLAGS" '{
             commands: [
               "set -eu",
               "export AWS_DEFAULT_REGION=\($region)",
@@ -198,7 +198,7 @@ jobs:
               "tar -xzf /tmp/ona-deploy/release.tar.gz -C /tmp/ona-deploy",
               "test -f /tmp/ona-deploy/api/lifecycle.js && test -f /tmp/ona-deploy/api/email-worker.js && test -f /tmp/ona-deploy/api/webhook-worker.js && test -f /tmp/ona-deploy/deploy/ecosystem.config.js && test -f /tmp/ona-deploy/deploy/set-email-claiming.js && test -f /tmp/ona-deploy/deploy/CAPABILITIES.json && test -f /tmp/ona-deploy/deploy/validate-release-capabilities.js || { echo Refusing rollback to an invalid or capability-incompatible artifact >&2; exit 1; }",
               "printf %s \($validator) | base64 -d > /tmp/ona-trusted-release-validator.js",
-              "node /tmp/ona-trusted-release-validator.js /tmp/ona-deploy --database --runtime-api-dir /opt/service/current/api \($isolation)",
+              "LIVE_HEALTH_FLAG=; if test -f /opt/service/alb-live-health-required; then LIVE_HEALTH_FLAG=--require-alb-live-health; fi; node /tmp/ona-trusted-release-validator.js /tmp/ona-deploy --database --runtime-api-dir /opt/service/current/api \($capability_flags) $LIVE_HEALTH_FLAG",
               "bash /tmp/ona-deploy/deploy/remote-deploy.sh /tmp/ona-deploy",
               "rm -rf /tmp/ona-deploy /tmp/ona-trusted-release-validator.js"
             ]

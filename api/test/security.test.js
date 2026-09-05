@@ -30,6 +30,7 @@ const {
   getDashboardBaseUrl,
   buildDashboardUrl,
   createDemoToken,
+  createIdempotentDemoToken,
   verifyDemoToken,
   prepareSurveyForDemo,
   READ_SURVEY_ROLES,
@@ -1658,6 +1659,13 @@ test('demo links are signed, survey-bound, and expire without database state', (
   assert.equal(verifyDemoToken(token, issuedAt + (24 * 60 * 60 * 1000)), null);
 });
 
+test('demo email intent produces a byte-identical signed token across ambiguous retries', () => {
+  const first = createIdempotentDemoToken('11111111-1111-4111-8111-111111111111', 'Survey A', '22222222-2222-4222-8222-222222222222', 1700000000000, 'secret');
+  const retry = createIdempotentDemoToken('11111111-1111-4111-8111-111111111111', 'Survey A', '22222222-2222-4222-8222-222222222222', 1700000000000, 'secret');
+  assert.equal(retry, first);
+  assert.notEqual(createIdempotentDemoToken('11111111-1111-4111-8111-111111111111', 'Survey A', '33333333-3333-4333-8333-333333333333', 1700000000000, 'secret'), first);
+});
+
 test('demo survey preparation uses roster-backed choices without exposing legacy remote URLs', () => {
   const persisted = {
     pages: [{ elements: [
@@ -2205,6 +2213,9 @@ test('rollback capability validation permits no-reminder artifacts, rejects shar
   const unisolated=validate({...base,reminder_provider_boundary:3},'--require-prod-secondary-resend-isolation');
   assert.notEqual(unisolated.status,0);assert.match(unisolated.stderr,/prod-secondary Resend isolation/);
   assert.equal(validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1},'--require-prod-secondary-resend-isolation').status,0);
+  const noLive=validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1},'--require-alb-live-health');
+  assert.notEqual(noLive.status,0);assert.match(noLive.stderr,/ALB \/live health capability/);
+  assert.equal(validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1,alb_live_health:1},'--require-alb-live-health').status,0);
 });
 
 test('rollback database validation uses the installed runtime and enforces provider-binding capability 3', (t) => {
@@ -2228,6 +2239,13 @@ test('rollback database validation uses the installed runtime and enforces provi
   const rollback=fs.readFileSync(path.join(__dirname,'../../.github/workflows/rollback-api.yml'),'utf8');
   assert.match(rollback,/TRUSTED_VALIDATOR_B64=.*validate-release-capabilities\.js/);
   assert.match(rollback,/node \/tmp\/ona-trusted-release-validator\.js \/tmp\/ona-deploy --database --runtime-api-dir \/opt\/service\/current\/api/);
+  assert.match(rollback,/test -f \/opt\/service\/alb-live-health-required; then LIVE_HEALTH_FLAG=--require-alb-live-health/);
+  assert.match(rollback,/--require-prod-secondary-resend-isolation/);
+  const deploy=fs.readFileSync(path.join(__dirname,'../../scripts/deploy/remote-deploy.sh'),'utf8');
+  assert.match(deploy,/if \[ -f "\$SERVICE_DIR\/alb-live-health-required" \][\s\S]+RELEASE_CAPABILITY_ARGS\+=\(--require-alb-live-health\)/);
+  assert.match(deploy,/validate-release-capabilities\.js" "\$PREVIOUS_RELEASE" --database "\$\{RELEASE_CAPABILITY_ARGS\[@\]\}"/);
+  const cloudInit=fs.readFileSync(path.join(__dirname,'../../terraform/modules/prod_secondary_platform/cloud-init.sh'),'utf8');
+  assert.match(cloudInit,/touch "\$SERVICE_DIR\/alb-live-health-required"/);
 });
 
 test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {
@@ -2492,7 +2510,8 @@ test('dashboard read-only tables hide edit controls and demo email avoids public
   assert.doesNotMatch(respondentTable, /params\.row\.surveyName/);
   assert.doesNotMatch(serverSource, /sendMail\(email, 'demo'/);
   assert.match(serverSource, /app\.post\('\/api\/surveys\/:surveyId\/demo-email'/);
-  assert.match(serverSource, /createDemoToken\(survey\.id, survey\.name\)/);
+  assert.match(serverSource, /createIdempotentDemoToken\(survey\.id, survey\.name, idempotencyKey, intentCreatedAt\)/);
+  assert.match(serverSource, /suppliedIdempotencyKey \|\| crypto\.randomUUID\(\)/, 'headerless legacy clients must remain accepted');
 });
 
 test('demo seed is local-guarded, idempotent, and uses real respondent tokens', () => {

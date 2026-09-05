@@ -2,28 +2,13 @@
 
 const crypto = require('crypto');
 const os = require('os');
-const fs = require('fs');
 const dotenvFlow = require('dotenv-flow');
-const { Pool } = require('pg');
 const { ResendProvider, reserveProviderRateOnClient, unlockAdvisoryLocksAndRelease, DEFAULT_SENDER } = require('./email');
 const { SELECTED_EVENT_TYPES } = require('./webhooks');
 const { emitMetrics } = require('./email-metrics');
+const { createPool, createNonOverlappingScheduler, isTransientDatabaseError, startRuntimeTelemetry } = require('./runtime-resilience');
 
 dotenvFlow.config();
-
-function createPool(env = process.env) {
-  return new Pool({
-    user: env.DB_USER,
-    password: env.DB_PASSWORD,
-    host: env.DB_HOST,
-    port: env.DB_PORT,
-    database: env.DB_NAME || 'ONA',
-    ssl: env.DB_SSL === 'true' ? {
-      ca: env.DB_SSL_CA ? fs.readFileSync(env.DB_SSL_CA, 'utf8') : undefined,
-      rejectUnauthorized: Boolean(env.DB_SSL_CA),
-    } : undefined,
-  });
-}
 
 const EMAIL_EVENTS = new Set([
   'email.sent', 'email.delivered', 'email.delivery_delayed', 'email.bounced',
@@ -147,7 +132,25 @@ class WebhookWorker {
     this.unmatchedDays = Math.max(1, Number(env.RESEND_WEBHOOK_UNMATCHED_DAYS || 7));
     this.stopped = false;
     this.processing = false;
+    this.errors = new Map();
     this.lastError = null;
+  }
+
+  refreshLastError() {
+    this.lastError = [...this.errors.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([source, message]) => `${source}:${message}`)
+      .join('; ') || null;
+  }
+
+  recordError(source, error) {
+    this.errors.set(source, String(error?.message || error));
+    this.refreshLastError();
+  }
+
+  clearError(source) {
+    this.errors.delete(source);
+    this.refreshLastError();
   }
 
   backoff(attempt) {
@@ -503,10 +506,13 @@ class WebhookWorker {
     } finally {
       client.release();
     }
-    if (reconcileAddress) await this.reconcileAddress(reconcileAddress).catch((error) => {
-      this.lastError = `suppression_reconcile:${bounded(error.message, 200)}`;
-      emitMetrics({ environment:this.environment,release:this.release,metrics:{ SuppressionReconciliationFailureCount:1 } });
-    });
+    if (reconcileAddress) {
+      try { await this.reconcileAddress(reconcileAddress); this.clearError('reconcile'); }
+      catch (error) {
+        this.recordError('reconcile', new Error(`suppression_reconcile:${bounded(error.message, 200)}`));
+        emitMetrics({ environment:this.environment,release:this.release,metrics:{ SuppressionReconciliationFailureCount:1 } });
+      }
+    }
     return { action: 'processed' };
   }
 
@@ -751,9 +757,10 @@ class WebhookWorker {
       if (!await this.markCanarySending(canary,client)) return;
       const result = await this.provider.send(this.buildCanaryPayload(canary), { idempotencyKey:`webhook-canary/${canary.canary_token}` });
       await this.markCanarySent(canary,result.id,client);
+      this.clearError('canary');
     } catch (error) {
       await client.query(`UPDATE email_webhook_canary_state SET status='retry_wait',next_run_at=now()+interval '15 minutes',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,last_error_code='canary_send_failed',last_error_message=$3,updated_at=now() WHERE environment=$1 AND lease_token=$2`, [this.environment,canary.lease_token,bounded(error.message)]).catch(()=>{});
-      this.lastError=bounded(error.message);
+      this.recordError('canary', new Error(bounded(error.message)));
     } finally {
       await unlockAdvisoryLocksAndRelease(client, [boundaryLocked ? `email-provider-boundary:${this.environment}` : null]);
     }
@@ -790,25 +797,41 @@ class WebhookWorker {
 
   async run() {
     const heartbeatMs = Math.max(3000, Number(this.env.RESEND_WEBHOOK_HEARTBEAT_MS || 10000));
-    const timer = setInterval(() => this.heartbeat().catch((error) => { this.lastError = error.message; }), heartbeatMs);
-    const maintenance = setInterval(() => {
-      this.emitOperationalMetrics().catch((error) => { this.lastError = error.message; });
-      this.purgeExpired(100).catch((error) => {
-        this.lastError = error.message;
+    const heartbeat = createNonOverlappingScheduler(async () => {
+      await this.heartbeat();
+      this.clearError('heartbeat');
+    }, {
+      intervalMs: heartbeatMs,
+      initialDelayMs: 0,
+      onError: (error) => this.recordError('heartbeat', error),
+    });
+    const maintenance = createNonOverlappingScheduler(async () => {
+      const results = await Promise.allSettled([this.emitOperationalMetrics(), this.purgeExpired(100)]);
+      const failure = results.find((result) => result.status === 'rejected');
+      if (results[1].status === 'rejected') {
         emitMetrics({ environment:this.environment,release:this.release,metrics:{ PayloadPurgeFailureCount:1 } });
-      });
-    }, 60000);
+      }
+      if (failure) throw failure.reason;
+      this.clearError('maintenance');
+    }, { intervalMs:60000, initialDelayMs:0, onError:(error) => this.recordError('maintenance', error) });
+    const telemetry = startRuntimeTelemetry({ pool:this.pool, processName:'webhook-worker', env:this.env });
     try {
-      await this.emitOperationalMetrics().catch((error) => { this.lastError = error.message; });
       while (!this.stopped) {
-        this.processing = await this.control();
-        await this.heartbeat();
-        if (!this.processing) { await this.sleep(1000); continue; }
-        if (!await this.processOne()) await this.sleep(Number(this.env.RESEND_WEBHOOK_IDLE_MS || 750));
+        try {
+          this.processing = await this.control();
+          if (!this.processing) { this.clearError('loop'); await this.sleep(1000); continue; }
+          if (!await this.processOne()) await this.sleep(Number(this.env.RESEND_WEBHOOK_IDLE_MS || 750));
+          this.clearError('loop');
+        } catch (error) {
+          this.processing = false;
+          if (!isTransientDatabaseError(error)) throw error;
+          this.recordError('loop', error);
+          await this.sleep(Math.max(250, Number(this.env.DB_STALL_RETRY_MS || 1000)));
+        }
       }
     } finally {
-      clearInterval(timer);
-      clearInterval(maintenance);
+      await Promise.all([heartbeat.stop(), maintenance.stop()]);
+      telemetry.stop();
       this.processing = false;
       await this.heartbeat().catch(() => {});
     }

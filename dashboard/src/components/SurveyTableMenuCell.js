@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -29,6 +29,12 @@ import ReminderCampaignDialog from './ReminderCampaignDialog';
 import { capability, errorMessage, lifecycleStatus, surveyId } from './surveyLifecycle';
 import { useAuth } from '../context/AuthContext';
 
+const newIdempotencyKey = () => globalThis.crypto?.randomUUID?.()
+  || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = Math.random() * 16 | 0;
+    return (character === 'x' ? random : (random & 3 | 8)).toString(16);
+  });
+
 const buildDefaultCopiedName = (name) => {
   const sourceName = String(name || '').replace(/[^A-Za-z0-9]/g, '');
   const baseName = sourceName.slice(0, 251) || 'Survey';
@@ -50,6 +56,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
   const [archiving, setArchiving] = useState(false);
   const [demoDialogOpen, setDemoDialogOpen] = useState(false);
   const [demoSending, setDemoSending] = useState(false);
+  const demoIntent = useRef(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const { canEditSurvey, canArchiveSurvey, hasSurveyRole } = useAuth();
   const status = lifecycleStatus(row);
@@ -127,18 +134,25 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
       notify(`${blockedActionMessage} Email demos use only persisted survey content.`, 'warning');
       return;
     }
+    demoIntent.current = { key: newIdempotencyKey(), createdAt: Date.now() };
     setDemoDialogOpen(true);
   };
 
   const handleDemoSubmit = async (email, language) => {
     if (actionBlocked) {
+      demoIntent.current = null;
       setDemoDialogOpen(false);
       notify(`${blockedActionMessage} Email demos use only persisted survey content.`, 'warning');
       return;
     }
     setDemoSending(true);
     try {
-      const response = await api.post(`/surveys/${id}/demo-email`, { email, language });
+      const response = await api.post(
+        `/surveys/${id}/demo-email`,
+        { email, language, idempotencyCreatedAt: demoIntent.current.createdAt },
+        { headers: { 'Idempotency-Key': demoIntent.current.key } },
+      );
+      demoIntent.current = null;
       setDemoDialogOpen(false);
       notify(response.data?.message || 'Demo survey email sent successfully');
     } catch (error) {
@@ -287,7 +301,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         </Box>
       </Dialog>
 
-      <SendDemoDialog open={demoDialogOpen} onClose={() => setDemoDialogOpen(false)} onSubmit={handleDemoSubmit} surveyName={row.name} loading={demoSending} />
+      <SendDemoDialog open={demoDialogOpen} onClose={() => { demoIntent.current = null; setDemoDialogOpen(false); }} onSubmit={handleDemoSubmit} surveyName={row.name} loading={demoSending} />
 
       <Dialog open={Boolean(transition)} onClose={() => !transitioning && setTransition(null)} aria-describedby="transition-description">
         <DialogTitle>{transition === 'close' ? 'Close survey' : 'Reopen survey'}</DialogTitle>

@@ -267,6 +267,17 @@ data "aws_iam_policy_document" "s3_access_policy" {
     resources = [for group in aws_cloudwatch_log_group.runtime : "${group.arn}:*"]
   }
 
+  statement {
+    effect    = "Allow"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["NetworkSurvey/Host"]
+    }
+  }
 
   statement {
     effect    = "Allow"
@@ -328,7 +339,7 @@ data "aws_iam_policy_document" "ec2_assume_role_policy" {
 }
 
 resource "aws_cloudwatch_log_group" "runtime" {
-  for_each = toset(["api", "email-worker", "webhook-worker"])
+  for_each = toset(["api", "email-worker", "webhook-worker", "host"])
 
   name              = "/network-survey/${var.environment}/${each.key}"
   retention_in_days = var.cloudwatch_log_retention_days
@@ -390,6 +401,16 @@ resource "aws_sns_topic_subscription" "operations_email" {
 locals {
   cloudwatch_agent_config_b64 = base64encode(jsonencode({
     agent = { metrics_collection_interval = 60, run_as_user = "root" }
+    metrics = {
+      namespace              = "NetworkSurvey/Host"
+      append_dimensions      = { InstanceId = "$${aws:InstanceId}" }
+      aggregation_dimensions = [["InstanceId"]]
+      metrics_collected = {
+        mem  = { measurement = ["mem_used_percent"] }
+        swap = { measurement = ["swap_used_percent"] }
+        disk = { measurement = ["used_percent", "inodes_free"], resources = ["/"] }
+      }
+    }
     logs = { logs_collected = { files = { collect_list = [
       { file_path = "/home/ubuntu/.pm2/logs/ona-api-out.log", log_group_name = aws_cloudwatch_log_group.runtime["api"].name, log_stream_name = "{instance_id}/stdout", timezone = "UTC" },
       { file_path = "/home/ubuntu/.pm2/logs/ona-api-error.log", log_group_name = aws_cloudwatch_log_group.runtime["api"].name, log_stream_name = "{instance_id}/stderr", timezone = "UTC" },
@@ -397,6 +418,8 @@ locals {
       { file_path = "/home/ubuntu/.pm2/logs/ona-email-worker-error.log", log_group_name = aws_cloudwatch_log_group.runtime["email-worker"].name, log_stream_name = "{instance_id}/stderr", timezone = "UTC" },
       { file_path = "/home/ubuntu/.pm2/logs/ona-email-webhook-worker-out.log", log_group_name = aws_cloudwatch_log_group.runtime["webhook-worker"].name, log_stream_name = "{instance_id}/stdout", timezone = "UTC" },
       { file_path = "/home/ubuntu/.pm2/logs/ona-email-webhook-worker-error.log", log_group_name = aws_cloudwatch_log_group.runtime["webhook-worker"].name, log_stream_name = "{instance_id}/stderr", timezone = "UTC" },
+      { file_path = "/home/ubuntu/.pm2/pm2.log", log_group_name = aws_cloudwatch_log_group.runtime["host"].name, log_stream_name = "{instance_id}/pm2", timezone = "UTC" },
+      { file_path = "/var/log/kern.log", log_group_name = aws_cloudwatch_log_group.runtime["host"].name, log_stream_name = "{instance_id}/kernel", timezone = "UTC" },
     ] } } }
   }))
 
@@ -550,6 +573,206 @@ resource "aws_cloudwatch_metric_alarm" "uncertain_quota_disabled" {
       dimensions  = { Environment = var.environment }
     }
   }
+}
+
+locals {
+  runtime_processes = toset(["api", "email-worker", "webhook-worker"])
+  process_memory_alarm_bytes = {
+    api              = 335544320
+    "email-worker"   = 157286400
+    "webhook-worker" = 157286400
+  }
+  host_runtime_alarms = {
+    memory = { metric = "mem_used_percent", comparison = "GreaterThanThreshold", threshold = 85, statistic = "Maximum" }
+    swap   = { metric = "swap_used_percent", comparison = "GreaterThanThreshold", threshold = 20, statistic = "Maximum" }
+    disk   = { metric = "disk_used_percent", comparison = "GreaterThanThreshold", threshold = 80, statistic = "Maximum" }
+    inodes = { metric = "disk_inodes_free", comparison = "LessThanThreshold", threshold = 10000, statistic = "Minimum" }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "host_runtime" {
+  for_each = local.host_runtime_alarms
+
+  alarm_name          = "${var.name_prefix}host-${each.key}"
+  alarm_description   = "Host ${each.key} pressure requires investigation before process or instance restart."
+  namespace           = "NetworkSurvey/Host"
+  metric_name         = each.value.metric
+  dimensions          = { InstanceId = aws_instance.backend.id }
+  comparison_operator = each.value.comparison
+  threshold           = each.value.threshold
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = each.value.statistic
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "process_heartbeat" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}${each.key}-runtime-heartbeat"
+  alarm_description   = "${each.key} runtime telemetry is absent."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "ProcessHeartbeat"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Minimum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "process_restart_churn" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}${each.key}-restart-churn"
+  alarm_description   = "${each.key} started more than three times in 15 minutes; inspect PM2 and kernel logs."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "ProcessStartCount"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 3
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  period              = 900
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "process_memory" {
+  for_each = local.process_memory_alarm_bytes
+
+  alarm_name          = "${var.name_prefix}${each.key}-memory"
+  alarm_description   = "${each.key} RSS exceeded its reviewed warning threshold; source hosts have no automatic memory restart."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "ProcessRssBytes"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = each.value
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Maximum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "runtime_pressure" {
+  for_each = {
+    for pair in setproduct(local.runtime_processes, ["event-loop", "db-pool"]) : "${pair[0]}-${pair[1]}" => {
+      process     = pair[0]
+      metric      = pair[1] == "event-loop" ? "EventLoopLagMilliseconds" : "DbPoolWaiting"
+      threshold   = pair[1] == "event-loop" ? 500 : 0
+      description = pair[1] == "event-loop" ? "event-loop lag exceeded 500ms" : "PostgreSQL pool waiters persisted"
+    }
+  }
+
+  alarm_name          = "${var.name_prefix}${each.key}"
+  alarm_description   = "${each.value.process} ${each.value.description} for three minutes."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = each.value.metric
+  dimensions          = { Environment = var.environment, Process = each.value.process }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = each.value.threshold
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Maximum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "db_dependency" {
+  for_each = local.runtime_processes
+
+  alarm_name          = "${var.name_prefix}${each.key}-db-dependency"
+  alarm_description   = "${each.key} could not complete its bounded PostgreSQL probe for three minutes."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "DbDependencyHealthy"
+  dimensions          = { Environment = var.environment, Process = each.key }
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  period              = 60
+  statistic           = "Minimum"
+  treat_missing_data  = "breaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_log_metric_filter" "kernel_oom" {
+  name           = "${var.name_prefix}kernel-oom"
+  log_group_name = aws_cloudwatch_log_group.runtime["host"].name
+  pattern        = "?\"Out of memory\" ?\"Killed process\" ?\"oom-kill\""
+
+  metric_transformation {
+    name      = "${var.environment}-KernelOomCount"
+    namespace = "NetworkSurvey/Host"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "critical_system" {
+  name           = "${var.name_prefix}critical-system"
+  log_group_name = aws_cloudwatch_log_group.runtime["host"].name
+  pattern        = "?panic ?segfault ?\"I/O error\" ?\"EXT4-fs\""
+
+  metric_transformation {
+    name      = "${var.environment}-CriticalSystemLogCount"
+    namespace = "NetworkSurvey/Host"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "kernel_oom" {
+  alarm_name          = "${var.name_prefix}kernel-oom"
+  alarm_description   = "Kernel OOM activity detected; inspect RSS, PM2 restarts, and host capacity."
+  namespace           = "NetworkSurvey/Host"
+  metric_name         = "${var.environment}-KernelOomCount"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  period              = 60
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "critical_system" {
+  alarm_name          = "${var.name_prefix}critical-system"
+  alarm_description   = "Kernel panic, segfault, filesystem, or I/O error pattern detected."
+  namespace           = "NetworkSurvey/Host"
+  metric_name         = "${var.environment}-CriticalSystemLogCount"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 1
+  datapoints_to_alarm = 1
+  period              = 60
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.operations_alerts.arn]
+  ok_actions          = [aws_sns_topic.operations_alerts.arn]
+  tags                = var.common_tags
 }
 
 resource "aws_instance" "backend" {

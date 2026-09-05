@@ -1,9 +1,7 @@
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const { nanoid } = require('nanoid');
-const { Pool } = require('pg');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
 const Papa = require('papaparse');
@@ -15,7 +13,7 @@ const { Model, Serializer, Question } = require('survey-core');
 
 dotenvFlow.config();
 
-const { ResendProvider, reserveProviderRateOnClient, synchronousEmailIdentity, unlockAdvisoryLocksAndRelease, validateProdSecondaryResendConfig } = require('./email');
+const { ResendProvider, demoEmailIdempotencyKey, reserveProviderRateOnClient, synchronousEmailIdentity, unlockAdvisoryLocksAndRelease, validateProdSecondaryResendConfig } = require('./email');
 validateProdSecondaryResendConfig(process.env);
 const emailIdentity = synchronousEmailIdentity(process.env);
 const lifecycle = require('./lifecycle');
@@ -23,6 +21,7 @@ const respondentRoster = require('./respondent-roster');
 const { effectiveInstructions } = require('./survey-instructions');
 const { createResendWebhookHandler } = require('./webhooks');
 const { displayedRespondentPredicate, displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
+const { createPool, createDependencyProbe, createHealthHandlers, startRuntimeTelemetry } = require('./runtime-resilience');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -34,17 +33,7 @@ if (!Serializer.findClass('draggableranking')) {
 }
 lifecycle.setSurveyDefinitionValidator(validateSurveyDefinition);
 
-const pool = new Pool({
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME || 'ONA',
-  ssl: process.env.DB_SSL === 'true'
-    ? { ca: process.env.DB_SSL_CA ? fs.readFileSync(process.env.DB_SSL_CA, 'utf8') : undefined,
-        rejectUnauthorized: Boolean(process.env.DB_SSL_CA) }
-    : undefined,
-});
+const pool = createPool(process.env);
 const directSurveyProvider = resendApiKey ? new ResendProvider({ apiKey: resendApiKey }) : null;
 
 async function reserveSynchronousEmailRate(client) {
@@ -129,13 +118,14 @@ function buildSurveyUrl(baseUrl, query, nodeEnv = process.env.NODE_ENV) {
   return url.toString();
 }
 
-async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Network Survey', language = 'en') {
+async function sendDemoMail(email, survey, text, demoToken, idempotencyKey, subject = 'CLA Network Survey', language = 'en') {
   if (!directSurveyProvider) throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
   const link = buildSurveyUrl(process.env.SURVEY_URL, { surveyName: survey.name, demoToken });
   const rendered = require('./email').renderInvitation({ bodyText: text, link, language });
   return invokeSynchronousProvider(email, () => directSurveyProvider.send(
     { from:emailIdentity.sender, ...(emailIdentity.replyTo ? { reply_to:emailIdentity.replyTo } : {}), to: email, subject: `[Demo] ${subject}`, ...rendered },
-    { idempotencyKey: `survey-demo/${crypto.randomUUID()}` }
+    // The caller keeps this logical request key across an ambiguous HTTP retry.
+    { idempotencyKey: demoEmailIdempotencyKey(idempotencyKey) }
   ));
 }
 
@@ -153,6 +143,19 @@ async function executeQuery(query, values = []) {
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
+const dependencyProbe = createDependencyProbe(pool, {
+  timeoutMs: Math.max(250, Number(process.env.HEALTH_DB_TIMEOUT_MS || 2000)),
+});
+// Register health before sessions/body parsing so probes are cheap and cannot
+// trigger session-store DB work from attacker-supplied cookies. Liveness is
+// dependency-free: shared DB failure must not ask the ASG to destroy hosts.
+const { liveness:livenessHandler, dependencies:dependencyHealthHandler, compatibility:compatibilityHealthHandler } = createHealthHandlers(pool, { probe:dependencyProbe });
+app.get('/live', livenessHandler);
+app.get('/ready', dependencyHealthHandler);
+app.get('/health/dependencies', dependencyHealthHandler);
+// Backward-compatible DB health used by singleton ALBs and deploy verification.
+// Strict pool-capacity readiness remains available only on /ready/dependencies.
+app.get('/health', compatibilityHealthHandler);
 
 function getDashboardBaseUrl() {
   return (process.env.DASHBOARD_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
@@ -166,19 +169,25 @@ function buildDashboardUrl(path) {
 
 const DEMO_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
-function createDemoToken(surveyId, surveyName, now = Date.now()) {
+function createDemoToken(surveyId, surveyName, now = Date.now(), nonce = crypto.randomBytes(12).toString('base64url')) {
   const payload = Buffer.from(JSON.stringify({
     type: 'survey-demo',
     surveyId,
     surveyName,
     expiresAt: now + DEMO_TOKEN_TTL_MS,
-    nonce: crypto.randomBytes(12).toString('base64url'),
+    nonce,
   })).toString('base64url');
   const signature = crypto
     .createHmac('sha256', process.env.DEMO_TOKEN_SECRET || process.env.SESSION_SECRET)
     .update(payload)
     .digest('base64url');
   return `d1.${payload}.${signature}`;
+}
+
+function createIdempotentDemoToken(surveyId, surveyName, idempotencyKey, createdAt, secret = process.env.DEMO_TOKEN_SECRET || process.env.SESSION_SECRET) {
+  const nonce = crypto.createHmac('sha256', secret)
+    .update(`demo-email:${surveyId}:${idempotencyKey}`).digest('base64url').slice(0, 16);
+  return createDemoToken(surveyId, surveyName, createdAt, nonce);
 }
 
 function verifyDemoToken(token, now = Date.now()) {
@@ -2400,6 +2409,18 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
   if (!language) {
     return res.status(400).json({ message: 'Language is required.' });
   }
+  const suppliedIdempotencyKey = req.get('Idempotency-Key');
+  const suppliedCreatedAt = Number(req.body.idempotencyCreatedAt);
+  if (suppliedIdempotencyKey && !UUID_RE.test(suppliedIdempotencyKey)) {
+    return res.status(400).json({ message: 'Idempotency-Key must be a UUID when supplied.' });
+  }
+  if (suppliedIdempotencyKey && (
+    !Number.isSafeInteger(suppliedCreatedAt)
+    || suppliedCreatedAt > Date.now() + 5 * 60 * 1000
+    || suppliedCreatedAt <= Date.now() - DEMO_TOKEN_TTL_MS
+  )) {
+    return res.status(400).json({ message: 'A current idempotencyCreatedAt is required with Idempotency-Key.' });
+  }
 
   try {
     const survey = await resolveSurveyForUser(req, res, {
@@ -2416,9 +2437,16 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
       return res.status(404).json({ message: `No ${language} email template is configured for this survey.` });
     }
 
-    const demoToken = createDemoToken(survey.id, survey.name);
+    // Upgraded clients preserve key + creation time across an ambiguous retry,
+    // making both the provider key and signed demo link byte-for-byte stable.
+    // Headerless legacy clients remain accepted with one generated intent.
+    const idempotencyKey = suppliedIdempotencyKey || crypto.randomUUID();
+    const intentCreatedAt = suppliedIdempotencyKey ? suppliedCreatedAt : Date.now();
+    const demoToken = suppliedIdempotencyKey
+      ? createIdempotentDemoToken(survey.id, survey.name, idempotencyKey, intentCreatedAt)
+      : createDemoToken(survey.id, survey.name, intentCreatedAt);
     await sendDemoMail(
-      email.trim(), survey, templateResult.rows[0].text, demoToken,
+      email.trim(), survey, templateResult.rows[0].text, demoToken, idempotencyKey,
       templateResult.rows[0].invitation_subject
     );
     res.status(200).json({ message: `Demo survey sent to ${email.trim()}.` });
@@ -3563,21 +3591,24 @@ app.get('/', async (req, res) => {
   res.status(200).json({ message: 'Health Check: All Good!.' });
 });
 
-app.get('/health', async (req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.status(200).json({ status: 'ok', database: 'ok' });
-  } catch (error) {
-    console.error('Health check failed:', error.message);
-    res.status(503).json({ status: 'error', database: 'unavailable' });
-  }
-});
-
-
 if (require.main === module) {
-  app.listen(port, () => {
+  const telemetry = startRuntimeTelemetry({ pool, processName:'api', env:process.env });
+  const server = app.listen(port, () => {
     console.log(`Server is running on port: ${port}`);
   });
+  let stopping = false;
+  const shutdown = (signal) => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`Received ${signal}; draining API connections`);
+    telemetry.stop();
+    server.close(() => pool.end().finally(() => process.exit(0)));
+    // Exceed the 15s provider/body deadline plus bounded DB lock cleanup, but
+    // remain below PM2's API kill timeout.
+    setTimeout(() => process.exit(1), 28000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 module.exports = {
@@ -3602,6 +3633,7 @@ module.exports = {
   getDashboardBaseUrl,
   buildDashboardUrl,
   createDemoToken,
+  createIdempotentDemoToken,
   verifyDemoToken,
   prepareSurveyForDemo,
   READ_SURVEY_ROLES,
@@ -3631,6 +3663,8 @@ module.exports = {
   insertEmails,
   configuredCorsOrigins,
   buildSurveyUrl,
+  dependencyHealthHandler,
+  livenessHandler,
   displayedRespondentCountExpression,
   isLegacyPlaceholderRespondent,
   surveySummaryRespondentCount,

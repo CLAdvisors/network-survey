@@ -32,6 +32,12 @@ REVISION=$(cat "$SOURCE_DIR/REVISION")
 RELEASE_CAPABILITY_ARGS=()
 if [ "$ENVIRONMENT" = "prod-secondary" ]; then
   RELEASE_CAPABILITY_ARGS+=(--require-prod-secondary-resend-isolation)
+  # Absent only during the prerequisite rollout while ALB still checks /health.
+  # Terraform stamps existing hosts after the migration and every new /live
+  # launch-template host creates this marker before bootstrap.
+  if [ -f "$SERVICE_DIR/alb-live-health-required" ]; then
+    RELEASE_CAPABILITY_ARGS+=(--require-alb-live-health)
+  fi
 fi
 node "$SOURCE_DIR/deploy/validate-release-capabilities.js" "$SOURCE_DIR" "${RELEASE_CAPABILITY_ARGS[@]}"
 test -f "$SOURCE_DIR/api/webhook-worker.js" || { echo "Release lacks dedicated webhook worker" >&2; exit 1; }
@@ -247,7 +253,7 @@ restore_pre_activation_handoff() {
     local previous_revision
     previous_revision=$(cat "$PREVIOUS_RELEASE/REVISION" 2>/dev/null || true)
     if [ -n "$previous_revision" ]; then
-      if [ "$MIGRATION_STARTED" = true ] && ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database; then
+      if [ "$MIGRATION_STARTED" = true ] && ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database "${RELEASE_CAPABILITY_ARGS[@]}"; then
         echo "Previous release is below the post-migration database floor; leaving email controls paused" >&2
         return
       fi
@@ -351,7 +357,7 @@ restore_previous_release() {
   local status=$?
   if [ "$status" -ne 0 ] && [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
     echo "!! Validating previous release before automatic restore" >&2
-    if ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database; then
+    if ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database "${RELEASE_CAPABILITY_ARGS[@]}"; then
       echo "!! Previous release is below the active capability floor; refusing unsafe automatic restore" >&2
       set +e
       run_pm2 stop "$PM2_APP" "$PM2_WORKER" "$PM2_WEBHOOK_WORKER" >/dev/null 2>&1
@@ -386,7 +392,7 @@ restore_previous_release() {
     echo "!! Verifying restored API and fresh paused worker heartbeats before restoring traffic" >&2
     RESTORE_HEALTHY=false
     for _ in $(seq 1 15); do
-      if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && (cd "$PREVIOUS_RELEASE/api" && EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
+      if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && { [ "$ENVIRONMENT" != "prod-secondary" ] || curl -fsS http://localhost:3000/live >/dev/null 2>&1; } && (cd "$PREVIOUS_RELEASE/api" && EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
 require('dotenv').config({path:'.env.prod'});const{Pool}=require('pg');const fs=require('fs');const p=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});Promise.all([p.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID]),p.query(`SELECT 1 FROM email_webhook_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID])]).then(r=>process.exitCode=r.every(x=>x.rowCount)?0:1).catch(()=>process.exitCode=1).finally(()=>p.end());
 NODE
       ); then RESTORE_HEALTHY=true; break; fi
@@ -430,6 +436,7 @@ run_pm2 save
 echo "==> Waiting for health check"
 for i in $(seq 1 15); do
   if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && \
+    { [ "$ENVIRONMENT" != "prod-secondary" ] || curl -fsS http://localhost:3000/live >/dev/null 2>&1; } && \
     run_pm2 jlist | EXPECTED_REVISION="$REVISION" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node -e '
       let input=""; process.stdin.on("data",d=>input+=d); process.stdin.on("end",()=>{const app=JSON.parse(input).find(p=>p.name==="ona-api"); process.exit(app?.pm2_env?.RELEASE_REVISION===process.env.EXPECTED_REVISION&&app?.pm2_env?.DEPLOYMENT_ID===process.env.EXPECTED_DEPLOYMENT_ID?0:1);});
     '; then

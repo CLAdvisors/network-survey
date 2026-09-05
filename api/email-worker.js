@@ -2,15 +2,13 @@
 
 const os = require('os');
 const crypto = require('crypto');
-const fs = require('fs');
 const dotenvFlow = require('dotenv-flow');
-const { Pool } = require('pg');
 const { ResendProvider, buildInvitationPayload, payloadHash, classifyProviderError, sanitizeProviderMessage, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease } = require('./email');
 const { environmentName } = require('./lifecycle');
+const { createPool, createNonOverlappingScheduler, isTransientDatabaseError, startRuntimeTelemetry } = require('./runtime-resilience');
 
 dotenvFlow.config();
 
-function createPool(env=process.env){return new Pool({user:env.DB_USER,password:env.DB_PASSWORD,host:env.DB_HOST,port:env.DB_PORT,database:env.DB_NAME||'ONA',ssl:env.DB_SSL==='true'?{ca:env.DB_SSL_CA?fs.readFileSync(env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(env.DB_SSL_CA)}:undefined});}
 const sleep=(ms)=>new Promise((resolve)=>setTimeout(resolve,ms));
 const isOutsideProviderIdempotencyWindow=(startedAt,now,hours)=>Boolean(startedAt)&&new Date(startedAt).getTime()<=new Date(now).getTime()-hours*3600000;
 const canRetryAmbiguous=({firstProviderStartedAt,providerAttemptCount,createdAt,now,idempotencyHours,maxAttempts,maxAgeHours})=>Boolean(firstProviderStartedAt)&&!isOutsideProviderIdempotencyWindow(firstProviderStartedAt,now,idempotencyHours)&&Number(providerAttemptCount)<maxAttempts&&new Date(createdAt).getTime()>new Date(now).getTime()-maxAgeHours*3600000;
@@ -24,8 +22,11 @@ class DeliveryWorker {
   constructor({pool,provider,env=process.env,clock=()=>new Date(),random=Math.random,sleepFn=sleep,instanceId}={}){
     this.pool=pool;this.env=env;this.environment=environmentName(env);this.rateBudgetEnvironment=env.EMAIL_RATE_BUDGET_ENV||this.environment;this.provider=provider;this.clock=clock;this.random=random;this.sleep=sleepFn;
     this.instanceId=instanceId||`${env.DEPLOYMENT_ID||'local'}/${os.hostname()}/${process.pid}/${crypto.randomUUID()}`;this.release=env.RELEASE_REVISION||env.REVISION||'local';
-    this.leaseSeconds=Math.max(20,Number(env.EMAIL_LEASE_SECONDS||60));this.maxAttempts=Math.max(1,Number(env.EMAIL_MAX_ATTEMPTS||6));this.maxAgeHours=Math.max(1,Number(env.EMAIL_MAX_AGE_HOURS||72));this.idempotencyHours=Math.min(23,Math.max(1,Number(env.EMAIL_PROVIDER_IDEMPOTENCY_HOURS||23)));this.rate=Math.max(1,Number(env.EMAIL_RATE_PER_SECOND||5));this.providerAccountScope=String(env.RESEND_PROVIDER_ACCOUNT_SCOPE||'').trim();this.reminderCapable=Boolean(this.providerAccountScope&&this.providerAccountScope.length<=128);this.stopped=false;this.claiming=false;this.lastError=null;
+    this.leaseSeconds=Math.max(20,Number(env.EMAIL_LEASE_SECONDS||60));this.maxAttempts=Math.max(1,Number(env.EMAIL_MAX_ATTEMPTS||6));this.maxAgeHours=Math.max(1,Number(env.EMAIL_MAX_AGE_HOURS||72));this.idempotencyHours=Math.min(23,Math.max(1,Number(env.EMAIL_PROVIDER_IDEMPOTENCY_HOURS||23)));this.rate=Math.max(1,Number(env.EMAIL_RATE_PER_SECOND||5));this.providerAccountScope=String(env.RESEND_PROVIDER_ACCOUNT_SCOPE||'').trim();this.reminderCapable=Boolean(this.providerAccountScope&&this.providerAccountScope.length<=128);this.stopped=false;this.claiming=false;this.errors=new Map();this.lastError=null;
   }
+  refreshLastError(){this.lastError=[...this.errors.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([source,message])=>`${source}:${message}`).join('; ')||null;}
+  recordError(source,error){this.errors.set(source,String(error?.message||error));this.refreshLastError();}
+  clearError(source){this.errors.delete(source);this.refreshLastError();}
   async heartbeat(){await this.pool.query(`INSERT INTO email_worker_heartbeats(environment,worker_instance,release_revision,enabled,claiming,reminder_capable,provider_account_scope,heartbeat_at,last_error,started_at) VALUES($1,$2,$3,true,$4,$5,$6,now(),$7,now()) ON CONFLICT(environment,worker_instance) DO UPDATE SET release_revision=excluded.release_revision,enabled=true,claiming=excluded.claiming,reminder_capable=excluded.reminder_capable,provider_account_scope=excluded.provider_account_scope,heartbeat_at=now(),last_error=excluded.last_error`,[this.environment,this.instanceId,this.release,this.claiming,this.reminderCapable,this.reminderCapable?this.providerAccountScope:null,this.lastError?bounded(this.lastError):null]);}
   async control(){const result=await this.pool.query('SELECT claiming_enabled,minimum_release FROM email_worker_control WHERE environment=$1',[this.environment]);const row=result.rows[0];return Boolean(row?.claiming_enabled&&(!row.minimum_release||this.release===row.minimum_release));}
   async claim(){const client=await this.pool.connect();try{await client.query('BEGIN');const control=await client.query('SELECT claiming_enabled,minimum_release FROM email_worker_control WHERE environment=$1 FOR SHARE',[this.environment]);if(!control.rows[0]?.claiming_enabled||control.rows[0].minimum_release&&this.release!==control.rows[0].minimum_release){await client.query('COMMIT');return null;}
@@ -108,7 +109,7 @@ class DeliveryWorker {
       else await this.finalizeTerminal(client,current,'failed',error.code||'provider_error',error.message);await client.query('COMMIT');}catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}}
   async finalizeAccepted(row,providerId){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await this.finalizeTerminal(client,row,'accepted',null,null,providerId);if(result.rowCount&&row.launch_kind!=='reminder')await client.query(`UPDATE respondent SET email_sent=true WHERE respondent_id=$1 AND survey_id=$2`,[row.respondent_id,row.survey_id]);await client.query('COMMIT');}catch(error){await client.query('ROLLBACK').catch(()=>{});throw error;}finally{client.release();}}
   async processOne(){const delivery=await this.claim();if(!delivery)return false;const started=await this.startProviderRequest(delivery);if(started.action!=='send'){if(started.action==='rate_wait')await this.sleep(this.rateWaitDelay(started.retryAfterMs));return true;}const outcome=await started.providerResult;if(outcome.error)await this.finalizeFailure(started.row,outcome.error);else await this.finalizeAccepted(started.row,outcome.result.id);return true;}
-  async run(){const heartbeatMs=Math.max(3000,Number(this.env.EMAIL_HEARTBEAT_MS||10000));const timer=setInterval(()=>this.heartbeat().catch((e)=>{this.lastError=e.message;}),heartbeatMs);try{while(!this.stopped){this.claiming=await this.control();await this.heartbeat();if(!this.claiming){await this.sleep(1000);continue;}const didWork=await this.processOne();if(!didWork)await this.sleep(Number(this.env.EMAIL_IDLE_MS||750));}}finally{clearInterval(timer);this.claiming=false;await this.heartbeat().catch(()=>{});}}
+  async run(){const heartbeatMs=Math.max(3000,Number(this.env.EMAIL_HEARTBEAT_MS||10000));const heartbeat=createNonOverlappingScheduler(async()=>{await this.heartbeat();this.clearError('heartbeat');},{intervalMs:heartbeatMs,initialDelayMs:0,onError:(e)=>this.recordError('heartbeat',e)});const telemetry=startRuntimeTelemetry({pool:this.pool,processName:'email-worker',env:this.env});try{while(!this.stopped){try{this.claiming=await this.control();if(!this.claiming){this.clearError('loop');await this.sleep(1000);continue;}const didWork=await this.processOne();this.clearError('loop');if(!didWork)await this.sleep(Number(this.env.EMAIL_IDLE_MS||750));}catch(error){this.claiming=false;if(!isTransientDatabaseError(error))throw error;this.recordError('loop',error);await this.sleep(Math.max(250,Number(this.env.DB_STALL_RETRY_MS||1000)));}}}finally{await heartbeat.stop();telemetry.stop();this.claiming=false;await this.heartbeat().catch(()=>{});}}
   stop(){this.stopped=true;}
 }
 

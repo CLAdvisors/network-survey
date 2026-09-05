@@ -149,6 +149,10 @@ ln -sfn "$LIQUIBASE_DIR/liquibase" /usr/local/bin/liquibase
 set_step configure-service
 SERVICE_DIR=/opt/service
 mkdir -p "$SERVICE_DIR/releases" "$SERVICE_DIR/certs"
+# This launch template is coupled to the /live target-group contract. New hosts
+# must never restore or bootstrap an artifact below that runtime capability.
+touch "$SERVICE_DIR/alb-live-health-required"
+chmod 0644 "$SERVICE_DIR/alb-live-health-required"
 chown -R ubuntu:ubuntu "$SERVICE_DIR"
 
 rds_bundle=$(mktemp /tmp/rds-global-bundle.XXXXXX.pem)
@@ -222,6 +226,19 @@ set_step configure-cloudwatch
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
 {
   "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "metrics": {
+    "namespace": "NetworkSurvey/Host",
+    "append_dimensions": {
+      "AutoScalingGroupName": "$${aws:AutoScalingGroupName}",
+      "InstanceId": "$${aws:InstanceId}"
+    },
+    "aggregation_dimensions": [["AutoScalingGroupName"], ["InstanceId"]],
+    "metrics_collected": {
+      "mem": { "measurement": ["mem_used_percent"] },
+      "swap": { "measurement": ["swap_used_percent"] },
+      "disk": { "measurement": ["used_percent", "inodes_free"], "resources": ["/"] }
+    }
+  },
   "logs": {
     "logs_collected": {
       "files": {
@@ -233,7 +250,9 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
           { "file_path": "/home/ubuntu/.pm2/logs/ona-email-worker-out.log", "log_group_name": "${email_worker_log_group}", "log_stream_name": "{instance_id}/stdout", "timezone": "UTC" },
           { "file_path": "/home/ubuntu/.pm2/logs/ona-email-worker-error.log", "log_group_name": "${email_worker_log_group}", "log_stream_name": "{instance_id}/stderr", "timezone": "UTC" },
           { "file_path": "/home/ubuntu/.pm2/logs/ona-email-webhook-worker-out.log", "log_group_name": "${webhook_worker_log_group}", "log_stream_name": "{instance_id}/stdout", "timezone": "UTC" },
-          { "file_path": "/home/ubuntu/.pm2/logs/ona-email-webhook-worker-error.log", "log_group_name": "${webhook_worker_log_group}", "log_stream_name": "{instance_id}/stderr", "timezone": "UTC" }
+          { "file_path": "/home/ubuntu/.pm2/logs/ona-email-webhook-worker-error.log", "log_group_name": "${webhook_worker_log_group}", "log_stream_name": "{instance_id}/stderr", "timezone": "UTC" },
+          { "file_path": "/home/ubuntu/.pm2/pm2.log", "log_group_name": "${host_log_group}", "log_stream_name": "{instance_id}/pm2", "timezone": "UTC" },
+          { "file_path": "/var/log/kern.log", "log_group_name": "${host_log_group}", "log_stream_name": "{instance_id}/kernel", "timezone": "UTC" }
         ]
       }
     }

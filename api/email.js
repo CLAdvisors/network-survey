@@ -130,6 +130,10 @@ function payloadHash(payload) {
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
+function demoEmailIdempotencyKey(demoToken) {
+  return `survey-demo/${crypto.createHash('sha256').update(String(demoToken)).digest('hex')}`;
+}
+
 function sanitizeProviderMessage(value) {
   return String(value || 'Email provider request failed').replace(/[\r\n\t]+/g, ' ').slice(0, 500);
 }
@@ -159,6 +163,7 @@ class ResendProvider {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     let response;
+    let result = {};
     try {
       response = await this.fetchImpl(this.endpoint, {
         method: 'POST',
@@ -170,20 +175,32 @@ class ResendProvider {
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
+      // Keep the same deadline armed through body consumption. A provider can
+      // accept an idempotent request and then stall before returning its ID.
+      result = await response.json();
     } catch (error) {
       const cause = error?.cause;
       const detail = [error?.message, cause?.message, cause?.code].filter(Boolean).join(' ');
-      // fetch rejections cannot prove whether bytes crossed the provider boundary.
-      throw new ProviderError(error?.name === 'AbortError' ? 'Provider request timed out' : detail || 'Provider network request failed', {
-        code: error?.name === 'AbortError' ? 'timeout' : String(cause?.code || 'network_error').toLowerCase(),
+      // Once a non-2xx status is known, retain its definitive HTTP and
+      // Retry-After semantics even if its body stalls until the deadline.
+      if (response && !response.ok) {
+        throw new ProviderError(`Provider returned HTTP ${response.status}`, {
+          code: `http_${response.status}`,
+          status: response.status,
+          retryAfter: response.headers?.get?.('retry-after') || null,
+        });
+      }
+      if (error?.name === 'AbortError') {
+        throw new ProviderError('Provider request timed out', { code:'timeout', uncertain:true });
+      }
+      throw new ProviderError(detail || 'Provider network or response-body failure', {
+        code: String(cause?.code || (response ? 'invalid_response_body' : 'network_error')).toLowerCase(),
         uncertain: true,
       });
     } finally {
       clearTimeout(timeout);
     }
 
-    let result = {};
-    try { result = await response.json(); } catch { /* sanitized generic error below */ }
     if (!response.ok || result?.error) {
       const providerError = result?.error || result;
       throw new ProviderError(providerError?.message || `Provider returned HTTP ${response.status}`, {
@@ -251,4 +268,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease };
+module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, demoEmailIdempotencyKey, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease };

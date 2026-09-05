@@ -43,6 +43,7 @@ const MAX_CANARY_POLL_MS = 300000;
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const bounded = (value, length = 500) => String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, length);
 const canaryPollInterval = (value) => {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return DEFAULT_CANARY_POLL_MS;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_CANARY_POLL_MS;
   return Math.max(MIN_CANARY_POLL_MS, Math.min(MAX_CANARY_POLL_MS, Math.floor(parsed)));

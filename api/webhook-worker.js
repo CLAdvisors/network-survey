@@ -36,9 +36,17 @@ const SUPPRESSION_REASONS = Object.freeze({
 });
 const TERMINAL_EVENT_STATES = new Set(['processed', 'ignored', 'dead_letter']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DEFAULT_CANARY_POLL_MS = 60000;
+const MIN_CANARY_POLL_MS = 10000;
+const MAX_CANARY_POLL_MS = 300000;
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const bounded = (value, length = 500) => String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, length);
+const canaryPollInterval = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_CANARY_POLL_MS;
+  return Math.max(MIN_CANARY_POLL_MS, Math.min(MAX_CANARY_POLL_MS, Math.floor(parsed)));
+};
 const normalizeAddress = (value) => typeof value === 'string' ? value.trim().toLowerCase() : '';
 const validAddress = (value) => {
   const normalized = normalizeAddress(value);
@@ -130,6 +138,8 @@ class WebhookWorker {
     this.maxAttempts = Math.max(1, Number(env.RESEND_WEBHOOK_MAX_ATTEMPTS || 12));
     this.maxAgeHours = Math.max(1, Number(env.RESEND_WEBHOOK_MAX_AGE_HOURS || 72));
     this.unmatchedDays = Math.max(1, Number(env.RESEND_WEBHOOK_UNMATCHED_DAYS || 7));
+    this.canaryPollMs = canaryPollInterval(env.RESEND_WEBHOOK_CANARY_POLL_MS);
+    this.nextCanaryPollAt = 0;
     this.stopped = false;
     this.processing = false;
     this.errors = new Map();
@@ -789,8 +799,12 @@ class WebhookWorker {
     const event = await this.claim();
     if (event) { await this.process(event); return true; }
     if (this.provider) {
-      const canary = await this.claimCanary();
-      if (canary) { await this.processCanary(canary); return true; }
+      const now = this.clock().getTime();
+      if (now >= this.nextCanaryPollAt) {
+        this.nextCanaryPollAt = now + this.canaryPollMs;
+        const canary = await this.claimCanary();
+        if (canary) { await this.processCanary(canary); return true; }
+      }
     }
     return false;
   }

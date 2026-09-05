@@ -6,16 +6,28 @@ set -euo pipefail
 
 ASG_NAME=${1:?usage: verify-prod-secondary-live-targets.sh <asg-name>}
 
+readarray -t TARGET_GROUPS < <(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$ASG_NAME" \
+  --query 'AutoScalingGroups[0].TargetGroupARNs' --output text | tr '\t' '\n' | sed '/^$/d')
+[ "${#TARGET_GROUPS[@]}" -eq 1 ] || { echo "Refusing /live migration: expected exactly one ASG target group" >&2; exit 1; }
+
+CURRENT_HEALTH_PATH=$(aws elbv2 describe-target-groups --target-group-arns "${TARGET_GROUPS[0]}" \
+  --query 'TargetGroups[0].HealthCheckPath' --output text)
+if [ "$CURRENT_HEALTH_PATH" = /live ]; then
+  echo "Target group already uses /live; migration proof is not required for this recovery/apply."
+  exit 0
+fi
+[ -n "$CURRENT_HEALTH_PATH" ] && [ "$CURRENT_HEALTH_PATH" != None ] || {
+  echo "Refusing /live migration: current target-group health path is unknown" >&2
+  exit 1
+}
+echo "Target group currently uses $CURRENT_HEALTH_PATH; proving every target before /live migration."
+
 readarray -t ASG_INSTANCES < <(aws autoscaling describe-auto-scaling-groups \
   --auto-scaling-group-names "$ASG_NAME" \
   --query 'AutoScalingGroups[0].Instances[?LifecycleState==`InService` && HealthStatus==`Healthy`].InstanceId' \
   --output text | tr '\t' '\n' | sed '/^$/d' | sort)
-readarray -t TARGET_GROUPS < <(aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names "$ASG_NAME" \
-  --query 'AutoScalingGroups[0].TargetGroupARNs' --output text | tr '\t' '\n' | sed '/^$/d')
-
 [ "${#ASG_INSTANCES[@]}" -ge 2 ] || { echo "Refusing /live migration: expected at least two healthy InService instances" >&2; exit 1; }
-[ "${#TARGET_GROUPS[@]}" -eq 1 ] || { echo "Refusing /live migration: expected exactly one ASG target group" >&2; exit 1; }
 
 readarray -t REGISTERED_TARGETS < <(aws elbv2 describe-target-health --target-group-arn "${TARGET_GROUPS[0]}" \
   --query 'TargetHealthDescriptions[?TargetHealth.State!=`draining`].Target.Id' \

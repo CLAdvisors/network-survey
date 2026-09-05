@@ -342,6 +342,10 @@ test('prod-secondary replacement health is process-only and activation controls 
   assert.match(applyWorkflow, /verify-prod-secondary-live-targets\.sh/);
   assert.match(applyWorkflow, /Restore prod-secondary Terraform credentials/);
   const preflight = fs.readFileSync(path.resolve(__dirname, '../../scripts/deploy/verify-prod-secondary-live-targets.sh'), 'utf8');
+  assert.match(preflight, /describe-target-groups/);
+  assert.match(preflight, /CURRENT_HEALTH_PATH/);
+  assert.match(preflight, /if \[ "\$CURRENT_HEALTH_PATH" = \/live \][\s\S]*exit 0/);
+  assert.ok(preflight.indexOf('CURRENT_HEALTH_PATH') < preflight.indexOf('ASG_INSTANCES'), 'already-migrated recovery must bypass host-health checks');
   assert.match(preflight, /REGISTERED_TARGETS/);
   assert.match(preflight, /http:\/\/localhost:3000\/live/);
   for (const gate of ['EMAIL_CLAIMING_ENABLED=false', 'EMAIL_SENDING_ENABLED=false', 'WEBHOOK_PROCESSING_ENABLED=false']) {

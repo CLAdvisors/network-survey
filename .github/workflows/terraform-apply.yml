@@ -110,6 +110,32 @@ jobs:
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform validate
 
+      # The prod-secondary target group moves from /health to /live. Prove the
+      # endpoint on every currently registered host using the narrower deploy
+      # role before allowing the Terraform role to plan or apply that change.
+      - name: Configure prod-secondary deploy preflight credentials
+        if: ${{ inputs.environment == 'prod-secondary' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Verify every prod-secondary target serves /live
+        if: ${{ inputs.environment == 'prod-secondary' }}
+        env:
+          API_ASG_NAME: ${{ vars.API_ASG_NAME }}
+        run: |
+          set -euo pipefail
+          test -n "$API_ASG_NAME" || { echo 'API_ASG_NAME is required for /live migration preflight' >&2; exit 1; }
+          scripts/deploy/verify-prod-secondary-live-targets.sh "$API_ASG_NAME"
+
+      - name: Restore prod-secondary Terraform credentials
+        if: ${{ inputs.environment == 'prod-secondary' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
       - name: Terraform plan
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         env:

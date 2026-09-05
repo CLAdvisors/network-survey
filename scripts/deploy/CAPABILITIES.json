@@ -5,6 +5,7 @@
   "suppression_enforcement": 1,
   "reminder_provider_boundary": 3,
   "prod_secondary_resend_isolation": 1,
+  "alb_live_health": 1,
   "schema": {
     "email_delivery": 6,
     "webhook_delivery_truth": 1,

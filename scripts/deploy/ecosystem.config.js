@@ -6,6 +6,8 @@
 const memoryLimit = (limit) => process.env.EMAIL_WORKER_ENV === 'prod-secondary'
   ? { max_memory_restart: limit }
   : {};
+// PM2 bounds consecutive starts that fail before min_uptime. Later recurring
+// failures are alarmed operationally; max_restarts is not a lifetime budget.
 const failureContainment = {
   autorestart: true,
   min_uptime: '30s',

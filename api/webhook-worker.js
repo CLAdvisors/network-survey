@@ -132,20 +132,25 @@ class WebhookWorker {
     this.unmatchedDays = Math.max(1, Number(env.RESEND_WEBHOOK_UNMATCHED_DAYS || 7));
     this.stopped = false;
     this.processing = false;
+    this.errors = new Map();
     this.lastError = null;
-    this.lastErrorSource = null;
+  }
+
+  refreshLastError() {
+    this.lastError = [...this.errors.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([source, message]) => `${source}:${message}`)
+      .join('; ') || null;
   }
 
   recordError(source, error) {
-    this.lastError = String(error?.message || error);
-    this.lastErrorSource = source;
+    this.errors.set(source, String(error?.message || error));
+    this.refreshLastError();
   }
 
   clearError(source) {
-    if (this.lastErrorSource === source) {
-      this.lastError = null;
-      this.lastErrorSource = null;
-    }
+    this.errors.delete(source);
+    this.refreshLastError();
   }
 
   backoff(attempt) {
@@ -752,6 +757,7 @@ class WebhookWorker {
       if (!await this.markCanarySending(canary,client)) return;
       const result = await this.provider.send(this.buildCanaryPayload(canary), { idempotencyKey:`webhook-canary/${canary.canary_token}` });
       await this.markCanarySent(canary,result.id,client);
+      this.clearError('canary');
     } catch (error) {
       await client.query(`UPDATE email_webhook_canary_state SET status='retry_wait',next_run_at=now()+interval '15 minutes',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,last_error_code='canary_send_failed',last_error_message=$3,updated_at=now() WHERE environment=$1 AND lease_token=$2`, [this.environment,canary.lease_token,bounded(error.message)]).catch(()=>{});
       this.recordError('canary', new Error(bounded(error.message)));

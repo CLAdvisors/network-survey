@@ -69,9 +69,14 @@ variable "db_subnet_cidrs" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type used by the private ASG."
+  description = "Reviewed EC2 instance type used by the private ASG; PM2 RSS tripwires require the 2 GiB t3.small capacity envelope."
   type        = string
   default     = "t3.small"
+
+  validation {
+    condition     = var.instance_type == "t3.small"
+    error_message = "prod-secondary runtime containment is supported only on t3.small; review memory limits before changing size."
+  }
 }
 
 variable "ami_id" {

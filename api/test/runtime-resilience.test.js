@@ -6,12 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { Pool } = require('pg');
-const { ResendProvider, classifyProviderError } = require('../email');
+const { ResendProvider, classifyProviderError, demoEmailIdempotencyKey } = require('../email');
 const { DeliveryWorker } = require('../email-worker');
+const { WebhookWorker } = require('../webhook-worker');
 const {
   createDependencyProbe,
   createHealthHandlers,
   createNonOverlappingScheduler,
+  guardCheckedOutClient,
   isTransientDatabaseError,
   poolConfigFromEnv,
   probeDatabase,
@@ -49,6 +51,35 @@ test('node-postgres rejects a hung socket acquisition within the configured dead
   clearTimeout(keepAlive);
   assert.ok(Date.now() - started < 250);
   await pool.end();
+});
+
+test('checked-out clients are destroyed after uncancelled query and socket timeouts, including rollback paths', async () => {
+  const released = [];
+  let calls = 0;
+  const timeout = new Error('Query read timeout');
+  const client = guardCheckedOutClient({
+    query:async () => {
+      calls += 1;
+      if (calls === 1) throw timeout;
+      return { rows:[] }; // transaction catch may still attempt ROLLBACK
+    },
+    release:(error) => released.push(error),
+  });
+  try { await client.query('SELECT pg_sleep(60)'); }
+  catch (error) { await client.query('ROLLBACK'); }
+  client.release();
+  assert.equal(released[0], timeout, 'a later successful rollback must not clear the poison');
+
+  const socket = new Error('socket hang up');
+  socket.code = 'ECONNRESET';
+  const socketReleased = [];
+  const socketClient = guardCheckedOutClient({
+    query:async () => { throw socket; },
+    release:(error) => socketReleased.push(error),
+  });
+  await assert.rejects(socketClient.query('SELECT 1'), /socket hang up/);
+  socketClient.release();
+  assert.equal(socketReleased[0], socket);
 });
 
 test('hung database query fails its health deadline and concurrent probes are single-flight', async () => {
@@ -193,6 +224,35 @@ test('liveness is dependency-free while readiness fails closed on DB or pool sat
   await handlers.dependencies({}, ready);
   assert.equal(ready.statusCode, 503);
   assert.deepEqual(ready.body, { status:'error', database:'unavailable', pool:'saturated' });
+
+  const contendedPool = { totalCount:10, idleCount:0, waitingCount:2, options:{ max:10 } };
+  const singletonHandlers = createHealthHandlers(contendedPool, { probe:async () => ({ ok:true }) });
+  const compatibility = response();
+  await singletonHandlers.compatibility({}, compatibility);
+  assert.equal(compatibility.statusCode, 200, 'recoverable contention must not evict a singleton target');
+  assert.deepEqual(compatibility.body, { status:'ok', database:'ok', pool:'contended' });
+});
+
+test('worker errors are retained per source and clear only after that source recovers', () => {
+  const delivery = new DeliveryWorker({ pool:{}, provider:{}, env:{ RESEND_PROVIDER_ACCOUNT_SCOPE:'test' } });
+  delivery.recordError('heartbeat', new Error('heartbeat failed'));
+  delivery.recordError('loop', new Error('query failed'));
+  delivery.clearError('heartbeat');
+  assert.match(delivery.lastError, /loop:query failed/);
+  assert.doesNotMatch(delivery.lastError, /heartbeat/);
+
+  const webhook = new WebhookWorker({ pool:{}, provider:null, env:{ RESEND_PROVIDER_ACCOUNT_SCOPE:'test' } });
+  webhook.recordError('maintenance', new Error('purge failed'));
+  webhook.recordError('canary', new Error('canary failed'));
+  webhook.clearError('canary');
+  assert.equal(webhook.lastError, 'maintenance:purge failed');
+});
+
+test('demo email retries reuse one provider idempotency key', () => {
+  const token = 'signed-demo-token';
+  assert.equal(demoEmailIdempotencyKey(token), demoEmailIdempotencyKey(token));
+  assert.notEqual(demoEmailIdempotencyKey(token), demoEmailIdempotencyKey(`${token}-other`));
+  assert.doesNotMatch(demoEmailIdempotencyKey(token), /signed-demo-token/);
 });
 
 test('runtime telemetry emits the process start synchronously when runtime starts', () => {
@@ -266,9 +326,24 @@ test('prod-secondary replacement health is process-only and activation controls 
   assert.match(terraform, /health_check_grace_period\s+= 1800/);
   assert.match(terraform, /instance_warmup\s+= 2700/);
   assert.match(terraform, /metric_name\s+= "DbDependencyHealthy"/);
+  assert.match(terraform, /pattern\s+= "\?\\"Out of memory\\" \?\\"Killed process\\" \?\\"oom-kill\\""/);
+  assert.match(terraform, /\?\\"EXT4-fs\\"/);
+  assert.match(terraform, /\$\{var\.environment\}-KernelOomCount/);
   assert.match(terraform, /max_healthy_percentage\s+= 150/);
   const sharedBackendVariables = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/api_backend/variables.tf'), 'utf8');
   assert.match(sharedBackendVariables, /variable "health_check_path"[\s\S]*default\s+= "\/health"/);
+  const sharedBackend = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/api_backend/main.tf'), 'utf8');
+  assert.match(sharedBackend, /\?\\"oom-kill\\"/);
+  assert.match(sharedBackend, /\?\\"EXT4-fs\\"/);
+  assert.match(sharedBackend, /\$\{var\.environment\}-KernelOomCount/);
+  const prodSecondaryVariables = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/prod_secondary_platform/variables.tf'), 'utf8');
+  assert.match(prodSecondaryVariables, /condition\s+= var\.instance_type == "t3\.small"/);
+  const applyWorkflow = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/terraform-apply.yml'), 'utf8');
+  assert.match(applyWorkflow, /verify-prod-secondary-live-targets\.sh/);
+  assert.match(applyWorkflow, /Restore prod-secondary Terraform credentials/);
+  const preflight = fs.readFileSync(path.resolve(__dirname, '../../scripts/deploy/verify-prod-secondary-live-targets.sh'), 'utf8');
+  assert.match(preflight, /REGISTERED_TARGETS/);
+  assert.match(preflight, /http:\/\/localhost:3000\/live/);
   for (const gate of ['EMAIL_CLAIMING_ENABLED=false', 'EMAIL_SENDING_ENABLED=false', 'WEBHOOK_PROCESSING_ENABLED=false']) {
     assert.match(terraform, new RegExp(gate));
   }

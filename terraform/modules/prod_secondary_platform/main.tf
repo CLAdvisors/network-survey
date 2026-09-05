@@ -1103,10 +1103,10 @@ resource "aws_cloudwatch_metric_alarm" "db_dependency" {
 resource "aws_cloudwatch_log_metric_filter" "kernel_oom" {
   name           = "${var.name_prefix}-kernel-oom"
   log_group_name = aws_cloudwatch_log_group.runtime["host"].name
-  pattern        = "?\"Out of memory\" ?\"Killed process\" ?oom-kill"
+  pattern        = "?\"Out of memory\" ?\"Killed process\" ?\"oom-kill\""
 
   metric_transformation {
-    name      = "KernelOomCount"
+    name      = "${var.environment}-KernelOomCount"
     namespace = "NetworkSurvey/Host"
     value     = "1"
   }
@@ -1115,10 +1115,10 @@ resource "aws_cloudwatch_log_metric_filter" "kernel_oom" {
 resource "aws_cloudwatch_log_metric_filter" "critical_system" {
   name           = "${var.name_prefix}-critical-system"
   log_group_name = aws_cloudwatch_log_group.runtime["host"].name
-  pattern        = "?panic ?segfault ?\"I/O error\" ?EXT4-fs"
+  pattern        = "?panic ?segfault ?\"I/O error\" ?\"EXT4-fs\""
 
   metric_transformation {
-    name      = "CriticalSystemLogCount"
+    name      = "${var.environment}-CriticalSystemLogCount"
     namespace = "NetworkSurvey/Host"
     value     = "1"
   }
@@ -1126,8 +1126,8 @@ resource "aws_cloudwatch_log_metric_filter" "critical_system" {
 
 resource "aws_cloudwatch_metric_alarm" "critical_host_logs" {
   for_each = {
-    oom      = { metric = "KernelOomCount", description = "Kernel OOM activity detected; inspect process RSS and PM2 restart history immediately." }
-    critical = { metric = "CriticalSystemLogCount", description = "Kernel panic, segfault, filesystem, or I/O error pattern detected." }
+    oom      = { metric = "${var.environment}-KernelOomCount", description = "Kernel OOM activity detected; inspect process RSS and PM2 restart history immediately." }
+    critical = { metric = "${var.environment}-CriticalSystemLogCount", description = "Kernel panic, segfault, filesystem, or I/O error pattern detected." }
   }
 
   alarm_name          = "${var.name_prefix}-host-${each.key}-logs"

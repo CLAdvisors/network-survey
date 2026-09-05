@@ -13,7 +13,7 @@ const { Model, Serializer, Question } = require('survey-core');
 
 dotenvFlow.config();
 
-const { ResendProvider, reserveProviderRateOnClient, synchronousEmailIdentity, unlockAdvisoryLocksAndRelease, validateProdSecondaryResendConfig } = require('./email');
+const { ResendProvider, demoEmailIdempotencyKey, reserveProviderRateOnClient, synchronousEmailIdentity, unlockAdvisoryLocksAndRelease, validateProdSecondaryResendConfig } = require('./email');
 validateProdSecondaryResendConfig(process.env);
 const emailIdentity = synchronousEmailIdentity(process.env);
 const lifecycle = require('./lifecycle');
@@ -118,13 +118,14 @@ function buildSurveyUrl(baseUrl, query, nodeEnv = process.env.NODE_ENV) {
   return url.toString();
 }
 
-async function sendDemoMail(email, survey, text, demoToken, subject = 'CLA Network Survey', language = 'en') {
+async function sendDemoMail(email, survey, text, demoToken, idempotencyKey, subject = 'CLA Network Survey', language = 'en') {
   if (!directSurveyProvider) throw new Error('Missing RESEND_KEY or RESEND_API_KEY environment variable');
   const link = buildSurveyUrl(process.env.SURVEY_URL, { surveyName: survey.name, demoToken });
   const rendered = require('./email').renderInvitation({ bodyText: text, link, language });
   return invokeSynchronousProvider(email, () => directSurveyProvider.send(
     { from:emailIdentity.sender, ...(emailIdentity.replyTo ? { reply_to:emailIdentity.replyTo } : {}), to: email, subject: `[Demo] ${subject}`, ...rendered },
-    { idempotencyKey: `survey-demo/${crypto.randomUUID()}` }
+    // The caller keeps this logical request key across an ambiguous HTTP retry.
+    { idempotencyKey: demoEmailIdempotencyKey(idempotencyKey) }
   ));
 }
 
@@ -148,12 +149,13 @@ const dependencyProbe = createDependencyProbe(pool, {
 // Register health before sessions/body parsing so probes are cheap and cannot
 // trigger session-store DB work from attacker-supplied cookies. Liveness is
 // dependency-free: shared DB failure must not ask the ASG to destroy hosts.
-const { liveness:livenessHandler, dependencies:dependencyHealthHandler } = createHealthHandlers(pool, { probe:dependencyProbe });
+const { liveness:livenessHandler, dependencies:dependencyHealthHandler, compatibility:compatibilityHealthHandler } = createHealthHandlers(pool, { probe:dependencyProbe });
 app.get('/live', livenessHandler);
 app.get('/ready', dependencyHealthHandler);
 app.get('/health/dependencies', dependencyHealthHandler);
-// Backward-compatible dependency health used by deploy verification, not ALB.
-app.get('/health', dependencyHealthHandler);
+// Backward-compatible DB health used by singleton ALBs and deploy verification.
+// Strict pool-capacity readiness remains available only on /ready/dependencies.
+app.get('/health', compatibilityHealthHandler);
 
 function getDashboardBaseUrl() {
   return (process.env.DASHBOARD_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
@@ -2401,6 +2403,10 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
   if (!language) {
     return res.status(400).json({ message: 'Language is required.' });
   }
+  const idempotencyKey = req.get('Idempotency-Key');
+  if (!UUID_RE.test(String(idempotencyKey || ''))) {
+    return res.status(400).json({ message: 'A valid Idempotency-Key is required.' });
+  }
 
   try {
     const survey = await resolveSurveyForUser(req, res, {
@@ -2419,7 +2425,7 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
 
     const demoToken = createDemoToken(survey.id, survey.name);
     await sendDemoMail(
-      email.trim(), survey, templateResult.rows[0].text, demoToken,
+      email.trim(), survey, templateResult.rows[0].text, demoToken, idempotencyKey,
       templateResult.rows[0].invitation_subject
     );
     res.status(200).json({ message: `Demo survey sent to ${email.trim()}.` });

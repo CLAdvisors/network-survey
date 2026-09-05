@@ -2205,6 +2205,9 @@ test('rollback capability validation permits no-reminder artifacts, rejects shar
   const unisolated=validate({...base,reminder_provider_boundary:3},'--require-prod-secondary-resend-isolation');
   assert.notEqual(unisolated.status,0);assert.match(unisolated.stderr,/prod-secondary Resend isolation/);
   assert.equal(validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1},'--require-prod-secondary-resend-isolation').status,0);
+  const noLive=validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1},'--require-alb-live-health');
+  assert.notEqual(noLive.status,0);assert.match(noLive.stderr,/ALB \/live health capability/);
+  assert.equal(validate({...base,reminder_provider_boundary:3,prod_secondary_resend_isolation:1,alb_live_health:1},'--require-alb-live-health').status,0);
 });
 
 test('rollback database validation uses the installed runtime and enforces provider-binding capability 3', (t) => {
@@ -2228,6 +2231,8 @@ test('rollback database validation uses the installed runtime and enforces provi
   const rollback=fs.readFileSync(path.join(__dirname,'../../.github/workflows/rollback-api.yml'),'utf8');
   assert.match(rollback,/TRUSTED_VALIDATOR_B64=.*validate-release-capabilities\.js/);
   assert.match(rollback,/node \/tmp\/ona-trusted-release-validator\.js \/tmp\/ona-deploy --database --runtime-api-dir \/opt\/service\/current\/api/);
+  assert.match(rollback,/--require-alb-live-health/);
+  assert.match(rollback,/--require-prod-secondary-resend-isolation/);
 });
 
 test('password reset request stores only token hash and returns raw token only with explicit manual-delivery flag', async (t) => {

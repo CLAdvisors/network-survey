@@ -6,6 +6,7 @@ const path = require('path');
 const releaseDir = path.resolve(process.argv[2] || '.');
 const checkDatabase = process.argv.includes('--database');
 const requireProdSecondaryResendIsolation = process.argv.includes('--require-prod-secondary-resend-isolation');
+const requireAlbLiveHealth = process.argv.includes('--require-alb-live-health');
 const runtimeApiDirIndex = process.argv.indexOf('--runtime-api-dir');
 if (runtimeApiDirIndex >= 0 && !process.argv[runtimeApiDirIndex + 1]) throw new Error('--runtime-api-dir requires a path');
 const runtimeApiDir = runtimeApiDirIndex >= 0
@@ -23,6 +24,12 @@ try {
 if (marker.format_version !== 1) throw new Error('unsupported capability marker format');
 if (requireProdSecondaryResendIsolation && marker.prod_secondary_resend_isolation !== 1) {
   throw new Error('release lacks required prod-secondary Resend isolation capability');
+}
+if (requireAlbLiveHealth && marker.alb_live_health !== 1) {
+  throw new Error('release lacks required dependency-free ALB /live health capability');
+}
+if (marker.alb_live_health !== undefined && marker.alb_live_health !== 1) {
+  throw new Error('release has an invalid ALB /live health capability');
 }
 for (const capability of required) {
   if (!Number.isSafeInteger(marker[capability]) || marker[capability] < 1) {

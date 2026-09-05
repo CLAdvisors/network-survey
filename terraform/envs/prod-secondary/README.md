@@ -62,9 +62,9 @@ increase of about $15.18/month, excluding taxes, data transfer, storage, and any
 surplus CPU credits. Actual billing depends on purchasing model and account
 pricing.
 
-Rollback is a forward ASG refresh: cancel any active failing refresh, restore
-`instance_type = "t3.micro"`, confirm the pinned AMI and previous artifact are
-still usable, review the target-only plan, and apply it through the approved
-prod-secondary workflow. That creates another launch-template version and rolls
-both hosts again; it does not restore terminated instances in place. Follow the
-host-bootstrap runbook to preserve healthy targets and verify each replacement.
+A `t3.micro` rollback is not supported while the reviewed prod-secondary PM2
+RSS tripwires are active: its 1 GiB envelope cannot preserve the documented
+OS/agent headroom. Roll back application artifacts only to releases satisfying
+the `/live` and durable database capability floors. Any future host resize must
+first review and update process limits, alarms, and capacity evidence in a
+separate approved change; it then proceeds as a forward ASG refresh.

@@ -41,8 +41,57 @@ function poolConfigFromEnv(env = process.env) {
   };
 }
 
+function poisonsDatabaseClient(error) {
+  const code = String(error?.code || '').toUpperCase();
+  return ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH'].includes(code)
+    || /^08/.test(code)
+    || /query read timeout|connection terminated|connection ended unexpectedly|socket hang up/i.test(String(error?.message || ''));
+}
+
+function guardCheckedOutClient(client) {
+  if (!client || client.__runtimeResilienceGuarded) return client;
+  const originalQuery = client.query.bind(client);
+  const originalRelease = client.release.bind(client);
+  let poison = null;
+  Object.defineProperty(client, '__runtimeResilienceGuarded', { value:true, configurable:true });
+  client.query = (...args) => {
+    const callbackIndex = typeof args[args.length - 1] === 'function' ? args.length - 1 : -1;
+    if (callbackIndex >= 0) {
+      const callback = args[callbackIndex];
+      args[callbackIndex] = (error, ...values) => {
+        if (poisonsDatabaseClient(error)) poison = poison || error;
+        callback(error, ...values);
+      };
+      return originalQuery(...args);
+    }
+    const result = originalQuery(...args);
+    if (!result || typeof result.catch !== 'function') return result;
+    return result.catch((error) => {
+      if (poisonsDatabaseClient(error)) poison = poison || error;
+      throw error;
+    });
+  };
+  client.release = (error) => {
+    client.query = originalQuery;
+    client.release = originalRelease;
+    delete client.__runtimeResilienceGuarded;
+    return originalRelease(error || poison || undefined);
+  };
+  return client;
+}
+
 function createPool(env = process.env) {
   const pool = new Pool(poolConfigFromEnv(env));
+  const originalConnect = pool.connect.bind(pool);
+  pool.connect = (callback) => {
+    if (typeof callback === 'function') {
+      return originalConnect((error, client) => {
+        const guarded = guardCheckedOutClient(client);
+        callback(error, guarded, guarded?.release);
+      });
+    }
+    return originalConnect().then(guardCheckedOutClient);
+  };
   pool.on('error', (error) => {
     console.error('Idle PostgreSQL client error:', String(error?.message || error).slice(0, 300));
   });
@@ -106,20 +155,29 @@ function createDependencyProbe(pool, { timeoutMs = 2500, cacheMs = 1000, clock =
 }
 
 function createHealthHandlers(pool, { probe = createDependencyProbe(pool) } = {}) {
+  const dependencyStatus = async (res, { requirePoolCapacity }) => {
+    const database = await probe();
+    const snapshot = poolSnapshot(pool);
+    const poolContended = snapshot.max > 0 && snapshot.waiting > 0;
+    const poolAvailable = !requirePoolCapacity || !poolContended;
+    const ready = database.ok && poolAvailable;
+    res.status(ready ? 200 : 503).json({
+      status: ready ? 'ok' : 'error',
+      database: database.ok ? 'ok' : 'unavailable',
+      pool: poolContended ? (requirePoolCapacity ? 'saturated' : 'contended') : 'ok',
+    });
+  };
   return {
     liveness(req, res) {
       res.status(200).json({ status:'ok', process:'live' });
     },
-    async dependencies(req, res) {
-      const database = await probe();
-      const snapshot = poolSnapshot(pool);
-      const poolAvailable = snapshot.max === 0 || snapshot.waiting === 0;
-      const ready = database.ok && poolAvailable;
-      res.status(ready ? 200 : 503).json({
-        status: ready ? 'ok' : 'error',
-        database: database.ok ? 'ok' : 'unavailable',
-        pool: poolAvailable ? 'ok' : 'saturated',
-      });
+    dependencies(req, res) {
+      return dependencyStatus(res, { requirePoolCapacity:true });
+    },
+    compatibility(req, res) {
+      // Singleton ALBs retain /health. Recoverable pool contention must not
+      // evict their only target; /ready remains the strict capacity signal.
+      return dependencyStatus(res, { requirePoolCapacity:false });
     },
   };
 }
@@ -217,7 +275,9 @@ module.exports = {
   createHealthHandlers,
   createNonOverlappingScheduler,
   createPool,
+  guardCheckedOutClient,
   isTransientDatabaseError,
+  poisonsDatabaseClient,
   poolConfigFromEnv,
   poolSnapshot,
   probeDatabase,

@@ -119,11 +119,10 @@ jobs:
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: |
           set -euo pipefail
-          state_value() {
-            terraform state show -no-color "$1" | awk -F' = ' -v key="$2" '$1 ~ "^[[:space:]]*" key "$" { gsub(/^\"|\"$/, "", $2); print $2; exit }'
-          }
-          ASG_NAME=$(state_value 'module.platform.aws_autoscaling_group.app' name)
-          TARGET_GROUP_ARN=$(state_value 'module.platform.aws_lb_target_group.api' arn)
+          ASG_NAME=$("$GITHUB_WORKSPACE/scripts/deploy/read-terraform-state-attribute.sh" \
+            'module.platform.aws_autoscaling_group.app' name)
+          TARGET_GROUP_ARN=$("$GITHUB_WORKSPACE/scripts/deploy/read-terraform-state-attribute.sh" \
+            'module.platform.aws_lb_target_group.api' arn)
           test -n "$ASG_NAME" && test -n "$TARGET_GROUP_ARN" || { echo 'Could not bind /live preflight to Terraform-managed ASG/TG state' >&2; exit 1; }
           CURRENT_PATH=$(aws elbv2 describe-target-groups --target-group-arns "$TARGET_GROUP_ARN" --query 'TargetGroups[0].HealthCheckPath' --output text)
           test -n "$CURRENT_PATH" && test "$CURRENT_PATH" != None || { echo 'Current Terraform-managed target-group path is unknown' >&2; exit 1; }
@@ -177,7 +176,13 @@ jobs:
         if: ${{ always() && inputs.environment == 'prod-secondary' }}
         run: |
           set -euo pipefail
-          PATH_NOW=$(aws elbv2 describe-target-groups --target-group-arns '${{ steps.live-migration.outputs.target_group_arn }}' --query 'TargetGroups[0].HealthCheckPath' --output text)
+          TARGET_GROUP_ARN='${{ steps.live-migration.outputs.target_group_arn }}'
+          if [ -z "$TARGET_GROUP_ARN" ]; then
+            echo 'No state-bound target group was resolved; no apply could have started.'
+            echo 'required=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PATH_NOW=$(aws elbv2 describe-target-groups --target-group-arns "$TARGET_GROUP_ARN" --query 'TargetGroups[0].HealthCheckPath' --output text)
           if [ "$PATH_NOW" = /live ]; then echo 'required=true' >> "$GITHUB_OUTPUT"; else echo 'required=false' >> "$GITHUB_OUTPUT"; fi
 
       - name: Configure prod-secondary capability-floor credentials

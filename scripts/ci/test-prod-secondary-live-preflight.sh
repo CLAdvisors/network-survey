@@ -19,7 +19,25 @@ case "$1 $2" in
 esac
 AWS
 chmod +x "$TMP/aws"
+cat > "$TMP/terraform" <<'TERRAFORM'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "state show -no-color module.platform.aws_autoscaling_group.app")
+    printf '%s\n' '    name                      = "reviewed-asg"' ;;
+  "state show -no-color module.platform.aws_lb_target_group.api")
+    printf '%s\n' '    arn                       = "arn:aws:elasticloadbalancing:us-east-1:710054969994:targetgroup/reviewed/123"' ;;
+  *) echo "unexpected terraform invocation: $*" >&2; exit 2 ;;
+esac
+TERRAFORM
+chmod +x "$TMP/terraform"
 export PATH="$TMP:$PATH" MOCK_AWS_LOG="$TMP/aws.log"
+
+# State attributes use aligned whitespace in real Terraform output. Ensure the
+# workflow helper returns exact values rather than depending on one-space ` = `.
+STATE_READER="$ROOT/scripts/deploy/read-terraform-state-attribute.sh"
+[ "$("$STATE_READER" 'module.platform.aws_autoscaling_group.app' name)" = reviewed-asg ]
+[ "$("$STATE_READER" 'module.platform.aws_lb_target_group.api' arn)" = 'arn:aws:elasticloadbalancing:us-east-1:710054969994:targetgroup/reviewed/123' ]
 
 # Migration-required phase proves exactly the Terraform-state-bound ASG/TG and
 # every current target using the deploy role.
@@ -38,10 +56,11 @@ fi
 # Already-migrated recovery is decided under Terraform-role credentials and
 # must not switch roles or run host/SSM proof.
 WORKFLOW="$ROOT/.github/workflows/terraform-apply.yml"
-grep -q 'terraform state show -no-color' "$WORKFLOW"
+grep -q 'read-terraform-state-attribute.sh' "$WORKFLOW"
 grep -q 'aws elbv2 describe-target-groups' "$WORKFLOW"
 grep -q "if \[ \"\$CURRENT_PATH\" = /live \]" "$WORKFLOW"
 grep -q "migration_required=false" "$WORKFLOW"
+grep -q 'No state-bound target group was resolved; no apply could have started.' "$WORKFLOW"
 [ "$(grep -c "steps.live-migration.outputs.migration_required == 'true'" "$WORKFLOW")" -eq 3 ] || {
   echo 'deploy-role migration steps are not all gated by migration_required=true' >&2
   exit 1

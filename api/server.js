@@ -169,19 +169,25 @@ function buildDashboardUrl(path) {
 
 const DEMO_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
-function createDemoToken(surveyId, surveyName, now = Date.now()) {
+function createDemoToken(surveyId, surveyName, now = Date.now(), nonce = crypto.randomBytes(12).toString('base64url')) {
   const payload = Buffer.from(JSON.stringify({
     type: 'survey-demo',
     surveyId,
     surveyName,
     expiresAt: now + DEMO_TOKEN_TTL_MS,
-    nonce: crypto.randomBytes(12).toString('base64url'),
+    nonce,
   })).toString('base64url');
   const signature = crypto
     .createHmac('sha256', process.env.DEMO_TOKEN_SECRET || process.env.SESSION_SECRET)
     .update(payload)
     .digest('base64url');
   return `d1.${payload}.${signature}`;
+}
+
+function createIdempotentDemoToken(surveyId, surveyName, idempotencyKey, createdAt, secret = process.env.DEMO_TOKEN_SECRET || process.env.SESSION_SECRET) {
+  const nonce = crypto.createHmac('sha256', secret)
+    .update(`demo-email:${surveyId}:${idempotencyKey}`).digest('base64url').slice(0, 16);
+  return createDemoToken(surveyId, surveyName, createdAt, nonce);
 }
 
 function verifyDemoToken(token, now = Date.now()) {
@@ -2403,9 +2409,17 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
   if (!language) {
     return res.status(400).json({ message: 'Language is required.' });
   }
-  const idempotencyKey = req.get('Idempotency-Key');
-  if (!UUID_RE.test(String(idempotencyKey || ''))) {
-    return res.status(400).json({ message: 'A valid Idempotency-Key is required.' });
+  const suppliedIdempotencyKey = req.get('Idempotency-Key');
+  const suppliedCreatedAt = Number(req.body.idempotencyCreatedAt);
+  if (suppliedIdempotencyKey && !UUID_RE.test(suppliedIdempotencyKey)) {
+    return res.status(400).json({ message: 'Idempotency-Key must be a UUID when supplied.' });
+  }
+  if (suppliedIdempotencyKey && (
+    !Number.isSafeInteger(suppliedCreatedAt)
+    || suppliedCreatedAt > Date.now() + 5 * 60 * 1000
+    || suppliedCreatedAt <= Date.now() - DEMO_TOKEN_TTL_MS
+  )) {
+    return res.status(400).json({ message: 'A current idempotencyCreatedAt is required with Idempotency-Key.' });
   }
 
   try {
@@ -2423,7 +2437,14 @@ app.post('/api/surveys/:surveyId/demo-email', express.json(), requireAuth, demoE
       return res.status(404).json({ message: `No ${language} email template is configured for this survey.` });
     }
 
-    const demoToken = createDemoToken(survey.id, survey.name);
+    // Upgraded clients preserve key + creation time across an ambiguous retry,
+    // making both the provider key and signed demo link byte-for-byte stable.
+    // Headerless legacy clients remain accepted with one generated intent.
+    const idempotencyKey = suppliedIdempotencyKey || crypto.randomUUID();
+    const intentCreatedAt = suppliedIdempotencyKey ? suppliedCreatedAt : Date.now();
+    const demoToken = suppliedIdempotencyKey
+      ? createIdempotentDemoToken(survey.id, survey.name, idempotencyKey, intentCreatedAt)
+      : createDemoToken(survey.id, survey.name, intentCreatedAt);
     await sendDemoMail(
       email.trim(), survey, templateResult.rows[0].text, demoToken, idempotencyKey,
       templateResult.rows[0].invitation_subject
@@ -3612,6 +3633,7 @@ module.exports = {
   getDashboardBaseUrl,
   buildDashboardUrl,
   createDemoToken,
+  createIdempotentDemoToken,
   verifyDemoToken,
   prepareSurveyForDemo,
   READ_SURVEY_ROLES,

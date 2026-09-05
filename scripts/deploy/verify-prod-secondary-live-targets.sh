@@ -1,27 +1,19 @@
 #!/usr/bin/env bash
-# Mechanical guard for the one-time /health -> /live target-group migration.
-# Uses approved SSM execution so every currently registered ASG target must
-# prove its local dependency-free endpoint before Terraform may change health.
+# Fail-closed proof for the one-time /health -> /live migration. The workflow
+# supplies ASG/TG identities read from Terraform state under Terraform-role
+# credentials; this script uses the narrower deploy role only for proof.
 set -euo pipefail
 
-ASG_NAME=${1:?usage: verify-prod-secondary-live-targets.sh <asg-name>}
+ASG_NAME=${1:?usage: verify-prod-secondary-live-targets.sh <state-asg-name> <state-target-group-arn>}
+TARGET_GROUP_ARN=${2:?usage: verify-prod-secondary-live-targets.sh <state-asg-name> <state-target-group-arn>}
 
-readarray -t TARGET_GROUPS < <(aws autoscaling describe-auto-scaling-groups \
+readarray -t ATTACHED_TARGET_GROUPS < <(aws autoscaling describe-auto-scaling-groups \
   --auto-scaling-group-names "$ASG_NAME" \
   --query 'AutoScalingGroups[0].TargetGroupARNs' --output text | tr '\t' '\n' | sed '/^$/d')
-[ "${#TARGET_GROUPS[@]}" -eq 1 ] || { echo "Refusing /live migration: expected exactly one ASG target group" >&2; exit 1; }
-
-CURRENT_HEALTH_PATH=$(aws elbv2 describe-target-groups --target-group-arns "${TARGET_GROUPS[0]}" \
-  --query 'TargetGroups[0].HealthCheckPath' --output text)
-if [ "$CURRENT_HEALTH_PATH" = /live ]; then
-  echo "Target group already uses /live; migration proof is not required for this recovery/apply."
-  exit 0
-fi
-[ -n "$CURRENT_HEALTH_PATH" ] && [ "$CURRENT_HEALTH_PATH" != None ] || {
-  echo "Refusing /live migration: current target-group health path is unknown" >&2
+[ "${#ATTACHED_TARGET_GROUPS[@]}" -eq 1 ] && [ "${ATTACHED_TARGET_GROUPS[0]}" = "$TARGET_GROUP_ARN" ] || {
+  echo "Refusing /live migration: deploy-role ASG target group does not match Terraform state" >&2
   exit 1
 }
-echo "Target group currently uses $CURRENT_HEALTH_PATH; proving every target before /live migration."
 
 readarray -t ASG_INSTANCES < <(aws autoscaling describe-auto-scaling-groups \
   --auto-scaling-group-names "$ASG_NAME" \
@@ -29,7 +21,7 @@ readarray -t ASG_INSTANCES < <(aws autoscaling describe-auto-scaling-groups \
   --output text | tr '\t' '\n' | sed '/^$/d' | sort)
 [ "${#ASG_INSTANCES[@]}" -ge 2 ] || { echo "Refusing /live migration: expected at least two healthy InService instances" >&2; exit 1; }
 
-readarray -t REGISTERED_TARGETS < <(aws elbv2 describe-target-health --target-group-arn "${TARGET_GROUPS[0]}" \
+readarray -t REGISTERED_TARGETS < <(aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" \
   --query 'TargetHealthDescriptions[?TargetHealth.State!=`draining`].Target.Id' \
   --output text | tr '\t' '\n' | sed '/^$/d' | sort)
 [ "$(printf '%s\n' "${ASG_INSTANCES[@]}")" = "$(printf '%s\n' "${REGISTERED_TARGETS[@]}")" ] || {
@@ -51,4 +43,4 @@ for instance in "${REGISTERED_TARGETS[@]}"; do
   [ "$status" = Success ] || { echo "Refusing /live migration: $instance returned SSM status $status" >&2; exit 1; }
 done
 
-echo "All ${#REGISTERED_TARGETS[@]} registered prod-secondary targets serve the dependency-free /live contract."
+echo "All ${#REGISTERED_TARGETS[@]} Terraform-bound prod-secondary targets serve the dependency-free /live contract."

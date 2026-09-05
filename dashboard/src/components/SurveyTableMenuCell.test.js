@@ -43,7 +43,7 @@ test('an editor can send a no-results email demo from a survey row', async () =>
 
   await waitFor(() => expect(api.post).toHaveBeenCalledWith(
     '/surveys/survey-1/demo-email',
-    { email: 'demo@example.com', language: 'English' },
+    { email: 'demo@example.com', language: 'English', idempotencyCreatedAt: expect.any(Number) },
     { headers: { 'Idempotency-Key': expect.stringMatching(/^[0-9a-f-]{36}$/i) } },
   ));
   expect(await screen.findByText('Demo sent.')).toBeInTheDocument();
@@ -58,9 +58,11 @@ test('an ambiguous demo retry preserves its idempotency key', async () => {
   await userEvent.click(screen.getByRole('button', { name:'Send Demo' }));
   await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
   const firstKey = api.post.mock.calls[0][2].headers['Idempotency-Key'];
+  const firstPayload = api.post.mock.calls[0][1];
   await userEvent.click(screen.getByRole('button', { name:'Send Demo' }));
   await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
   expect(api.post.mock.calls[1][2].headers['Idempotency-Key']).toBe(firstKey);
+  expect(api.post.mock.calls[1][1]).toEqual(firstPayload);
 });
 
 test('an editor copies a survey with a clear destination name and sees success', async () => {

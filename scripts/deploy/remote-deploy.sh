@@ -31,7 +31,13 @@ fi
 REVISION=$(cat "$SOURCE_DIR/REVISION")
 RELEASE_CAPABILITY_ARGS=()
 if [ "$ENVIRONMENT" = "prod-secondary" ]; then
-  RELEASE_CAPABILITY_ARGS+=(--require-prod-secondary-resend-isolation --require-alb-live-health)
+  RELEASE_CAPABILITY_ARGS+=(--require-prod-secondary-resend-isolation)
+  # Absent only during the prerequisite rollout while ALB still checks /health.
+  # Terraform stamps existing hosts after the migration and every new /live
+  # launch-template host creates this marker before bootstrap.
+  if [ -f "$SERVICE_DIR/alb-live-health-required" ]; then
+    RELEASE_CAPABILITY_ARGS+=(--require-alb-live-health)
+  fi
 fi
 node "$SOURCE_DIR/deploy/validate-release-capabilities.js" "$SOURCE_DIR" "${RELEASE_CAPABILITY_ARGS[@]}"
 test -f "$SOURCE_DIR/api/webhook-worker.js" || { echo "Release lacks dedicated webhook worker" >&2; exit 1; }

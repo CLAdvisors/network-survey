@@ -110,27 +110,45 @@ jobs:
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform validate
 
-      # The helper first reads the current target-group path. It proves every
-      # registered host only for the one-time non-/live -> /live migration; once
-      # /live is active, recovery applies proceed without host-health coupling.
-      - name: Configure prod-secondary deploy preflight credentials
+      # Inspect the exact Terraform-state target under the already-authorized
+      # Terraform role. This avoids both a mutable ASG-name bypass and the
+      # deploy-role DescribeTargetGroups bootstrap cycle.
+      - name: Inspect Terraform-managed prod-secondary health path
+        id: live-migration
         if: ${{ inputs.environment == 'prod-secondary' }}
+        working-directory: ${{ steps.env.outputs.WORKING_DIR }}
+        run: |
+          set -euo pipefail
+          state_value() {
+            terraform state show -no-color "$1" | awk -F' = ' -v key="$2" '$1 ~ "^[[:space:]]*" key "$" { gsub(/^\"|\"$/, "", $2); print $2; exit }'
+          }
+          ASG_NAME=$(state_value 'module.platform.aws_autoscaling_group.app' name)
+          TARGET_GROUP_ARN=$(state_value 'module.platform.aws_lb_target_group.api' arn)
+          test -n "$ASG_NAME" && test -n "$TARGET_GROUP_ARN" || { echo 'Could not bind /live preflight to Terraform-managed ASG/TG state' >&2; exit 1; }
+          CURRENT_PATH=$(aws elbv2 describe-target-groups --target-group-arns "$TARGET_GROUP_ARN" --query 'TargetGroups[0].HealthCheckPath' --output text)
+          test -n "$CURRENT_PATH" && test "$CURRENT_PATH" != None || { echo 'Current Terraform-managed target-group path is unknown' >&2; exit 1; }
+          echo "asg_name=$ASG_NAME" >> "$GITHUB_OUTPUT"
+          echo "target_group_arn=$TARGET_GROUP_ARN" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT_PATH" = /live ]; then
+            echo 'migration_required=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "Migrating Terraform-managed target group from $CURRENT_PATH to /live"
+            echo 'migration_required=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure prod-secondary deploy preflight credentials
+        if: ${{ inputs.environment == 'prod-secondary' && steps.live-migration.outputs.migration_required == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Guard prod-secondary /live migration
-        if: ${{ inputs.environment == 'prod-secondary' }}
-        env:
-          API_ASG_NAME: ${{ vars.API_ASG_NAME }}
-        run: |
-          set -euo pipefail
-          test -n "$API_ASG_NAME" || { echo 'API_ASG_NAME is required for /live migration preflight' >&2; exit 1; }
-          scripts/deploy/verify-prod-secondary-live-targets.sh "$API_ASG_NAME"
+        if: ${{ inputs.environment == 'prod-secondary' && steps.live-migration.outputs.migration_required == 'true' }}
+        run: scripts/deploy/verify-prod-secondary-live-targets.sh '${{ steps.live-migration.outputs.asg_name }}' '${{ steps.live-migration.outputs.target_group_arn }}'
 
       - name: Restore prod-secondary Terraform credentials
-        if: ${{ inputs.environment == 'prod-secondary' }}
+        if: ${{ inputs.environment == 'prod-secondary' && steps.live-migration.outputs.migration_required == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
@@ -151,3 +169,37 @@ jobs:
       - name: Terraform apply
         working-directory: ${{ steps.env.outputs.WORKING_DIR }}
         run: terraform apply -input=false -auto-approve tfplan
+
+      # Run even after a partial apply failure: if AWS now uses /live, commit
+      # the rollback floor before this serialized workflow releases its lock.
+      - name: Inspect post-apply /live floor
+        id: post-live-floor
+        if: ${{ always() && inputs.environment == 'prod-secondary' }}
+        run: |
+          set -euo pipefail
+          PATH_NOW=$(aws elbv2 describe-target-groups --target-group-arns '${{ steps.live-migration.outputs.target_group_arn }}' --query 'TargetGroups[0].HealthCheckPath' --output text)
+          if [ "$PATH_NOW" = /live ]; then echo 'required=true' >> "$GITHUB_OUTPUT"; else echo 'required=false' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Configure prod-secondary capability-floor credentials
+        if: ${{ always() && inputs.environment == 'prod-secondary' && steps.post-live-floor.outputs.required == 'true' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Stamp /live rollback floor on existing hosts
+        if: ${{ always() && inputs.environment == 'prod-secondary' && steps.post-live-floor.outputs.required == 'true' }}
+        env:
+          ASG_NAME: ${{ steps.live-migration.outputs.asg_name }}
+        run: |
+          set -euo pipefail
+          readarray -t INSTANCES < <(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
+            --query 'AutoScalingGroups[0].Instances[?LifecycleState!=`Terminating`].InstanceId' --output text | tr '\t' '\n' | sed '/^$/d')
+          [ "${#INSTANCES[@]}" -gt 0 ] || { echo 'No existing hosts to stamp; new launch-template hosts create the floor marker during bootstrap.'; exit 0; }
+          PARAMS=$(jq -cn '{commands:["set -euo pipefail","install -o root -g root -m 0644 /dev/null /opt/service/alb-live-health-required"]}')
+          COMMAND_ID=$(aws ssm send-command --instance-ids "${INSTANCES[@]}" --document-name AWS-RunShellScript \
+            --comment 'Commit prod-secondary /live rollback capability floor' --parameters "$PARAMS" --query 'Command.CommandId' --output text)
+          for instance in "${INSTANCES[@]}"; do
+            aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$instance"
+            test "$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$instance" --query Status --output text)" = Success
+          done

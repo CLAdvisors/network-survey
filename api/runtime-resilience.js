@@ -50,8 +50,8 @@ function poisonsDatabaseClient(error) {
 
 function guardCheckedOutClient(client) {
   if (!client || client.__runtimeResilienceGuarded) return client;
-  const originalQuery = client.query.bind(client);
-  const originalRelease = client.release.bind(client);
+  const originalQuery = client.query;
+  const originalRelease = client.release;
   let poison = null;
   Object.defineProperty(client, '__runtimeResilienceGuarded', { value:true, configurable:true });
   client.query = (...args) => {
@@ -62,9 +62,9 @@ function guardCheckedOutClient(client) {
         if (poisonsDatabaseClient(error)) poison = poison || error;
         callback(error, ...values);
       };
-      return originalQuery(...args);
+      return originalQuery.apply(client, args);
     }
-    const result = originalQuery(...args);
+    const result = originalQuery.apply(client, args);
     if (!result || typeof result.catch !== 'function') return result;
     return result.catch((error) => {
       if (poisonsDatabaseClient(error)) poison = poison || error;
@@ -75,7 +75,7 @@ function guardCheckedOutClient(client) {
     client.query = originalQuery;
     client.release = originalRelease;
     delete client.__runtimeResilienceGuarded;
-    return originalRelease(error || poison || undefined);
+    return originalRelease.call(client, error || poison || undefined);
   };
   return client;
 }

@@ -71,6 +71,7 @@ for (const value of [
   '/var/lib/ona-bootstrap/status.json',
   'flock -w 30 9',
   'latest-compatible.tar.gz',
+  'touch "$SERVICE_DIR/alb-live-health-required"',
   'timeout --signal=TERM --kill-after=30s 600s',
   'if [ -s "$STATUS_DIR/deployed-revision" ]; then',
   'HOST_HAS_BEEN_READY',

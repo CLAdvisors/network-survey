@@ -80,6 +80,19 @@ test('checked-out clients are destroyed after uncancelled query and socket timeo
   await assert.rejects(socketClient.query('SELECT 1'), /socket hang up/);
   socketClient.release();
   assert.equal(socketReleased[0], socket);
+
+  const reusable = { query() { return Promise.resolve({ rows:[] }); } };
+  const exactQuery = reusable.query;
+  for (let index = 0; index < 1000; index += 1) {
+    const checkoutRelease = function checkoutRelease() { assert.equal(this, reusable); };
+    reusable.release = checkoutRelease;
+    guardCheckedOutClient(reusable);
+    assert.notEqual(reusable.query, exactQuery);
+    reusable.release();
+    assert.equal(reusable.query, exactQuery, 'guard must restore the exact query identity');
+    assert.equal(reusable.release, checkoutRelease, 'guard must restore the exact per-checkout release identity');
+    assert.equal(reusable.__runtimeResilienceGuarded, undefined);
+  }
 });
 
 test('hung database query fails its health deadline and concurrent probes are single-flight', async () => {
@@ -339,13 +352,19 @@ test('prod-secondary replacement health is process-only and activation controls 
   const prodSecondaryVariables = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/prod_secondary_platform/variables.tf'), 'utf8');
   assert.match(prodSecondaryVariables, /condition\s+= var\.instance_type == "t3\.small"/);
   const applyWorkflow = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/terraform-apply.yml'), 'utf8');
-  assert.match(applyWorkflow, /verify-prod-secondary-live-targets\.sh/);
-  assert.match(applyWorkflow, /Restore prod-secondary Terraform credentials/);
+  assert.match(applyWorkflow, /terraform state show -no-color/);
+  assert.match(applyWorkflow, /module\.platform\.aws_autoscaling_group\.app/);
+  assert.match(applyWorkflow, /module\.platform\.aws_lb_target_group\.api/);
+  assert.match(applyWorkflow, /aws elbv2 describe-target-groups/);
+  assert.ok(applyWorkflow.indexOf('Inspect Terraform-managed prod-secondary health path') < applyWorkflow.indexOf('Configure prod-secondary deploy preflight credentials'));
+  assert.match(applyWorkflow, /steps\.live-migration\.outputs\.migration_required == 'true'/);
+  assert.doesNotMatch(applyWorkflow, /API_ASG_NAME/);
+  assert.match(applyWorkflow, /verify-prod-secondary-live-targets\.sh '\$\{\{ steps\.live-migration\.outputs\.asg_name \}\}' '\$\{\{ steps\.live-migration\.outputs\.target_group_arn \}\}'/);
+  assert.match(applyWorkflow, /Inspect post-apply \/live floor[\s\S]+always\(\)/);
+  assert.match(applyWorkflow, /alb-live-health-required/);
   const preflight = fs.readFileSync(path.resolve(__dirname, '../../scripts/deploy/verify-prod-secondary-live-targets.sh'), 'utf8');
-  assert.match(preflight, /describe-target-groups/);
-  assert.match(preflight, /CURRENT_HEALTH_PATH/);
-  assert.match(preflight, /if \[ "\$CURRENT_HEALTH_PATH" = \/live \][\s\S]*exit 0/);
-  assert.ok(preflight.indexOf('CURRENT_HEALTH_PATH') < preflight.indexOf('ASG_INSTANCES'), 'already-migrated recovery must bypass host-health checks');
+  assert.doesNotMatch(preflight, /describe-target-groups/, 'narrow deploy role must not inspect target-group configuration');
+  assert.match(preflight, /ATTACHED_TARGET_GROUPS\[0\].*= "\$TARGET_GROUP_ARN"/);
   assert.match(preflight, /REGISTERED_TARGETS/);
   assert.match(preflight, /http:\/\/localhost:3000\/live/);
   for (const gate of ['EMAIL_CLAIMING_ENABLED=false', 'EMAIL_SENDING_ENABLED=false', 'WEBHOOK_PROCESSING_ENABLED=false']) {

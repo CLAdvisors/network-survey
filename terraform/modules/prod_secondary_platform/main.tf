@@ -1692,7 +1692,7 @@ data "aws_iam_policy_document" "github_deploy" {
   statement {
     sid       = "DiscoverTargetStack"
     effect    = "Allow"
-    actions   = ["autoscaling:DescribeAutoScalingGroups", "cloudfront:GetDistribution", "ec2:DescribeInstances", "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeTargetHealth", "tag:GetResources", "ssm:GetCommandInvocation"]
+    actions   = ["autoscaling:DescribeAutoScalingGroups", "cloudfront:GetDistribution", "ec2:DescribeInstances", "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth", "tag:GetResources", "ssm:GetCommandInvocation"]
     resources = ["*"]
   }
 

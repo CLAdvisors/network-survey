@@ -149,6 +149,10 @@ ln -sfn "$LIQUIBASE_DIR/liquibase" /usr/local/bin/liquibase
 set_step configure-service
 SERVICE_DIR=/opt/service
 mkdir -p "$SERVICE_DIR/releases" "$SERVICE_DIR/certs"
+# This launch template is coupled to the /live target-group contract. New hosts
+# must never restore or bootstrap an artifact below that runtime capability.
+touch "$SERVICE_DIR/alb-live-health-required"
+chmod 0644 "$SERVICE_DIR/alb-live-health-required"
 chown -R ubuntu:ubuntu "$SERVICE_DIR"
 
 rds_bundle=$(mktemp /tmp/rds-global-bundle.XXXXXX.pem)

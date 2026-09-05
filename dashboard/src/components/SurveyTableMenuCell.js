@@ -56,7 +56,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
   const [archiving, setArchiving] = useState(false);
   const [demoDialogOpen, setDemoDialogOpen] = useState(false);
   const [demoSending, setDemoSending] = useState(false);
-  const demoIdempotencyKey = useRef(null);
+  const demoIntent = useRef(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const { canEditSurvey, canArchiveSurvey, hasSurveyRole } = useAuth();
   const status = lifecycleStatus(row);
@@ -134,13 +134,13 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
       notify(`${blockedActionMessage} Email demos use only persisted survey content.`, 'warning');
       return;
     }
-    demoIdempotencyKey.current = newIdempotencyKey();
+    demoIntent.current = { key: newIdempotencyKey(), createdAt: Date.now() };
     setDemoDialogOpen(true);
   };
 
   const handleDemoSubmit = async (email, language) => {
     if (actionBlocked) {
-      demoIdempotencyKey.current = null;
+      demoIntent.current = null;
       setDemoDialogOpen(false);
       notify(`${blockedActionMessage} Email demos use only persisted survey content.`, 'warning');
       return;
@@ -149,10 +149,10 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
     try {
       const response = await api.post(
         `/surveys/${id}/demo-email`,
-        { email, language },
-        { headers: { 'Idempotency-Key': demoIdempotencyKey.current } },
+        { email, language, idempotencyCreatedAt: demoIntent.current.createdAt },
+        { headers: { 'Idempotency-Key': demoIntent.current.key } },
       );
-      demoIdempotencyKey.current = null;
+      demoIntent.current = null;
       setDemoDialogOpen(false);
       notify(response.data?.message || 'Demo survey email sent successfully');
     } catch (error) {
@@ -301,7 +301,7 @@ const MenuCell = ({ row, onSurveyDeleted, onSurveyCopied, onLifecycleChange, onV
         </Box>
       </Dialog>
 
-      <SendDemoDialog open={demoDialogOpen} onClose={() => { demoIdempotencyKey.current = null; setDemoDialogOpen(false); }} onSubmit={handleDemoSubmit} surveyName={row.name} loading={demoSending} />
+      <SendDemoDialog open={demoDialogOpen} onClose={() => { demoIntent.current = null; setDemoDialogOpen(false); }} onSubmit={handleDemoSubmit} surveyName={row.name} loading={demoSending} />
 
       <Dialog open={Boolean(transition)} onClose={() => !transitioning && setTransition(null)} aria-describedby="transition-description">
         <DialogTitle>{transition === 'close' ? 'Close survey' : 'Reopen survey'}</DialogTitle>

@@ -44,6 +44,8 @@ STATE_READER="$ROOT/scripts/deploy/read-terraform-state-attribute.sh"
 "$ROOT/scripts/deploy/verify-prod-secondary-live-targets.sh" reviewed-asg tg-arn >/dev/null
 grep -q 'ssm send-command' "$MOCK_AWS_LOG"
 grep -q -- '--instance-ids i-one i-two' "$MOCK_AWS_LOG"
+grep -q '"set -eu"' "$MOCK_AWS_LOG"
+! grep -q 'pipefail' "$MOCK_AWS_LOG"
 if MOCK_MISMATCH=true "$ROOT/scripts/deploy/verify-prod-secondary-live-targets.sh" reviewed-asg tg-arn >/dev/null 2>&1; then
   echo 'preflight accepted a target/ASG mismatch during migration' >&2
   exit 1
@@ -61,6 +63,9 @@ grep -q 'aws elbv2 describe-target-groups' "$WORKFLOW"
 grep -q "if \[ \"\$CURRENT_PATH\" = /live \]" "$WORKFLOW"
 grep -q "migration_required=false" "$WORKFLOW"
 grep -q 'No state-bound target group was resolved; no apply could have started.' "$WORKFLOW"
+grep -q "if: \${{ always() && inputs.environment == 'prod-secondary' && steps.live-migration.outputs.migration_required == 'true' }}" "$WORKFLOW"
+grep -q 'commands:\["set -eu","install -o root' "$WORKFLOW"
+! grep -q 'commands:\["set -euo pipefail"' "$WORKFLOW"
 [ "$(grep -c "steps.live-migration.outputs.migration_required == 'true'" "$WORKFLOW")" -eq 3 ] || {
   echo 'deploy-role migration steps are not all gated by migration_required=true' >&2
   exit 1

@@ -29,7 +29,8 @@ readarray -t REGISTERED_TARGETS < <(aws elbv2 describe-target-health --target-gr
   exit 1
 }
 
-PARAMETERS=$(jq -cn '{commands:["set -euo pipefail","test \"$(curl -fsS --connect-timeout 2 --max-time 5 http://localhost:3000/live)\" = '\''{\"status\":\"ok\",\"process\":\"live\"}'\''"]}')
+# AWS-RunShellScript invokes /bin/sh; keep commands POSIX-compatible.
+PARAMETERS=$(jq -cn '{commands:["set -eu","test \"$(curl -fsS --connect-timeout 2 --max-time 5 http://localhost:3000/live)\" = '\''{\"status\":\"ok\",\"process\":\"live\"}'\''"]}')
 COMMAND_ID=$(aws ssm send-command \
   --instance-ids "${REGISTERED_TARGETS[@]}" \
   --document-name AWS-RunShellScript \

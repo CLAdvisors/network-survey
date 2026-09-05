@@ -147,7 +147,9 @@ jobs:
         run: scripts/deploy/verify-prod-secondary-live-targets.sh '${{ steps.live-migration.outputs.asg_name }}' '${{ steps.live-migration.outputs.target_group_arn }}'
 
       - name: Restore prod-secondary Terraform credentials
-        if: ${{ inputs.environment == 'prod-secondary' && steps.live-migration.outputs.migration_required == 'true' }}
+        # Restore even when migration proof fails so always-run diagnostics use
+        # the Terraform role rather than the narrower deploy role.
+        if: ${{ always() && inputs.environment == 'prod-secondary' && steps.live-migration.outputs.migration_required == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
@@ -201,7 +203,8 @@ jobs:
           readarray -t INSTANCES < <(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
             --query 'AutoScalingGroups[0].Instances[?LifecycleState!=`Terminating`].InstanceId' --output text | tr '\t' '\n' | sed '/^$/d')
           [ "${#INSTANCES[@]}" -gt 0 ] || { echo 'No existing hosts to stamp; new launch-template hosts create the floor marker during bootstrap.'; exit 0; }
-          PARAMS=$(jq -cn '{commands:["set -euo pipefail","install -o root -g root -m 0644 /dev/null /opt/service/alb-live-health-required"]}')
+          # AWS-RunShellScript invokes /bin/sh; keep commands POSIX-compatible.
+          PARAMS=$(jq -cn '{commands:["set -eu","install -o root -g root -m 0644 /dev/null /opt/service/alb-live-health-required"]}')
           COMMAND_ID=$(aws ssm send-command --instance-ids "${INSTANCES[@]}" --document-name AWS-RunShellScript \
             --comment 'Commit prod-secondary /live rollback capability floor' --parameters "$PARAMS" --query 'Command.CommandId' --output text)
           for instance in "${INSTANCES[@]}"; do

@@ -352,7 +352,10 @@ test('prod-secondary replacement health is process-only and activation controls 
   const prodSecondaryVariables = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/prod_secondary_platform/variables.tf'), 'utf8');
   assert.match(prodSecondaryVariables, /condition\s+= var\.instance_type == "t3\.small"/);
   const applyWorkflow = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/terraform-apply.yml'), 'utf8');
-  assert.match(applyWorkflow, /terraform state show -no-color/);
+  assert.match(applyWorkflow, /read-terraform-state-attribute\.sh/);
+  const stateReader = fs.readFileSync(path.resolve(__dirname, '../../scripts/deploy/read-terraform-state-attribute.sh'), 'utf8');
+  assert.match(stateReader, /terraform state show -no-color/);
+  assert.ok(stateReader.includes('gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)'), 'state reader must trim Terraform alignment whitespace');
   assert.match(applyWorkflow, /module\.platform\.aws_autoscaling_group\.app/);
   assert.match(applyWorkflow, /module\.platform\.aws_lb_target_group\.api/);
   assert.match(applyWorkflow, /aws elbv2 describe-target-groups/);

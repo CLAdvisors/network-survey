@@ -264,6 +264,67 @@ test('claim, replay, purge, and canary primitives use fenced v1_7 contracts', as
   assert.deepEqual(canaryTags('test', 'token').map(({ name }) => name), ['app', 'environment', 'canary']);
 });
 
+test('canary polling configuration defaults invalid values and clamps finite bounds deterministically', () => {
+  const cases = [
+    ['missing', undefined, 60000],
+    ['null', null, 60000],
+    ['blank', '', 60000],
+    ['whitespace', ' \t ', 60000],
+    ['invalid', 'not-a-number', 60000],
+    ['non-finite', 'Infinity', 60000],
+    ['below minimum', '9999', 10000],
+    ['above maximum', '300001', 300000],
+  ];
+  for (const [label, value, expected] of cases) {
+    const env = { NODE_ENV: 'test', RESEND_PROVIDER_ACCOUNT_SCOPE: 'scope' };
+    if (label !== 'missing') env.RESEND_WEBHOOK_CANARY_POLL_MS = value;
+    const worker = new WebhookWorker({ pool: {}, env });
+    assert.equal(worker.canaryPollMs, expected, label);
+  }
+});
+
+test('idle event polling checks canary only at deterministic bounded intervals', async () => {
+  let now = new Date('2026-08-05T00:00:00.000Z').getTime();
+  let canaryClaims = 0;
+  const worker = new WebhookWorker({
+    pool: {},
+    provider: {},
+    env: { NODE_ENV: 'test', RESEND_PROVIDER_ACCOUNT_SCOPE: 'scope' },
+    clock: () => new Date(now),
+  });
+  worker.claim = async () => null;
+  worker.claimCanary = async () => { canaryClaims += 1; return null; };
+
+  assert.equal(await worker.processOne(), false);
+  assert.equal(canaryClaims, 1, 'startup is immediately eligible');
+  for (let poll = 1; poll < 80; poll += 1) {
+    now += 750;
+    assert.equal(await worker.processOne(), false);
+  }
+  assert.equal(canaryClaims, 1, 'frequent idle event polls do not poll canary early');
+
+  now = new Date('2026-08-05T00:01:00.000Z').getTime();
+  assert.equal(await worker.processOne(), false);
+  assert.equal(canaryClaims, 2, 'the exact default interval boundary is eligible');
+});
+
+test('an eligible startup canary is processed immediately after the event queue is found idle', async () => {
+  const order = [];
+  const canary = { canary_token: '11111111-1111-4111-8111-111111111111' };
+  const worker = new WebhookWorker({
+    pool: {},
+    provider: {},
+    env: { NODE_ENV: 'test', RESEND_PROVIDER_ACCOUNT_SCOPE: 'scope' },
+    clock: () => new Date('2026-08-05T00:00:00.000Z'),
+  });
+  worker.claim = async () => { order.push('event'); return null; };
+  worker.claimCanary = async () => { order.push('canary'); return canary; };
+  worker.processCanary = async (claimed) => { assert.equal(claimed, canary); order.push('processed'); };
+
+  assert.equal(await worker.processOne(), true);
+  assert.deepEqual(order, ['event', 'canary', 'processed']);
+});
+
 test('canary projection is monotonic and historical replay cannot refresh health', async()=>{
   const calls=[];
   const client={async query(sql,values=[]){calls.push({sql,values});if(/SELECT \* FROM email_webhook_canary_state/.test(sql))return {rows:[{environment:'test',canary_token:'11111111-1111-4111-8111-111111111111'}]};return {rowCount:1,rows:[]};}};

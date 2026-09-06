@@ -1,6 +1,6 @@
 // Limits are RSS tripwires, not capacity reservations. Enable them only on the
 // reviewed 2 GiB prod-secondary hosts; source prod/staging still use smaller
-// shapes. Their 704 MiB aggregate leaves substantial OS/agent headroom. A
+// shapes. Their 784 MiB aggregate leaves substantial OS/agent headroom. A
 // worker memory restart is safe because durable leases and provider idempotency
 // keys fence replay after an ambiguous termination.
 const memoryLimit = (limit) => process.env.EMAIL_WORKER_ENV === 'prod-secondary'
@@ -58,7 +58,7 @@ module.exports = {
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
       },
       kill_timeout: 30000,
-      ...memoryLimit('176M'),
+      ...memoryLimit('256M'),
       ...failureContainment,
     },
   ],

@@ -116,7 +116,10 @@ describe('DraggableRankingQuestion', () => {
       <DraggableRankingQuestion question={question} value={question.value} onChange={onChange} />
     );
 
-    const selectButton = await screen.findByRole('button', { name: 'Select: Alex' });
+    expect(await screen.findByText('Selected options (drag to select):')).toBeInTheDocument();
+    expect(screen.queryByText('Selected options (drag to reorder):')).not.toBeInTheDocument();
+
+    const selectButton = screen.getByRole('button', { name: 'Select: Alex' });
     selectButton.focus();
     await userEvent.keyboard('{Enter}');
 

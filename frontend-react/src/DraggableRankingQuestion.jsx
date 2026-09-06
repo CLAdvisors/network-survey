@@ -343,7 +343,7 @@ export default function DraggableRankingQuestion({
     >
       <div style={{ display: "flex", flexDirection: "column" }}>
         <div style={{ marginBottom: 16 }}>
-          <strong>Selected options (drag to reorder):</strong>
+          <strong>Selected options (drag to select):</strong>
           <Droppable
             droppableId="ranked"
             direction="vertical"

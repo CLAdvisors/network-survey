@@ -20,9 +20,15 @@ describe('Survey Editor definition runtime integration', () => {
     expect(source).not.toContain('ReactDOM.createRoot');
   });
 
-  it('registers definition metadata before constructing Survey Creator', () => {
+  it('registers definition and selection metadata before constructing Survey Creator', () => {
     expect(source.indexOf('registerDraggableRankingDefinitionMetadata();'))
       .toBeLessThan(source.indexOf('new SurveyCreator(creatorOptions)'));
+    expect(source).toContain("name: 'minSelectedChoices:number'");
+    expect(source).toContain("displayName: 'Minimum selections'");
+    expect(source).toContain("displayName: 'Maximum selections'");
+    expect(source).toContain('minSelectedChoices: 7');
+    expect(source).toContain('maxSelectedChoices: 7');
+    expect(source).toContain("{ value: 'item7', text: 'Item 7' }");
     expect(source).toContain('showJSONEditorTab: false');
     expect(source).toContain('onPropertyShowing.add(configureDraggableRankingDefinitionVisibility)');
     expect(source).toContain('onPropertyEditorCreated.add(configureDraggableRankingDefinitionEditor)');

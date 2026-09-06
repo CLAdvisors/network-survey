@@ -70,12 +70,12 @@ describe('production draggable-ranking Info definitions', () => {
 
     fireEvent.focus(info);
     const callout = screen.getByRole('region', { name: 'Definition: Beta' });
-    const rank = screen.getByRole('button', { name: 'Rank: Beta' });
+    const select = screen.getByRole('button', { name: 'Select: Beta' });
     const close = within(callout).getByRole('button', { name: 'Close definition' });
-    fireEvent.blur(info, { relatedTarget: rank });
-    fireEvent.focus(rank);
+    fireEvent.blur(info, { relatedTarget: select });
+    fireEvent.focus(select);
     expect(callout).toBeInTheDocument();
-    fireEvent.blur(rank, { relatedTarget: close });
+    fireEvent.blur(select, { relatedTarget: close });
     fireEvent.focus(close);
     expect(callout).toBeInTheDocument();
 
@@ -142,12 +142,37 @@ describe('production draggable-ranking Info definitions', () => {
 
     fireEvent.click(betaInfo);
     expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Rank: Beta' }));
-    expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
-
-    fireEvent.click(betaInfo);
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside ranking' }));
     expect(screen.queryByRole('region', { name: 'Definition: Beta' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['mouse', (button) => {
+      fireEvent.pointerDown(button, { pointerType: 'mouse' });
+      fireEvent.mouseDown(button);
+      fireEvent.pointerUp(button, { pointerType: 'mouse' });
+      fireEvent.click(button);
+    }],
+    ['touch', (button) => {
+      fireEvent.pointerDown(button, { pointerType: 'touch' });
+      fireEvent.touchStart(button);
+      fireEvent.pointerUp(button, { pointerType: 'touch' });
+      fireEvent.touchEnd(button);
+      fireEvent.click(button);
+    }],
+  ])('does not reflow a lower-list %s action before it selects', (_input, activate) => {
+    const onChange = vi.fn();
+    render(<Fixture onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /Info: A deliberately long Alpha/ }));
+    const selectBeta = screen.getByRole('button', { name: 'Select: Beta' });
+
+    fireEvent.pointerDown(selectBeta);
+    expect(screen.getByRole('region', { name: /Definition: A deliberately long Alpha/ })).toBeInTheDocument();
+    activate(selectBeta);
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(['stable-beta']);
+    expect(screen.getByRole('button', { name: 'Unselect: Beta' })).toBeInTheDocument();
   });
 
   it('does not leak definition interactions into answer, selection, keyboard, or drag ancestors', () => {
@@ -172,11 +197,11 @@ describe('production draggable-ranking Info definitions', () => {
     expect(onChange).not.toHaveBeenCalled();
     Object.values(parentEvents).forEach((handler) => expect(handler).not.toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rank: Beta' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select: Beta' }));
     expect(onChange).toHaveBeenCalledWith(['stable-beta']);
 
     const currentInfo = screen.getByRole('button', { name: 'Info: Beta' });
-    const currentAction = screen.getByRole('button', { name: 'Unrank: Beta' });
+    const currentAction = screen.getByRole('button', { name: 'Unselect: Beta' });
     fireEvent.focus(currentInfo);
     expect(screen.getByRole('region', { name: 'Definition: Beta' })).toBeInTheDocument();
     fireEvent.blur(currentInfo, { relatedTarget: currentAction });
@@ -204,10 +229,10 @@ describe('production draggable-ranking Info definitions', () => {
     const alphaInfo = infos[0];
     fireEvent.focus(alphaInfo);
     const row = alphaInfo.parentElement;
-    const rank = within(row).getByRole('button', { name: /Rank: A deliberately long Alpha/ });
+    const select = within(row).getByRole('button', { name: /Select: A deliberately long Alpha/ });
     const close = within(row).getByRole('button', { name: 'Close definition' });
-    expect(alphaInfo.compareDocumentPosition(rank) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(rank.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(alphaInfo.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(select.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(document.getElementById(alphaInfo.getAttribute('aria-controls'))).toBeInTheDocument();
   });
 
@@ -232,6 +257,6 @@ describe('production draggable-ranking Info definitions', () => {
     const label = await screen.findByText('Blank');
     expect(label).toHaveStyle({ flex: '1 1 auto', textAlign: 'center' });
     expect(label).not.toHaveAttribute('aria-label');
-    expect(within(label.parentElement).getByRole('button', { name: 'Rank: Blank' })).toBeInTheDocument();
+    expect(within(label.parentElement).getByRole('button', { name: 'Select: Blank' })).toBeInTheDocument();
   });
 });

@@ -25,7 +25,8 @@ Serializer.addClass(
   "draggableranking",
   [
     { name: "choices:itemvalues", default: [] },
-    { name: "maxSelectedChoices:number", default: 0, minValue: 0, displayName: "Max ranked items" }
+    { name: "minSelectedChoices:number", default: 0, minValue: 0, displayName: "Minimum selections" },
+    { name: "maxSelectedChoices:number", default: 0, minValue: 0, displayName: "Maximum selections" }
   ],
   () => new QuestionDraggableRankingModel(""),
   "question"

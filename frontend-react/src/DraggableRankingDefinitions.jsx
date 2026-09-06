@@ -52,8 +52,19 @@ function DefinitionControl({ item, state, choiceAction }) {
 
   React.useEffect(() => {
     if (!expanded) return undefined;
+    const isChoiceAction = (node) => Boolean(
+      node && typeof node.closest === 'function' &&
+        node.closest('.cla-choice-definition__action')
+    );
     const handlePointerDown = (event) => {
-      if (!isWithinPopover(event.target)) close(false);
+      // Do not collapse an in-flow callout while a Select/Unselect button is
+      // being pressed. Reflowing before pointerup retargets lower-list clicks.
+      if (!isChoiceAction(event.target) && !isWithinPopover(event.target)) close(false);
+    };
+    const handleClick = (event) => {
+      // The answer action has run by document bubble phase, so an unrelated
+      // open definition can now close without stealing mouse/touch activation.
+      if (isChoiceAction(event.target) && !isWithinFocusPath(event.target)) close(false);
     };
     const handleKeyDown = (event) => {
       if (event.key !== 'Escape') return;
@@ -67,9 +78,11 @@ function DefinitionControl({ item, state, choiceAction }) {
       close(focusIsWithinControl);
     };
     document.addEventListener('pointerdown', handlePointerDown, true);
+    document.addEventListener('click', handleClick);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown, true);
+      document.removeEventListener('click', handleClick);
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [close, expanded, isWithinFocusPath, isWithinPopover]);
@@ -172,9 +185,9 @@ function DefinitionControl({ item, state, choiceAction }) {
   );
 }
 
-// DraggableRankingQuestion uses this marker to place the Rank/Unrank action
+// DraggableRankingQuestion uses this marker to place the Select/Unselect action
 // between the Info trigger and its callout. DOM, visual, and keyboard focus
-// order therefore remain Info -> Rank/Unrank -> callout controls.
+// order therefore remain Info -> Select/Unselect -> callout controls.
 DefinitionControl.rendersChoiceAction = true;
 
 /** Production Option 1: explicit Info-button definitions for draggable ranking. */

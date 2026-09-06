@@ -26,6 +26,7 @@ function registerLabSchema() {
       'draggableranking',
       [
         { name: 'choices:itemvalues', default: [] },
+        { name: 'minSelectedChoices:number', default: 0, minValue: 0 },
         { name: 'maxSelectedChoices:number', default: 0, minValue: 0 },
       ],
       () => new LabDraggableRankingModel(''),

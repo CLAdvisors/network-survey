@@ -33,6 +33,83 @@ test('offers explicit derived, hidden, and custom semantics with accessible coun
   expect(screen.getAllByText(/17\/5000 characters/).length).toBeGreaterThan(0);
 });
 
+test('applies and removes same-line bold markers with the toolbar and keyboard shortcut', async () => {
+  api.get.mockResolvedValue(response('Read this carefully.'));
+  render(<SurveyInstructionsEditor surveyId="survey-bold" />);
+  const field = await screen.findByDisplayValue('Read this carefully.');
+  expect(field).toHaveAttribute('aria-keyshortcuts', 'Control+B Meta+B');
+
+  field.setSelectionRange(5, 5);
+  await userEvent.click(screen.getByRole('button', { name: 'Toggle bold formatting' }));
+  expect(field).toHaveValue('Read this carefully.');
+  expect(await screen.findByText(/Select one or more words/)).toBeInTheDocument();
+
+  field.setSelectionRange(5, 9);
+  await userEvent.click(screen.getByRole('button', { name: 'Toggle bold formatting' }));
+  expect(field).toHaveValue('Read **this** carefully.');
+  expect(screen.getByTestId('survey-instructions-preview').querySelector('strong')).toHaveTextContent('this');
+
+  field.setSelectionRange(7, 11);
+  fireEvent.keyDown(field, { key: 'b', ctrlKey: true });
+  expect(field).toHaveValue('Read this carefully.');
+
+  field.setSelectionRange(5, 9);
+  fireEvent.keyDown(field, { key: 'b', metaKey: true });
+  expect(field).toHaveValue('Read **this** carefully.');
+  await userEvent.click(screen.getByRole('button', { name: /save instructions/i }));
+  expect(api.put).toHaveBeenLastCalledWith('/surveys/survey-bold/instructions', {
+    instructions: 'Read **this** carefully.',
+    expectedInstructions: 'Read this carefully.',
+  });
+});
+
+test('uses the respondent grammar for a safe, author-visible formatted preview', async () => {
+  api.get.mockResolvedValue(response('Review **<script>literal</script>** and *single stars*.'));
+  const { container } = render(<SurveyInstructionsEditor surveyId="survey-preview" />);
+  const preview = await screen.findByTestId('survey-instructions-preview');
+  expect(screen.getByText('Formatted preview')).toBeInTheDocument();
+  expect(preview.querySelector('strong')).toHaveTextContent('<script>literal</script>');
+  expect(preview.textContent).toBe('Review <script>literal</script> and *single stars*.');
+  expect(container.querySelector('script')).toBeNull();
+});
+
+test('bolds each nonempty line separately instead of creating multiline markup', async () => {
+  render(<SurveyInstructionsEditor surveyId="survey-multiline" />);
+  expect(await screen.findByText(/Current derived default/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('radio', { name: /use custom instructions/i }));
+  const field = screen.getByLabelText('Custom survey instructions');
+  fireEvent.change(field, { target: { value: 'First line\n\nSecond line' } });
+  field.setSelectionRange(0, field.value.length);
+  await userEvent.click(screen.getByRole('button', { name: 'Toggle bold formatting' }));
+  expect(field).toHaveValue('**First line**\n\n**Second line**');
+  await userEvent.click(screen.getByRole('button', { name: 'Toggle bold formatting' }));
+  expect(field).toHaveValue('First line\n\nSecond line');
+
+  fireEvent.change(field, { target: { value: 'Fields marked * are required' } });
+  field.setSelectionRange(0, field.value.length);
+  await userEvent.click(screen.getByRole('button', { name: 'Toggle bold formatting' }));
+  expect(field).toHaveValue('**Fields marked * are required**');
+});
+
+test('maps normalized textarea offsets to a CRLF API value before formatting and saving', async () => {
+  const persisted = 'First line\r\nSecond line';
+  api.get.mockResolvedValue(response(persisted));
+  render(<SurveyInstructionsEditor surveyId="survey-crlf" />);
+  const field = await screen.findByLabelText('Custom survey instructions');
+  expect(field.value).toBe('First line\nSecond line');
+
+  const start = field.value.indexOf('Second');
+  field.setSelectionRange(start, start + 'Second'.length);
+  await userEvent.click(screen.getByRole('button', { name: 'Toggle bold formatting' }));
+  expect(field.value).toBe('First line\n**Second** line');
+
+  await userEvent.click(screen.getByRole('button', { name: /save instructions/i }));
+  expect(api.put).toHaveBeenLastCalledWith('/surveys/survey-crlf/instructions', {
+    instructions: 'First line\r\n**Second** line',
+    expectedInstructions: persisted,
+  });
+});
+
 test('preserves survey-scoped drafts across switches and rejects stale loads', async () => {
   const staleA = deferred();
   api.get.mockImplementation((url) => {

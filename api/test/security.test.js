@@ -1730,7 +1730,7 @@ test('signed demo links load configured questions and real respondents but canno
         return { rows: [{
           title: 'Configured title',
           name: 'Survey A',
-          instructions: 'Demo line one\n<script>literal only</script>',
+          instructions: 'Demo **line one**\n<script>literal only</script>',
           questions: { elements: [
             {
               type: 'text',
@@ -1761,7 +1761,7 @@ test('signed demo links load configured questions and real respondents but canno
   const valid = await request(app).get('/api/questions').query({ surveyName: 'Survey A', demoToken: token });
   assert.equal(valid.status, 200);
   assert.equal(valid.body.title, 'Configured title');
-  assert.equal(valid.body.instructions, 'Demo line one\n<script>literal only</script>');
+  assert.equal(valid.body.instructions, 'Demo **line one**\n<script>literal only</script>');
   assert.equal(valid.headers['cache-control'], 'no-store');
   assert.equal(valid.body.questions.elements[0].choicesByUrl, undefined);
   assert.deepEqual(valid.body.questions.elements[1].choices, []);
@@ -2565,6 +2565,7 @@ test('survey copy preserves questions and email templates without copying partic
 
   const calls = [];
   const sourceQuestions = { title: 'Instructions', completedHtml: 'Thank you', elements: [{ type: 'text', name: 'question_1' }] };
+  let sourceInstructions = 'Read **carefully**.\nLegacy plain line.';
   pool.connect = async () => ({
     query: async (sql, values) => {
       calls.push({ sql, values });
@@ -2572,7 +2573,7 @@ test('survey copy preserves questions and email templates without copying partic
         return { rows: [{
           id: '11111111-1111-4111-8111-111111111111',
           name: 'Source Survey', title: 'Configured title', questions: sourceQuestions,
-          instructions: '', organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'editor',
+          instructions: sourceInstructions, organization_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'editor',
         }] };
       }
       if (/SELECT 1 FROM Survey/.test(sql)) return { rows: [] };
@@ -2606,7 +2607,7 @@ test('survey copy preserves questions and email templates without copying partic
   assert.match(surveyInsert.sql, /instructions/);
   assert.match(surveyInsert.sql, /VALUES \(\$1, \$2, NOW\(\), \$3, \$4, \$5, \$6, \$7, \$8\)/);
   assert.deepEqual(surveyInsert.values, [
-    'CopiedSurvey', 'Configured title', sourceQuestions, '',
+    'CopiedSurvey', 'Configured title', sourceQuestions, sourceInstructions,
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 7, 'CopiedSurvey', 'copiedsurvey',
   ]);
   const emailCopy = calls.find(({ sql }) => /INSERT INTO EMAIL/.test(sql));
@@ -2621,6 +2622,16 @@ test('survey copy preserves questions and email templates without copying partic
   assert.equal(calls.some(({ sql }) => /\b(?:UPDATE|DELETE)\b[\s\S]+(?:Survey|EMAIL|Respondent)/i.test(sql)), false, 'source rows remain unchanged');
   assert.equal([{ name:'None',email:'N/A',canRespond:false }].filter((row) => !isLegacyPlaceholderRespondent(row)).length, 0, 'copied roster displays zero participants');
   assert.ok(calls.some(({ sql, values }) => /survey\.copied/.test(sql) && values[0] === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'));
+
+  calls.length = 0;
+  sourceInstructions = '';
+  await copySurveyForUser({
+    actor: { id: 7, isPlatformAdmin: false },
+    sourceSurveyId: '11111111-1111-4111-8111-111111111111',
+    name: 'HiddenCopy',
+  });
+  const hiddenSurveyInsert = calls.find(({ sql }) => /INSERT INTO Survey/.test(sql));
+  assert.equal(hiddenSurveyInsert.values[3], '', 'copy preserves an explicitly hidden instruction block');
 });
 
 test('create and copy survey names share alphanumeric and length validation', async () => {

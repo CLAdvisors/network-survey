@@ -5,7 +5,13 @@
   "type": "module",
   "main": "src/index.js",
   "module": "src/index.js",
+  "scripts": {
+    "test": "vitest run"
+  },
   "peerDependencies": {
     "survey-core": "2.5.35"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.7"
   }
 }

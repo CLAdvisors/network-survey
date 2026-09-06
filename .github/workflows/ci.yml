@@ -269,6 +269,10 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
+      - name: Test shared survey instruction formatting
+        if: matrix.app == 'network-survey'
+        run: npm test --workspace @network-survey/frontend-shared
+
       - name: Test
         run: npm test
         working-directory: ${{ matrix.app }}

@@ -3,6 +3,13 @@ import {
   Alert, Box, Button, FormControl, FormControlLabel, FormHelperText,
   FormLabel, Paper, Radio, RadioGroup, Stack, TextField, Typography,
 } from '@mui/material';
+import FormatBoldIcon from '@mui/icons-material/FormatBold';
+import {
+  parseSurveyInstructionFormatting,
+  sourceOffsetToTextareaOffset,
+  textareaOffsetToSourceOffset,
+  toggleSurveyInstructionBold,
+} from '@network-survey/frontend-shared';
 import api from '../api/axios';
 import useSurveyOperationState from './useSurveyOperationState';
 
@@ -26,6 +33,8 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
   const requestVersion = React.useRef(0);
   const surveyIdRef = React.useRef(surveyId);
   const noticeRef = React.useRef(null);
+  const inputRef = React.useRef(null);
+  const pendingSelectionRef = React.useRef(null);
   const { begin, end, isPending, generation, advanceGeneration } = useSurveyOperationState('instructions', onOperationChange);
   const saving = isPending(surveyId);
   surveyIdRef.current = surveyId;
@@ -33,6 +42,14 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
   React.useEffect(() => {
     if (notice?.severity === 'error') noticeRef.current?.focus();
   }, [notice]);
+
+  React.useLayoutEffect(() => {
+    const selection = pendingSelectionRef.current;
+    if (!selection || !inputRef.current) return;
+    pendingSelectionRef.current = null;
+    inputRef.current.focus();
+    inputRef.current.setSelectionRange(selection.start, selection.end);
+  }, [value]);
 
   React.useEffect(() => {
     const version = ++requestVersion.current;
@@ -90,6 +107,36 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
     else if (mode === 'custom') setDraft(value && value !== '' ? value : effectiveDefault);
   };
 
+  const toggleBold = (textarea = inputRef.current) => {
+    if (!textarea || readOnly || loading || saving || !loaded) return;
+    const sourceValue = value || '';
+    const sourceStart = textareaOffsetToSourceOffset(sourceValue, textarea.selectionStart);
+    const sourceEnd = textareaOffsetToSourceOffset(sourceValue, textarea.selectionEnd);
+    const result = toggleSurveyInstructionBold(sourceValue, sourceStart, sourceEnd);
+    if (!result.changed) {
+      const message = result.reason === 'collapsed-selection'
+        ? 'Select one or more words before toggling bold formatting.'
+        : result.reason === 'no-formattable-text'
+          ? 'Select text in addition to line breaks before toggling bold formatting.'
+          : 'Bold formatting cannot be applied to that marker selection. Adjust the selection and try again.';
+      setNotice({ severity: 'info', message });
+      return;
+    }
+    setNotice(null);
+    pendingSelectionRef.current = {
+      start: sourceOffsetToTextareaOffset(result.value, result.selectionStart),
+      end: sourceOffsetToTextareaOffset(result.value, result.selectionEnd),
+    };
+    setDraft(result.value);
+  };
+
+  const handleEditorKeyDown = (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      toggleBold();
+    }
+  };
+
   const discardDraft = () => {
     if (!surveyId || loading || saving || !loaded) return;
     if (readOnly) setReloadToken((value) => value + 1);
@@ -140,12 +187,13 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
   const tooLarge = characterCount > limits.characters || byteCount > limits.bytes;
   const dirty = value !== original;
   const mode = modeFor(value);
+  const formattedParts = mode === 'custom' ? parseSurveyInstructionFormatting(value || '') : [];
 
   return (
     <Paper elevation={2} sx={{ p: 3, borderRadius: 2 }} aria-busy={loading || saving}>
       <Typography variant="h6" color="primary" sx={{ fontWeight: 'bold', mb: 1 }}>Respondent Survey Instructions</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Choose the current survey-specific default, hide the block completely, or provide plain-text instructions.
+        Choose the current survey-specific default, hide the block completely, or provide custom instructions with optional bold text.
       </Typography>
       {readOnly && <Alert severity="info" sx={{ mb: 2 }}>{readOnlyMessage || 'You do not have permission to update these instructions.'}</Alert>}
       {notice && <Alert
@@ -174,16 +222,55 @@ const SurveyInstructionsEditor = ({ surveyId, readOnly = false, readOnlyMessage,
         </Alert>
       )}
       {mode === 'custom' && (
-        <TextField
-          fullWidth multiline minRows={5} label="Custom survey instructions" value={value || ''}
-          onChange={(event) => setDraft(event.target.value)} disabled={loading || saving || !loaded}
-          InputProps={{ readOnly }}
-          error={tooLarge}
-          helperText={`${characterCount}/${limits.characters} characters; ${byteCount}/${limits.bytes} UTF-8 bytes${tooLarge ? '. Limit exceeded; shorten the instructions before saving.' : ''}`}
-          FormHelperTextProps={{ id: 'survey-instructions-count' }}
-          inputProps={{ 'aria-describedby': 'survey-instructions-count' }}
-          sx={{ mt: 2, '& textarea': { overflowWrap: 'anywhere' } }}
-        />
+        <Box sx={{ mt: 2 }}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<FormatBoldIcon />}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => toggleBold()}
+            disabled={readOnly || loading || saving || !loaded}
+            aria-label="Toggle bold formatting"
+            sx={{ mb: 1, fontWeight: 'bold' }}
+          >
+            Bold
+          </Button>
+          <TextField
+            fullWidth multiline minRows={5} label="Custom survey instructions" value={value || ''}
+            inputRef={inputRef}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleEditorKeyDown}
+            disabled={loading || saving || !loaded}
+            InputProps={{ readOnly }}
+            error={tooLarge}
+            helperText={`Select text and choose Bold (or press Ctrl/Command+B). Bold markers (**) must open and close on the same line and count toward the limits. ${characterCount}/${limits.characters} characters; ${byteCount}/${limits.bytes} UTF-8 bytes${tooLarge ? '. Limit exceeded; shorten the instructions before saving.' : ''}`}
+            FormHelperTextProps={{ id: 'survey-instructions-count' }}
+            inputProps={{
+              'aria-describedby': 'survey-instructions-count',
+              'aria-keyshortcuts': 'Control+B Meta+B',
+            }}
+            sx={{ '& textarea': { overflowWrap: 'anywhere' } }}
+          />
+          <Box
+            component="section"
+            aria-labelledby="survey-instructions-preview-label"
+            sx={{ mt: 2, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}
+          >
+            <Typography id="survey-instructions-preview-label" variant="subtitle2" sx={{ mb: 1 }}>
+              Formatted preview
+            </Typography>
+            <Typography
+              data-testid="survey-instructions-preview"
+              variant="body2"
+              color="text.secondary"
+              sx={{ lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+            >
+              {formattedParts.map((part, index) => part.bold
+                ? <strong key={index}>{part.text}</strong>
+                : <React.Fragment key={index}>{part.text}</React.Fragment>)}
+            </Typography>
+          </Box>
+        </Box>
       )}
       {mode !== 'custom' && (
         <Typography id="survey-instructions-count" variant="caption" sx={{ display: 'block', mt: 1 }}>

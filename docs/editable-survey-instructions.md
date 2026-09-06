@@ -6,13 +6,15 @@
 
 - `NULL` uses the current application-derived default. TeamEVAL surveys continue to use the approved TeamEVAL wording.
 - `''` explicitly hides the respondent instruction block.
-- Any nonempty string is an administrator override rendered as plain text.
+- Any nonempty string is an administrator override. Paired `**` markers around nonempty text on one line render that segment as bold; all other content remains literal text.
 
 The database has no content default and no blanket backfill. Authenticated dashboard clients use stable survey UUID routes `GET/PUT /api/surveys/:surveyId/instructions`; both responses use `Cache-Control: no-store`. PUT requires explicit `instructions` and `expectedInstructions` properties containing `null` or strings, is editor-only and draft-only, and runs under the shared Survey lifecycle row lock. The expected value provides compare-and-set protection against stale editors; conflicts preserve the draft and require loading the latest persisted value before retrying. Validation permits tabs and line breaks, rejects other C0/C1 controls, and enforces 5,000 Unicode code points plus 16,000 UTF-8 bytes.
 
 Each successful update writes `survey.instructions_updated` in the same transaction. Audit metadata contains only derived/hidden/override presence, character/byte lengths, and whether the value changed; instruction text is never copied into audit metadata.
 
-After respondent or demo-token authorization, `/api/questions` returns the resolved effective text. The respondent React runtime interpolates it as text with `white-space: pre-wrap`; it never treats it as HTML. Empty effective text omits the entire instruction block.
+After respondent or demo-token authorization, `/api/questions` returns the resolved effective string unchanged. Dashboard preview and respondent rendering use the same deterministic pure parser for nonempty, paired, same-line `**bold**` segments. Multiple and adjacent runs are supported; single stars, empty/unmatched markers, HTML-like input, and other malformed constructs remain literal text. The React views construct only text and `<strong>` nodes: they never parse Markdown generally, inject raw HTML, or use `dangerouslySetInnerHTML`. `white-space: pre-wrap` preserves authored LF/CRLF newlines, and bold markers cannot span a line break. Empty effective text omits the entire instruction block.
+
+The dashboard's Bold button (also available with Ctrl/Command+B) uses the shared selection transformer and displays a clearly labeled formatted preview. It handles mixed formatted/plain selections, partial selections within bold runs, and each nonempty line independently. A collapsed or otherwise unrepresentable selection is left unchanged and announced to the author rather than creating empty `****` markers. Marker characters count toward the existing character and byte limits. The representation requires no survey-schema or database migration, and API compare-and-set, copy, and audit-length behavior operate on the exact marker-bearing string.
 
 Survey copy stores the source's raw override in the new draft. It does not materialize a derived default and continues to exclude participants, bearer tokens, responses, launches, attempts, and delivery history.
 

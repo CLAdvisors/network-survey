@@ -54,6 +54,8 @@ test('NULL derives approved TeamEVAL/default instructions while empty hides exac
 test('instruction validation enforces explicit type, character, byte, and control policies', () => {
   assert.equal(validateInstructionOverride(null), null);
   assert.equal(validateInstructionOverride('line one\nline two\tvalue'), 'line one\nline two\tvalue');
+  assert.equal(validateInstructionOverride('Read **carefully**; <script> stays text.</script>'), 'Read **carefully**; <script> stays text.</script>');
+  assert.equal(validateInstructionOverride('**unfinished\n****'), '**unfinished\n****');
   assert.throws(() => validateInstructionOverride(undefined), /string or null/);
   assert.throws(() => validateInstructionOverride({}), /string or null/);
   assert.throws(() => validateInstructionOverride('bad\u0000value'), /control characters/);
@@ -72,7 +74,7 @@ test('tenant-safe role authorization is non-enumerating', async () => {
 });
 
 test('draft update and strict audit commit atomically without instruction content in audit metadata', async () => {
-  const privateValue = 'Private <script>literal</script>\nsecond line';
+  const privateValue = 'Private **<script>literal</script>**\nsecond line';
   const { pool, calls } = clientPool({ instructions: null });
   const result = await lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, privateValue, null);
   assert.equal(result.instructions, privateValue);
@@ -81,7 +83,10 @@ test('draft update and strict audit commit atomically without instruction conten
   assert.ok(audit);
   assert.equal(audit.values[3], 'survey.instructions_updated');
   assert.doesNotMatch(audit.values[4], /Private|script|second line/);
-  assert.deepEqual(Object.keys(JSON.parse(audit.values[4])).sort(), [
+  const auditMetadata = JSON.parse(audit.values[4]);
+  assert.equal(auditMetadata.nextCharacterLength, [...privateValue].length);
+  assert.equal(auditMetadata.nextByteLength, Buffer.byteLength(privateValue, 'utf8'));
+  assert.deepEqual(Object.keys(auditMetadata).sort(), [
     'changed', 'nextByteLength', 'nextCharacterLength', 'nextPresence',
     'previousByteLength', 'previousCharacterLength', 'previousPresence',
   ]);
@@ -97,9 +102,9 @@ test('oversized preserved legacy content can be replaced using exact expected-st
 });
 
 test('stale instruction updates fail without overwriting or auditing a newer value', async () => {
-  const { pool, calls } = clientPool({ instructions: 'newer value' });
+  const { pool, calls } = clientPool({ instructions: 'Read **carefully**' });
   await assert.rejects(
-    lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, 'stale draft', 'older value'),
+    lifecycle.updateSurveyInstructions(pool, { id: 9 }, surveyId, 'stale draft', 'Read carefully'),
     (error) => error.status === 409 && error.code === 'instructions_conflict'
   );
   assert.equal(calls.some(({ sql }) => /UPDATE survey SET instructions/.test(sql)), false);

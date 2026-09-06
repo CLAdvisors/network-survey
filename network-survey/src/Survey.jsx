@@ -5,6 +5,7 @@ import Header from './Header';
 import SurveyComponent from './SurveyComponent';
 import Logo from './logo.svg?react';
 import { PRODUCTION_SURVEY_WRAPPER_SX } from '@network-survey/frontend-shared';
+import { FormattedSurveyInstructions } from './surveyInstructionFormatting';
 
 const Survey = () => {
   const [title, setTitle] = useState('');
@@ -42,7 +43,7 @@ const Survey = () => {
                 Survey Instructions
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                {instructions}
+                <FormattedSurveyInstructions>{instructions}</FormattedSurveyInstructions>
               </Typography>
             </Box>
           )}

@@ -88,7 +88,7 @@ export const LONG_VALUE_SURVEY_JSON = {
       type: 'draggableranking',
       name: 'expedition_priorities',
       title: 'Build an expedition charter: rank up to five principles',
-      description: 'Synthetic exercise. Drag values into the ranked area, or use Rank and Unrank. Information controls never change the ranking.',
+      description: 'Synthetic exercise. Drag values into the selected area, or use Select and Unselect. Information controls never change the ordering.',
       maxSelectedChoices: 5,
       choices: SYNTHETIC_VALUES,
     },

@@ -100,7 +100,7 @@ describe('DraggableRankingQuestion', () => {
       />
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Rank: Alex' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Select: Alex' }));
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalledWith(['Alex']);
@@ -109,20 +109,46 @@ describe('DraggableRankingQuestion', () => {
     });
   });
 
-  it('offers keyboard-operable rank and unrank actions', async () => {
+  it('offers keyboard-operable select and unselect actions', async () => {
     const question = createQuestion([]);
     const onChange = vi.fn();
     render(
       <DraggableRankingQuestion question={question} value={question.value} onChange={onChange} />
     );
 
-    const rankButton = await screen.findByRole('button', { name: 'Rank: Alex' });
-    rankButton.focus();
+    const selectButton = await screen.findByRole('button', { name: 'Select: Alex' });
+    selectButton.focus();
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Unrank: Alex' })).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Unselect: Alex' })).toHaveFocus();
     });
+  });
+
+  it('selects a lower-list option by action without disturbing available ordering', async () => {
+    const question = createQuestion([]);
+    const onChange = vi.fn();
+    render(
+      <DraggableRankingQuestion question={question} value={question.value} onChange={onChange} />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select: Casey' }));
+
+    expect(onChange).toHaveBeenLastCalledWith(['Casey']);
+    expect(within(screen.getByTestId('drop-ranked')).getByText('Casey')).toBeInTheDocument();
+    expect(within(screen.getByTestId('drop-available')).getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label'))).toEqual(['Select: Alex', 'Select: Blair']);
+  });
+
+  it('announces configured minimum and maximum selection progress', async () => {
+    const question = createQuestion(['Alex']);
+    question.minSelectedChoices = 2;
+    render(
+      <DraggableRankingQuestion question={question} value={question.value} onChange={vi.fn()} />
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Selected 1 of 2 (minimum 2)');
+    expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'polite');
   });
 
   it('preserves controlled value-prop updates', async () => {
@@ -170,7 +196,7 @@ describe('DraggableRankingQuestion', () => {
     expect(screen.getByTestId('drop-ranked')).toHaveAttribute('data-disabled', 'true');
   });
 
-  it('lets long labels wrap without pushing supplement and rank actions onto another row', async () => {
+  it('lets long labels wrap without pushing supplement and select actions onto another row', async () => {
     const question = createQuestion();
     question.choices = ['Borrowed-tool stewardship with a deliberately extended title'];
     render(
@@ -186,7 +212,7 @@ describe('DraggableRankingQuestion', () => {
     expect(label).toHaveStyle({ flex: '1 1 0', minWidth: '0' });
     const row = label.parentElement;
     expect(within(row).getByRole('button', { name: 'Definition' })).toBeInTheDocument();
-    expect(within(row).getByRole('button', { name: /Rank:/ })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /Select:/ })).toBeInTheDocument();
   });
 
   it('supports a vertical available-options layout', async () => {

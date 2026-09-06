@@ -72,6 +72,67 @@ test('definition-free draggable rankings retain bounded string shorthand but rej
   );
 });
 
+test('draggable ranking selection limits preserve legacy schemas and validate explicit bounds', () => {
+  const legacy = definedRanking(['one', 'two']);
+  assert.deepEqual(validateSurveyDefinition(legacy), legacy);
+
+  const configured = definedRanking(['one', 'two', 'three']);
+  configured.elements[0].minSelectedChoices = 2;
+  configured.elements[0].maxSelectedChoices = 10;
+  const normalized = validateSurveyDefinition(configured);
+  assert.equal(normalized.elements[0].minSelectedChoices, 2);
+  assert.equal(normalized.elements[0].maxSelectedChoices, 10);
+  assert.deepEqual(validateRequiredAnswers(normalized, { values: ['one', 'two'] }), []);
+  assert.deepEqual(validateRequiredAnswers(normalized, { values: ['one'] }), ['Invalid response: values']);
+
+  const tooFewChoices = definedRanking(['one', 'two', 'three']);
+  tooFewChoices.elements[0].minSelectedChoices = 4;
+  assert.throws(
+    () => validateSurveyDefinition(tooFewChoices),
+    /minimum selections may not exceed the number of available choices/
+  );
+
+  for (const limits of [
+    { minSelectedChoices: -1 },
+    { minSelectedChoices: 1.5 },
+    { maxSelectedChoices: -1 },
+    { maxSelectedChoices: 2.5 },
+    { minSelectedChoices: 3, maxSelectedChoices: 2 },
+  ]) {
+    const invalid = definedRanking(['one', 'two', 'three']);
+    Object.assign(invalid.elements[0], limits);
+    assert.throws(() => validateSurveyDefinition(invalid), /selections/);
+  }
+});
+
+test('positive draggable ranking minimums treat omitted and empty optional answers equally', () => {
+  const schema = validateSurveyDefinition({ elements: [
+    { type: 'boolean', name: 'show' },
+    {
+      type: 'draggableranking', name: 'visible', choices: ['a', 'b'],
+      isRequired: false, minSelectedChoices: 1,
+    },
+    {
+      type: 'draggableranking', name: 'hidden', choices: ['a', 'b'],
+      isRequired: false, minSelectedChoices: 1, visibleIf: '{show} = true',
+    },
+    {
+      type: 'draggableranking', name: 'disabled', choices: ['a', 'b'],
+      isRequired: false, minSelectedChoices: 1, enableIf: '{show} = true',
+    },
+  ] });
+
+  assert.deepEqual(validateRequiredAnswers(schema, { show: false }), [
+    'Invalid response: visible',
+  ]);
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    show: false, visible: [], hidden: [], disabled: [],
+  }), ['Invalid response: visible']);
+  assert.deepEqual(validateRequiredAnswers(schema, {
+    show: false, visible: ['a'], hidden: [], disabled: [],
+  }), []);
+});
+
 test('definition is accepted only on draggable ranking choices as a literal string', () => {
   for (const element of [
     { type: 'radiogroup', name: 'radio', choices: [{ value: 'one', text: 'One', definition: 'No' }] },

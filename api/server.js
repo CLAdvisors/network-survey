@@ -1701,6 +1701,27 @@ function rejectMisplacedDefinitions(node, label, allowDefinition = false) {
   }
 }
 
+function validateDraggableRankingSelectionLimits(element, questionLabel) {
+  for (const [property, label] of [
+    ['minSelectedChoices', 'minimum selections'],
+    ['maxSelectedChoices', 'maximum selections'],
+  ]) {
+    const value = element[property];
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+      throw new Error(`${questionLabel} ${label} must be a nonnegative integer.`);
+    }
+  }
+
+  const minimum = element.minSelectedChoices || 0;
+  const maximum = element.maxSelectedChoices || 0;
+  if (maximum > 0 && minimum > maximum) {
+    throw new Error(`${questionLabel} minimum selections may not exceed maximum selections.`);
+  }
+  if (minimum > 0 && Array.isArray(element.choices) && minimum > element.choices.length) {
+    throw new Error(`${questionLabel} minimum selections may not exceed the number of available choices.`);
+  }
+}
+
 function normalizeDraggableRankingChoices(choices, questionLabel, definitionTotals) {
   if (!Array.isArray(choices)) throw new Error(`${questionLabel} choices must be an array.`);
 
@@ -1923,8 +1944,11 @@ function validateSurveyDefinition(json) {
       }
 
       let normalizedChoices = element.choices;
-      if (element.type === 'draggableranking' && element.choices !== undefined) {
-        normalizedChoices = normalizeDraggableRankingChoices(element.choices, questionLabel, definitionTotals);
+      if (element.type === 'draggableranking') {
+        validateDraggableRankingSelectionLimits(element, questionLabel);
+        if (element.choices !== undefined) {
+          normalizedChoices = normalizeDraggableRankingChoices(element.choices, questionLabel, definitionTotals);
+        }
       } else if (element.choices !== undefined) {
         validateItemDefinitions(element.choices, `${questionLabel} choices`);
       }
@@ -2264,6 +2288,14 @@ function validateRequiredAnswers(schema, answers, options = {}) {
     if (element.isRequired === true && isVisible && isEnabled && isEmptyAnswer(value)) {
       addInvalid(element.name);
     }
+    // Unlike isRequired, a positive selection minimum applies even to an
+    // otherwise optional custom ranking. Omission and [] must be equivalent;
+    // SurveyJS visibility/enabled state still exempts conditional questions.
+    if (element.type === 'draggableranking' && isVisible && isEnabled &&
+        Number.isSafeInteger(element.minSelectedChoices) && element.minSelectedChoices > 0 &&
+        (!hasAnswer || !Array.isArray(value) || value.length < element.minSelectedChoices)) {
+      addInvalid(element.name);
+    }
     if (!hasAnswer) return;
 
     let valid = true;
@@ -2281,7 +2313,10 @@ function validateRequiredAnswers(schema, answers, options = {}) {
         validateChoiceValues([value], choices, allowsFreeFormOther(schema, element));
     } else if (multiChoiceTypes.has(element.type)) {
       const choices = modelChoiceValues(modelQuestion, element);
-      valid = validateSelectionCount(element, value) && !hasDuplicateValues(value) &&
+      const selectionConfiguration = element.type === 'draggableranking' && (!isVisible || !isEnabled)
+        ? { ...element, minSelectedChoices: 0 }
+        : element;
+      valid = validateSelectionCount(selectionConfiguration, value) && !hasDuplicateValues(value) &&
         validateChoiceValues(value, choices, allowsFreeFormOther(schema, element));
     } else if (element.type === 'tagbox') {
       const configuredChoices = modelChoiceValues(modelQuestion, element) || [];

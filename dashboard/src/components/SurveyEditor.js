@@ -57,14 +57,23 @@ Serializer.addClass(
   () => new QuestionDraggableRankingModel(''),
   'question'
 );
-// Register choices property with correct type and category for SurveyJS property panel
+// Register choices property with correct type and category for SurveyJS property panel.
+// Zero remains the serialization fallback so legacy schemas with no limit keep
+// their prior behavior; the toolbox template below gives new questions 7/7.
 Serializer.addProperty('draggableranking', { name: 'choices:itemvalue[]', default: [], category: 'choices' });
+Serializer.addProperty('draggableranking', {
+  name: 'minSelectedChoices:number',
+  default: 0,
+  minValue: 0,
+  category: 'choices',
+  displayName: 'Minimum selections'
+});
 Serializer.addProperty('draggableranking', {
   name: 'maxSelectedChoices:number',
   default: 0,
   minValue: 0,
   category: 'choices',
-  displayName: 'Max ranked items'
+  displayName: 'Maximum selections'
 });
 // Assign an iconName so the custom type has an icon in the toolbox
 Serializer.addProperty('draggableranking', { name: 'iconName', default: 'icon-tagbox' });
@@ -254,9 +263,16 @@ export const createConfiguredSurveyCreator = () => {
       type: 'draggableranking',
       name: 'draggableranking1',
       title: 'Draggable Ranking',
+      minSelectedChoices: 7,
+      maxSelectedChoices: 7,
       choices: [
         { value: 'item1', text: 'Item 1' },
-        { value: 'item2', text: 'Item 2' }
+        { value: 'item2', text: 'Item 2' },
+        { value: 'item3', text: 'Item 3' },
+        { value: 'item4', text: 'Item 4' },
+        { value: 'item5', text: 'Item 5' },
+        { value: 'item6', text: 'Item 6' },
+        { value: 'item7', text: 'Item 7' }
       ]
     }
   });

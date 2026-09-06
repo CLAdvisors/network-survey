@@ -72,7 +72,7 @@ const buildChoiceFromValue = (value) => {
   };
 };
 
-const parseMaxSelected = (value) => {
+const parseSelectionLimit = (value) => {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) {
     return null;
@@ -141,7 +141,7 @@ function Item({
       <div
         {...provided.dragHandleProps}
         aria-label={supplement
-          ? `${text}. ${stateLabel}. ${actionDisabled ? "Ranking limit reached." : "Drag to reorder or move between lists."}`
+          ? `${text}. ${stateLabel}. ${actionDisabled ? "Selection limit reached." : "Drag to reorder or move between lists."}`
           : undefined}
         style={{
           // A zero flex basis keeps long labels from claiming the action buttons'
@@ -181,8 +181,12 @@ export default function DraggableRankingQuestion({
   const isQuestionValueSource = valueSource === "question";
 
   const maxSelected = React.useMemo(
-    () => parseMaxSelected(question?.maxSelectedChoices),
+    () => parseSelectionLimit(question?.maxSelectedChoices),
     [question?.maxSelectedChoices]
+  );
+  const minSelected = React.useMemo(
+    () => parseSelectionLimit(question?.minSelectedChoices),
+    [question?.minSelectedChoices]
   );
 
   const syncFromValue = React.useCallback((currentValue) => {
@@ -339,7 +343,7 @@ export default function DraggableRankingQuestion({
     >
       <div style={{ display: "flex", flexDirection: "column" }}>
         <div style={{ marginBottom: 16 }}>
-          <strong>Ranked (drag items here to rank):</strong>
+          <strong>Selected options (drag to reorder):</strong>
           <Droppable
             droppableId="ranked"
             direction="vertical"
@@ -369,7 +373,7 @@ export default function DraggableRankingQuestion({
                 }}
               >
                 {ranked.length === 0 && (
-                  <span style={{ color: colors.disabled }}>Drag options here to rank</span>
+                  <span style={{ color: colors.disabled }}>Drag options here to select</span>
                 )}
                 {ranked.map((item, index) => (
                   <Draggable key={item.key} draggableId={item.key} index={index}>
@@ -378,10 +382,10 @@ export default function DraggableRankingQuestion({
                         item={item}
                         provided={provided2}
                         snapshot={snapshot2}
-                        actionLabel="Unrank"
+                        actionLabel="Unselect"
                         actionButtonRef={(node) => setActionButtonRef("ranked", item.key, node)}
                         onAction={() => unrankItem(index)}
-                        stateLabel={`Ranked position ${index + 1}`}
+                        stateLabel={`Selected position ${index + 1}`}
                         supplement={renderChoiceSupplement?.(item, {
                           list: "ranked",
                           isAssigned: true,
@@ -400,15 +404,18 @@ export default function DraggableRankingQuestion({
               </div>
             )}
           </Droppable>
-          {maxSelected && (
+          {(minSelected || maxSelected) && (
             <div
+              role="status"
+              aria-live="polite"
               style={{
                 marginTop: 4,
                 fontSize: "0.8rem",
                 color: isLimitReached ? colors.error : colors.muted
               }}
             >
-              Selected {Math.min(ranked.length, maxSelected)} of {maxSelected}
+              Selected {ranked.length}{maxSelected ? ` of ${maxSelected}` : ''}
+              {minSelected ? ` (minimum ${minSelected})` : ''}
             </div>
           )}
         </div>
@@ -437,11 +444,11 @@ export default function DraggableRankingQuestion({
                         item={item}
                         provided={provided2}
                         snapshot={snapshot2}
-                        actionLabel="Rank"
+                        actionLabel="Select"
                         actionButtonRef={(node) => setActionButtonRef("available", item.key, node)}
                         actionDisabled={isLimitReached}
                         onAction={() => rankAvailableItem(index)}
-                        stateLabel="Available, not ranked"
+                        stateLabel="Available, not selected"
                         supplement={renderChoiceSupplement?.(item, {
                           list: "available",
                           isAssigned: false,

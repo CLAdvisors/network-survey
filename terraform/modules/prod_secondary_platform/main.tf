@@ -932,7 +932,7 @@ locals {
   process_memory_alarm_bytes = {
     api              = 335544320 # 320 MiB, before PM2's 352 MiB restart tripwire
     "email-worker"   = 157286400 # 150 MiB, before PM2's 176 MiB restart tripwire
-    "webhook-worker" = 157286400
+    "webhook-worker" = 234881024 # 224 MiB, before PM2's 256 MiB restart tripwire
   }
   host_alarms = {
     memory = { metric = "mem_used_percent", comparison = "GreaterThanThreshold", threshold = 85, statistic = "Maximum", description = "Host memory usage exceeded 85 percent." }
@@ -1013,6 +1013,24 @@ resource "aws_cloudwatch_metric_alarm" "process_restart_churn" {
   evaluation_periods  = 1
   datapoints_to_alarm = 1
   period              = 900
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.operations.arn]
+  ok_actions          = [aws_sns_topic.operations.arn]
+  tags                = var.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "webhook_process_sustained_restarts" {
+  alarm_name          = "${var.name_prefix}-webhook-worker-sustained-restarts"
+  alarm_description   = "The webhook worker started in at least three of the last eight hourly periods; inspect recurring failures while retaining the 15-minute burst alarm."
+  namespace           = "NetworkSurvey/Runtime"
+  metric_name         = "ProcessStartCount"
+  dimensions          = { Environment = var.environment, Process = "webhook-worker" }
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  evaluation_periods  = 8
+  datapoints_to_alarm = 3
+  period              = 3600
   statistic           = "Sum"
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.operations.arn]

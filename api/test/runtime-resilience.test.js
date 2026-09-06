@@ -268,7 +268,7 @@ test('demo email retries reuse one provider idempotency key', () => {
   assert.doesNotMatch(demoEmailIdempotencyKey(token), /signed-demo-token/);
 });
 
-test('runtime telemetry emits the process start synchronously when runtime starts', () => {
+test('runtime telemetry synchronously emits deterministic process start and memory metrics', () => {
   const records = [];
   const originalLog = console.log;
   console.log = (line) => records.push(JSON.parse(line));
@@ -278,12 +278,25 @@ test('runtime telemetry emits the process start synchronously when runtime start
       processName:'fast-crash-test',
       env:{ EMAIL_WORKER_ENV:'test' },
       intervalMs:60000,
+      memoryUsage:() => ({ rss:101, heapUsed:102, heapTotal:103, external:104, arrayBuffers:105 }),
     });
     telemetry.stop();
   } finally { console.log = originalLog; }
   assert.equal(records.length, 1);
   assert.equal(records[0].ProcessStartCount, 1);
+  assert.equal(records[0].Environment, 'test');
   assert.equal(records[0].Process, 'fast-crash-test');
+  assert.deepEqual(records[0]._aws.CloudWatchMetrics[0].Dimensions, [['Environment', 'Process']]);
+  for (const [name, value] of Object.entries({
+    ProcessRssBytes:101,
+    ProcessHeapUsedBytes:102,
+    ProcessHeapTotalBytes:103,
+    ProcessExternalBytes:104,
+    ProcessArrayBuffersBytes:105,
+  })) {
+    assert.equal(records[0][name], value);
+    assert.deepEqual(records[0]._aws.CloudWatchMetrics[0].Metrics.find((metric) => metric.Name === name), { Name:name, Unit:'Bytes' });
+  }
 });
 
 test('runtime telemetry reports bounded database dependency failure', async () => {
@@ -320,7 +333,10 @@ test('PM2 restart policy contains crash churn and scopes RSS tripwires to review
     assert.equal(app.exp_backoff_restart_delay, 1000);
   }
   const totalMiB = ecosystem.apps.reduce((sum, app) => sum + Number.parseInt(app.max_memory_restart, 10), 0);
-  assert.equal(totalMiB, 704);
+  assert.equal(totalMiB, 784);
+  assert.equal(ecosystem.apps.find((app) => app.name === 'ona-api').max_memory_restart, '352M');
+  assert.equal(ecosystem.apps.find((app) => app.name === 'ona-email-worker').max_memory_restart, '176M');
+  assert.equal(ecosystem.apps.find((app) => app.name === 'ona-email-webhook-worker').max_memory_restart, '256M');
   assert.equal(ecosystem.apps.find((app) => app.name === 'ona-api').kill_timeout, 30000);
   process.env.EMAIL_WORKER_ENV = 'staging';
   delete require.cache[ecosystemPath];
@@ -332,6 +348,30 @@ test('PM2 restart policy contains crash churn and scopes RSS tripwires to review
   assert.match(serverSource, /setTimeout\(\(\) => process\.exit\(1\), 28000\)/);
 });
 
+test('webhook sustained restart alarm detects recurring starts without flagging a two-bucket rollout', () => {
+  const terraform = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/prod_secondary_platform/main.tf'), 'utf8');
+  const match = terraform.match(/^resource "aws_cloudwatch_metric_alarm" "webhook_process_sustained_restarts" \{[\s\S]*?^\}$/m);
+  assert.ok(match, 'sustained restart alarm resource must exist');
+  const alarm = match[0];
+  const setting = (name) => Number(alarm.match(new RegExp(`^\\s*${name}\\s*=\\s*(\\d+)`, 'm'))?.[1]);
+  assert.match(alarm, /alarm_description\s+= "The webhook worker started in at least three of the last eight hourly periods; inspect recurring failures while retaining the 15-minute burst alarm\."/);
+  assert.match(alarm, /metric_name\s+= "ProcessStartCount"/);
+  assert.match(alarm, /Process = "webhook-worker"/);
+  assert.match(alarm, /comparison_operator = "GreaterThanThreshold"/);
+  assert.equal(setting('threshold'), 0);
+  assert.equal(setting('evaluation_periods'), 8);
+  assert.equal(setting('datapoints_to_alarm'), 3);
+  assert.equal(setting('period'), 3600);
+  assert.match(alarm, /statistic\s+= "Sum"/);
+  assert.match(alarm, /treat_missing_data\s+= "notBreaching"/);
+
+  const alarmsFor = (buckets) => buckets.slice(-setting('evaluation_periods'))
+    .filter((starts) => starts > setting('threshold')).length >= setting('datapoints_to_alarm');
+  assert.equal(alarmsFor([1, 0, 1, 0, 1, 0, 1, 0]), true, 'starts every two hours');
+  assert.equal(alarmsFor([1, 0, 0, 1, 0, 0, 1, 0]), true, 'starts every three hours');
+  assert.equal(alarmsFor([0, 0, 0, 0, 0, 0, 1, 1]), false, 'two planned adjacent-bucket starts');
+});
+
 test('prod-secondary replacement health is process-only and activation controls remain default-off', () => {
   const terraform = fs.readFileSync(path.resolve(__dirname, '../../terraform/modules/prod_secondary_platform/main.tf'), 'utf8');
   assert.match(terraform, /path\s+= "\/live"/);
@@ -339,6 +379,8 @@ test('prod-secondary replacement health is process-only and activation controls 
   assert.match(terraform, /health_check_grace_period\s+= 1800/);
   assert.match(terraform, /instance_warmup\s+= 2700/);
   assert.match(terraform, /metric_name\s+= "DbDependencyHealthy"/);
+  assert.match(terraform, /"webhook-worker"\s+= 234881024 # 224 MiB, before PM2's 256 MiB restart tripwire/);
+  assert.match(terraform, /resource "aws_cloudwatch_metric_alarm" "process_restart_churn"[\s\S]*period\s+= 900[\s\S]*statistic\s+= "Sum"/);
   assert.match(terraform, /pattern\s+= "\?\\"Out of memory\\" \?\\"Killed process\\" \?\\"oom-kill\\""/);
   assert.match(terraform, /\?\\"EXT4-fs\\"/);
   assert.match(terraform, /\$\{var\.environment\}-KernelOomCount/);

@@ -223,14 +223,14 @@ function createNonOverlappingScheduler(task, {
   };
 }
 
-function startRuntimeTelemetry({ pool, processName, env = process.env, intervalMs = 60000 } = {}) {
+function startRuntimeTelemetry({ pool, processName, env = process.env, intervalMs = 60000, memoryUsage = () => process.memoryUsage() } = {}) {
   const environment = env.EMAIL_WORKER_ENV || env.APP_ENV || env.NODE_ENV || 'local';
   const release = env.RELEASE_REVISION || env.REVISION || 'local';
   const histogram = monitorEventLoopDelay({ resolution: 20 });
   histogram.enable();
   let first = true;
   const emit = (dependencyHealthy) => {
-    const memory = process.memoryUsage();
+    const memory = memoryUsage();
     const snapshot = poolSnapshot(pool);
     const lagMs = Number.isFinite(histogram.max) ? Math.round(histogram.max / 1e6) : 0;
     histogram.reset();
@@ -244,6 +244,9 @@ function startRuntimeTelemetry({ pool, processName, env = process.env, intervalM
         ProcessStartCount: first ? 1 : 0,
         ProcessRssBytes: memory.rss,
         ProcessHeapUsedBytes: memory.heapUsed,
+        ProcessHeapTotalBytes: memory.heapTotal,
+        ProcessExternalBytes: memory.external,
+        ProcessArrayBuffersBytes: memory.arrayBuffers,
         EventLoopLagMilliseconds: lagMs,
         DbPoolActive: snapshot.active,
         DbPoolIdle: snapshot.idle,

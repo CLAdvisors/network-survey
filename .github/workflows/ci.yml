@@ -221,6 +221,9 @@ jobs:
       - name: Validate prod-secondary bootstrap contract
         run: node scripts/ci/validate-prod-secondary-bootstrap.js
 
+      - name: Validate safe access logging contract
+        run: node scripts/ci/validate-safe-access-logging.js
+
       - name: Test prod-secondary /live migration preflight
         run: bash scripts/ci/test-prod-secondary-live-preflight.sh
 

@@ -22,6 +22,7 @@ const { effectiveInstructions } = require('./survey-instructions');
 const { createResendWebhookHandler } = require('./webhooks');
 const { displayedRespondentPredicate, displayedRespondentCountExpression, isLegacyPlaceholderRespondent } = require('./respondent-utils');
 const { createPool, createDependencyProbe, createHealthHandlers, startRuntimeTelemetry } = require('./runtime-resilience');
+const { createAccessErrorTelemetry } = require('./access-telemetry');
 const resendApiKey = process.env.RESEND_KEY || process.env.RESEND_API_KEY;
 
 // Keep server-side validation in step with the respondent's custom SurveyJS type.
@@ -142,6 +143,7 @@ async function executeQuery(query, values = []) {
 }
 
 const app = express();
+app.use(createAccessErrorTelemetry());
 const port = Number(process.env.PORT) || 3000;
 const dependencyProbe = createDependencyProbe(pool, {
   timeoutMs: Math.max(250, Number(process.env.HEALTH_DB_TIMEOUT_MS || 2000)),
@@ -305,7 +307,7 @@ app.use(cors({
     if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
-      console.warn(`CORS withheld for origin: ${origin} (Allowed: ${allowedOrigins.join(', ')})`);
+      console.warn('CORS withheld for an untrusted origin');
       // Continue without CORS headers so authenticated mutation middleware can
       // return its stable 403 instead of Express converting a CORS error to 500.
       callback(null, false);
@@ -2360,7 +2362,6 @@ function csvToJson(csvString, title) {
 
     // Iterate through each parsed data and create the corresponding question object
     result.data.forEach(item => {
-      console.log(item);
     let questionObject = {
             "type": item['Question type'],
             "name": item['Question name'],
@@ -3314,7 +3315,6 @@ app.get('/api/results', requireAuth, async (req, res) => {
         const users = response.rows.map(row => {
           return {name: row.name, isRespondent: row.can_respond}
         });
-        console.log(users);
         res.status(200).json({responses, users});
     })
     .catch(e => console.error(e.stack))

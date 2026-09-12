@@ -3,8 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient, reserveProviderRateWithAvailabilityInTransaction } = require('../email');
-const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, transitionSurvey } = require('../lifecycle');
+const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient, reserveProviderRateWithAvailabilityInTransaction } = require('../email');
+const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, launchReminder, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
 test('invitation rendering escapes templates and emits equivalent accessible HTML/text', () => {
@@ -15,7 +15,9 @@ test('invitation rendering escapes templates and emits equivalent accessible HTM
   });
   assert.match(payload.html, /<html lang="en">/);
   assert.match(payload.html, /alt="Contemporary Leadership Advisors"/);
-  assert.match(payload.html, />Open your CLA Network Survey</);
+  assert.match(payload.html, /<title>CLA Survey<\/title>/);
+  assert.match(payload.html, /<h1[^>]*>CLA Survey<\/h1>/);
+  assert.match(payload.html, />Start Survey<\/a>/);
   assert.doesNotMatch(payload.html, /<script>/);
   assert.match(payload.html, /&lt;script&gt;/);
   assert.match(payload.text, /Please participate/);
@@ -41,25 +43,25 @@ test('synchronous sender identity changes only for prod-secondary', () => {
   assert.deepEqual(synchronousEmailIdentity({EMAIL_WORKER_ENV:'staging',SURVEY_EMAIL_SENDER:'unexpected'}),{sender:'CLA Survey <survey@cladvisors.com>',replyTo:null});
 });
 
-test('current invitations include the approved privacy notice and accessible policy link', () => {
+test('current invitations include the requested header, action, and concise privacy notice', () => {
   const payload = buildInvitationPayload({
     to: 'person@example.com', bodyText: 'Please participate.', surveyBaseUrl: 'https://survey.example.test/form',
     surveyName: 'Leadership & Team', token: 'respondent-token', language: 'English',
   });
-  for (const clause of [
-    'confidential, but not anonymous',
-    'will not be shared with your employer',
-    'groups of at least five respondents',
-    'will not disclose how an identifiable individual responded or who nominated them',
-    'Open-ended comments are not attributed',
-    'de-identified survey data for research, benchmarking',
-    'retained for up to three years',
-  ]) {
-    assert.match(payload.html, new RegExp(clause, 'i'));
-    assert.match(payload.text, new RegExp(clause, 'i'));
+  const confidentiality = 'This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.';
+  assert.match(payload.html, /<title>CLA Survey<\/title>/);
+  assert.match(payload.html, /<h1[^>]*>CLA Survey<\/h1>/);
+  assert.match(payload.html, />Start Survey<\/a>/);
+  assert.doesNotMatch(payload.html, /Open your CLA Network Survey/);
+  assert.equal(payload.subject, 'CLA Network Survey');
+  assert.match(payload.html, new RegExp(confidentiality.replace(/[()]/g, '\\$&')));
+  assert.match(payload.text, new RegExp(confidentiality.replace(/[()]/g, '\\$&')));
+  for (const removedClause of ['groups of at least five respondents', 'Open-ended comments are not attributed', 'retained for up to three years']) {
+    assert.doesNotMatch(payload.html, new RegExp(removedClause, 'i'));
+    assert.doesNotMatch(payload.text, new RegExp(removedClause, 'i'));
   }
-  assert.match(payload.html, /href="https:\/\/survey\.example\.test\/privacy-policy\.html"/);
-  assert.match(payload.text, /Employee Survey Platform Privacy Policy: https:\/\/survey\.example\.test\/privacy-policy\.html/);
+  assert.match(payload.html, /For more information, review our <a href="https:\/\/survey\.example\.test\/privacy-policy\.html">Employee Survey Platform Privacy Policy<\/a>\.<\/p><\/section><p>— The CLA team<\/p>/);
+  assert.match(payload.text, /^CLA Survey\n\n[\s\S]*\n\nStart Survey:\n[\s\S]*\n\nYour Privacy\n\n[\s\S]*For more information, review our Employee Survey Platform Privacy Policy\.\nhttps:\/\/survey\.example\.test\/privacy-policy\.html\n\n— The CLA team/m);
 });
 
 test('policy links are root-relative, validated, and escaped in invitation HTML', () => {
@@ -73,12 +75,13 @@ test('policy links are root-relative, validated, and escaped in invitation HTML'
   assert.match(payload.html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
 });
 
-test('versioned rendering preserves queued v1/v2 payload hashes and v3 tag behavior', () => {
+test('versioned rendering preserves queued v1/v2/v3 payload hashes and adds tagged v4 output', () => {
   const base={to:'a@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',bodyText:'Welcome',surveyBaseUrl:'https://survey.test',surveyName:'S',token:'secret-token',language:'en',deliveryId:'11111111-1111-4111-8111-111111111111',environment:'staging'};
   const expected = new Map([
     [LEGACY_RENDERER_VERSION, 'c378d13b62c038b6b67a51e559bbedbee00fd19443c7bfe671c6a123c5d04be9'],
     [TAGGED_RENDERER_VERSION, 'c07845c9d4f2a5aa6c5ffb3a9b70ad1f5e78a69ceb9971c7d7c85463737abdad'],
-    [RENDERER_VERSION, '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd'],
+    [PRIVACY_RENDERER_VERSION, '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd'],
+    [RENDERER_VERSION, '63e29466a957142ae75930cb5a659d3b4424281692f9be80ad9f705495f056d8'],
   ]);
   for (const [rendererVersion, hash] of expected) {
     const payload = buildInvitationPayload({...base,rendererVersion});
@@ -92,7 +95,8 @@ test('worker reconstructs queued payloads from renderer version and snapshotted 
   const base={id:'11111111-1111-4111-8111-111111111111',to_address:'a@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',body_text:'Welcome',survey_base_url:'https://survey.test',uuid:'secret-token',language:'en',render_inputs:{surveyName:'S'}};
   assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:LEGACY_RENDERER_VERSION},'Renamed','staging')), 'c378d13b62c038b6b67a51e559bbedbee00fd19443c7bfe671c6a123c5d04be9');
   assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:TAGGED_RENDERER_VERSION},'Renamed','staging')), 'c07845c9d4f2a5aa6c5ffb3a9b70ad1f5e78a69ceb9971c7d7c85463737abdad');
-  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:RENDERER_VERSION},'Renamed','staging')), '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd');
+  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:PRIVACY_RENDERER_VERSION},'Renamed','staging')), '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd');
+  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:RENDERER_VERSION},'Renamed','staging')), '63e29466a957142ae75930cb5a659d3b4424281692f9be80ad9f705495f056d8');
 });
 
 test('published privacy policy is the approved complete document', () => {
@@ -233,6 +237,7 @@ test('reminder implementation selects and rechecks only incomplete eligible resp
   assert.match(lifecycleSource,/can_respond=true AND r\.response IS NULL/);
   assert.match(lifecycleSource,/displayedRespondentPredicate\('r'\)/);
   assert.match(lifecycleSource,/kind:'reminder'/);
+  assert.match(launchReminder.toString(), /buildInvitationPayload\([\s\S]*rendererVersion:RENDERER_VERSION/);
   assert.match(lifecycleSource,/prior_launch\.kind='reminder' AND \(prior\.status='uncertain' OR \(prior_launch\.provider_account_scope IS NULL/);
   assert.match(lifecycleSource,/INSERT INTO survey_launches\(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id,provider_account_scope\)/);
   assert.match(lifecycleSource,/status\) VALUES[\s\S]*'reminder_pending'/);

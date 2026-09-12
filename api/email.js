@@ -32,7 +32,8 @@ function validateProdSecondaryResendConfig(env = process.env) {
 }
 const LEGACY_RENDERER_VERSION = 'survey-invitation-v1';
 const TAGGED_RENDERER_VERSION = 'survey-invitation-v2';
-const RENDERER_VERSION = 'survey-invitation-v3';
+const PRIVACY_RENDERER_VERSION = 'survey-invitation-v3';
+const RENDERER_VERSION = 'survey-invitation-v4';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -100,23 +101,41 @@ function renderPrivacyInvitation({ bodyText, link, language = 'en', privacyPolic
   return { html, text };
 }
 
+function renderCurrentInvitation({ bodyText, link, language = 'en', privacyPolicyUrl }) {
+  const legacy = renderLegacyInvitation({ bodyText, link, language });
+  const privacyHtml = `<section aria-labelledby="privacy-heading"><h2 id="privacy-heading" style="font-size:20px;line-height:28px;color:#1e293b">Your Privacy</h2><p style="font-size:16px;line-height:24px;color:#334155">${escapeHtml(PRIVACY_PARAGRAPHS[0])}</p><p style="font-size:16px;line-height:24px;color:#334155">For more information, review our <a href="${escapeHtml(privacyPolicyUrl)}">Employee Survey Platform Privacy Policy</a>.</p></section>`;
+  const html = legacy.html
+    .replace('<title>CLA Network Survey</title>', '<title>CLA Survey</title>')
+    .replace('<h1 style="font-size:22px">CLA Network Survey</h1>', '<h1 style="font-size:22px">CLA Survey</h1>')
+    .replace('>Open your CLA Network Survey</a>', '>Start Survey</a>')
+    .replace('<p>— The CLA team</p>', `${privacyHtml}<p>— The CLA team</p>`);
+  const text = legacy.text
+    .replace(/^CLA Network Survey/, 'CLA Survey')
+    .replace('\n\nOpen your CLA Network Survey:\n', '\n\nStart Survey:\n')
+    .replace('\n\n— The CLA team', `\n\nYour Privacy\n\n${PRIVACY_PARAGRAPHS[0]}\n\nFor more information, review our Employee Survey Platform Privacy Policy.\n${privacyPolicyUrl}\n\n— The CLA team`);
+  return { html, text };
+}
+
 function renderInvitation({ bodyText, link, language = 'en', rendererVersion = RENDERER_VERSION, privacyPolicyUrl }) {
   if ([LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION].includes(rendererVersion)) {
     return renderLegacyInvitation({ bodyText, link, language });
   }
-  if (rendererVersion === RENDERER_VERSION) {
-    const policyUrl = privacyPolicyUrl || new URL('/privacy-policy.html', link).toString();
+  const policyUrl = privacyPolicyUrl || new URL('/privacy-policy.html', link).toString();
+  if (rendererVersion === PRIVACY_RENDERER_VERSION) {
     return renderPrivacyInvitation({ bodyText, link, language, privacyPolicyUrl: policyUrl });
+  }
+  if (rendererVersion === RENDERER_VERSION) {
+    return renderCurrentInvitation({ bodyText, link, language, privacyPolicyUrl: policyUrl });
   }
   throw new Error(`Unsupported invitation renderer version: ${rendererVersion}`);
 }
 
 function buildInvitationPayload({ to, sender = DEFAULT_SENDER, subject = 'CLA Network Survey', bodyText, surveyBaseUrl, surveyName, token, language, deliveryId, environment, rendererVersion = RENDERER_VERSION }) {
   const link = buildSurveyLink(surveyBaseUrl, surveyName, token);
-  const privacyPolicyUrl = rendererVersion === RENDERER_VERSION ? buildPrivacyPolicyUrl(surveyBaseUrl) : undefined;
+  const privacyPolicyUrl = [PRIVACY_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) ? buildPrivacyPolicyUrl(surveyBaseUrl) : undefined;
   const rendered = renderInvitation({ bodyText, link, language, rendererVersion, privacyPolicyUrl });
   const payload = { from: sender, to, subject, html: rendered.html, text: rendered.text };
-  if ([TAGGED_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) && deliveryId && environment) {
+  if ([TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) && deliveryId && environment) {
     payload.tags = [
       { name: 'app', value: 'network_survey' },
       { name: 'environment', value: String(environment).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 256) },
@@ -268,4 +287,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, demoEmailIdempotencyKey, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease };
+module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, demoEmailIdempotencyKey, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease };

@@ -33,7 +33,8 @@ function validateProdSecondaryResendConfig(env = process.env) {
 const LEGACY_RENDERER_VERSION = 'survey-invitation-v1';
 const TAGGED_RENDERER_VERSION = 'survey-invitation-v2';
 const PRIVACY_RENDERER_VERSION = 'survey-invitation-v3';
-const RENDERER_VERSION = 'survey-invitation-v4';
+const CONCISE_PRIVACY_RENDERER_VERSION = 'survey-invitation-v4';
+const RENDERER_VERSION = 'survey-invitation-v5';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -86,6 +87,8 @@ function renderLegacyInvitation({ bodyText, link, language = 'en' }) {
   return { html, text };
 }
 
+const CURRENT_CONFIDENTIALITY_PARAGRAPH = 'This survey is confidential. While Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research, your individual survey responses will not be shared with your employer. We will only share aggregate results.';
+
 const PRIVACY_PARAGRAPHS = [
   'This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.',
   'Survey results are generally reported in groups of at least five respondents. Certain analyses, particularly Organizational Network Analysis (ONA), may identify individuals when doing so is an intended part of the analysis—for example, identifying key organizational connectors—but CLA will not disclose how an identifiable individual responded or who nominated them.',
@@ -101,9 +104,9 @@ function renderPrivacyInvitation({ bodyText, link, language = 'en', privacyPolic
   return { html, text };
 }
 
-function renderCurrentInvitation({ bodyText, link, language = 'en', privacyPolicyUrl }) {
+function renderCurrentInvitation({ bodyText, link, language = 'en', privacyPolicyUrl, confidentialityParagraph = PRIVACY_PARAGRAPHS[0] }) {
   const legacy = renderLegacyInvitation({ bodyText, link, language });
-  const privacyHtml = `<section aria-labelledby="privacy-heading"><h2 id="privacy-heading" style="font-size:20px;line-height:28px;color:#1e293b">Your Privacy</h2><p style="font-size:16px;line-height:24px;color:#334155">${escapeHtml(PRIVACY_PARAGRAPHS[0])}</p><p style="font-size:16px;line-height:24px;color:#334155">For more information, review our <a href="${escapeHtml(privacyPolicyUrl)}">Employee Survey Platform Privacy Policy</a>.</p></section>`;
+  const privacyHtml = `<section aria-labelledby="privacy-heading"><h2 id="privacy-heading" style="font-size:20px;line-height:28px;color:#1e293b">Your Privacy</h2><p style="font-size:16px;line-height:24px;color:#334155">${escapeHtml(confidentialityParagraph)}</p><p style="font-size:16px;line-height:24px;color:#334155">For more information, review our <a href="${escapeHtml(privacyPolicyUrl)}">Employee Survey Platform Privacy Policy</a>.</p></section>`;
   const html = legacy.html
     .replace('<title>CLA Network Survey</title>', '<title>CLA Survey</title>')
     .replace('<h1 style="font-size:22px">CLA Network Survey</h1>', '<h1 style="font-size:22px">CLA Survey</h1>')
@@ -112,7 +115,7 @@ function renderCurrentInvitation({ bodyText, link, language = 'en', privacyPolic
   const text = legacy.text
     .replace(/^CLA Network Survey/, 'CLA Survey')
     .replace('\n\nOpen your CLA Network Survey:\n', '\n\nStart Survey:\n')
-    .replace('\n\n— The CLA team', `\n\nYour Privacy\n\n${PRIVACY_PARAGRAPHS[0]}\n\nFor more information, review our Employee Survey Platform Privacy Policy.\n${privacyPolicyUrl}\n\n— The CLA team`);
+    .replace('\n\n— The CLA team', `\n\nYour Privacy\n\n${confidentialityParagraph}\n\nFor more information, review our Employee Survey Platform Privacy Policy.\n${privacyPolicyUrl}\n\n— The CLA team`);
   return { html, text };
 }
 
@@ -124,18 +127,21 @@ function renderInvitation({ bodyText, link, language = 'en', rendererVersion = R
   if (rendererVersion === PRIVACY_RENDERER_VERSION) {
     return renderPrivacyInvitation({ bodyText, link, language, privacyPolicyUrl: policyUrl });
   }
-  if (rendererVersion === RENDERER_VERSION) {
+  if (rendererVersion === CONCISE_PRIVACY_RENDERER_VERSION) {
     return renderCurrentInvitation({ bodyText, link, language, privacyPolicyUrl: policyUrl });
+  }
+  if (rendererVersion === RENDERER_VERSION) {
+    return renderCurrentInvitation({ bodyText, link, language, privacyPolicyUrl: policyUrl, confidentialityParagraph: CURRENT_CONFIDENTIALITY_PARAGRAPH });
   }
   throw new Error(`Unsupported invitation renderer version: ${rendererVersion}`);
 }
 
 function buildInvitationPayload({ to, sender = DEFAULT_SENDER, subject = 'CLA Network Survey', bodyText, surveyBaseUrl, surveyName, token, language, deliveryId, environment, rendererVersion = RENDERER_VERSION }) {
   const link = buildSurveyLink(surveyBaseUrl, surveyName, token);
-  const privacyPolicyUrl = [PRIVACY_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) ? buildPrivacyPolicyUrl(surveyBaseUrl) : undefined;
+  const privacyPolicyUrl = [PRIVACY_RENDERER_VERSION, CONCISE_PRIVACY_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) ? buildPrivacyPolicyUrl(surveyBaseUrl) : undefined;
   const rendered = renderInvitation({ bodyText, link, language, rendererVersion, privacyPolicyUrl });
   const payload = { from: sender, to, subject, html: rendered.html, text: rendered.text };
-  if ([TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) && deliveryId && environment) {
+  if ([TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, CONCISE_PRIVACY_RENDERER_VERSION, RENDERER_VERSION].includes(rendererVersion) && deliveryId && environment) {
     payload.tags = [
       { name: 'app', value: 'network_survey' },
       { name: 'environment', value: String(environment).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 256) },
@@ -287,4 +293,4 @@ function classifyProviderError(error) {
   return 'permanent';
 }
 
-module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, demoEmailIdempotencyKey, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease };
+module.exports = { DEFAULT_SENDER, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, CONCISE_PRIVACY_RENDERER_VERSION, RENDERER_VERSION, escapeHtml, normalizeTemplateText, documentLanguage, buildSurveyLink, buildPrivacyPolicyUrl, renderInvitation, buildInvitationPayload, payloadHash, demoEmailIdempotencyKey, ResendProvider, ProviderError, classifyProviderError, sanitizeProviderMessage, reserveProviderRate, reserveProviderRateOnClient, reserveProviderRateInTransaction, reserveProviderRateWithAvailabilityInTransaction, unlockAdvisoryLocksAndRelease };

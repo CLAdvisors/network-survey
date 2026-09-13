@@ -73,6 +73,7 @@ locals {
     "DB_SOCKET_KEEPALIVE_DELAY_MS=5000",
     "HEALTH_DB_TIMEOUT_MS=2000",
     "RUNTIME_METRIC_NAMESPACE=NetworkSurvey/Runtime",
+    "ACCESS_ERROR_TELEMETRY_ENABLED=true",
     "SESSION_SECRET_PARAMETER=/network-survey/prod-secondary/api/session-secret",
     "SESSION_COOKIE_NAME=prodSecondarySessionId",
     "TRUST_CLOUDFRONT_VIEWER_PROTO=true",

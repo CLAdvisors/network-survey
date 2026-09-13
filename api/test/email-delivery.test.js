@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient, reserveProviderRateWithAvailabilityInTransaction } = require('../email');
+const { LEGACY_RENDERER_VERSION, TAGGED_RENDERER_VERSION, PRIVACY_RENDERER_VERSION, CONCISE_PRIVACY_RENDERER_VERSION, RENDERER_VERSION, PROD_SECONDARY_SCOPE, PROD_SECONDARY_SENDER, PROD_SECONDARY_REPLY_TO, synchronousEmailIdentity, validateProdSecondaryResendConfig, renderInvitation, buildInvitationPayload, buildPrivacyPolicyUrl, payloadHash, ResendProvider, classifyProviderError, ProviderError, reserveProviderRateOnClient, reserveProviderRateWithAvailabilityInTransaction } = require('../email');
 const { evaluateReadiness, evaluateReminderReadiness, getReminderReadiness, aggregateSelect, fingerprint, launchSurvey, launchReminder, transitionSurvey } = require('../lifecycle');
 const { DeliveryWorker, isOutsideProviderIdempotencyWindow, canRetryAmbiguous, buildDeliveryPayload } = require('../email-worker');
 
@@ -48,7 +48,7 @@ test('current invitations include the requested header, action, and concise priv
     to: 'person@example.com', bodyText: 'Please participate.', surveyBaseUrl: 'https://survey.example.test/form',
     surveyName: 'Leadership & Team', token: 'respondent-token', language: 'English',
   });
-  const confidentiality = 'This survey is confidential, but not anonymous. Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research. Your individual survey responses will not be shared with your employer.';
+  const confidentiality = 'This survey is confidential. While Contemporary Leadership Advisors (CLA) can associate your responses with your identity in order to administer the survey, conduct analysis, and perform research, your individual survey responses will not be shared with your employer. We will only share aggregate results.';
   assert.match(payload.html, /<title>CLA Survey<\/title>/);
   assert.match(payload.html, /<h1[^>]*>CLA Survey<\/h1>/);
   assert.match(payload.html, />Start Survey<\/a>/);
@@ -75,13 +75,14 @@ test('policy links are root-relative, validated, and escaped in invitation HTML'
   assert.match(payload.html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
 });
 
-test('versioned rendering preserves queued v1/v2/v3 payload hashes and adds tagged v4 output', () => {
+test('versioned rendering preserves queued v1/v2/v3/v4 payload hashes and adds tagged v5 output', () => {
   const base={to:'a@example.com',sender:'CLA Survey <survey@cladvisors.com>',subject:'CLA Network Survey',bodyText:'Welcome',surveyBaseUrl:'https://survey.test',surveyName:'S',token:'secret-token',language:'en',deliveryId:'11111111-1111-4111-8111-111111111111',environment:'staging'};
   const expected = new Map([
     [LEGACY_RENDERER_VERSION, 'c378d13b62c038b6b67a51e559bbedbee00fd19443c7bfe671c6a123c5d04be9'],
     [TAGGED_RENDERER_VERSION, 'c07845c9d4f2a5aa6c5ffb3a9b70ad1f5e78a69ceb9971c7d7c85463737abdad'],
     [PRIVACY_RENDERER_VERSION, '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd'],
-    [RENDERER_VERSION, '63e29466a957142ae75930cb5a659d3b4424281692f9be80ad9f705495f056d8'],
+    [CONCISE_PRIVACY_RENDERER_VERSION, '63e29466a957142ae75930cb5a659d3b4424281692f9be80ad9f705495f056d8'],
+    [RENDERER_VERSION, 'ed519bbb83fc458e01f880a2a1e87e3fc4d443f1a4034ce7617c287539e73cda'],
   ]);
   for (const [rendererVersion, hash] of expected) {
     const payload = buildInvitationPayload({...base,rendererVersion});
@@ -96,7 +97,8 @@ test('worker reconstructs queued payloads from renderer version and snapshotted 
   assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:LEGACY_RENDERER_VERSION},'Renamed','staging')), 'c378d13b62c038b6b67a51e559bbedbee00fd19443c7bfe671c6a123c5d04be9');
   assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:TAGGED_RENDERER_VERSION},'Renamed','staging')), 'c07845c9d4f2a5aa6c5ffb3a9b70ad1f5e78a69ceb9971c7d7c85463737abdad');
   assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:PRIVACY_RENDERER_VERSION},'Renamed','staging')), '25788182388a0fb868f296d028a15f8b7ed0088204ac3b151ac98040871cdedd');
-  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:RENDERER_VERSION},'Renamed','staging')), '63e29466a957142ae75930cb5a659d3b4424281692f9be80ad9f705495f056d8');
+  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:CONCISE_PRIVACY_RENDERER_VERSION},'Renamed','staging')), '63e29466a957142ae75930cb5a659d3b4424281692f9be80ad9f705495f056d8');
+  assert.equal(payloadHash(buildDeliveryPayload({...base,renderer_version:RENDERER_VERSION},'Renamed','staging')), 'ed519bbb83fc458e01f880a2a1e87e3fc4d443f1a4034ce7617c287539e73cda');
 });
 
 test('published privacy policy is the approved complete document', () => {

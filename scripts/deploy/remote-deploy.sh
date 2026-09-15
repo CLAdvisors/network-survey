@@ -107,6 +107,43 @@ append_secret_from_ssm() {
   append_secret_value "$env_key" "$value"
 }
 
+refresh_managed_db_password() {
+  local env_file="$1"
+  local secret_arn secret_json password temporary
+  secret_arn=$(ENV_FILE="$env_file" RELEASE_API_DIR="$RELEASE_DIR/api" node - <<'NODE'
+require(`${process.env.RELEASE_API_DIR}/node_modules/dotenv`).config({ path:process.env.ENV_FILE });
+process.stdout.write(process.env.DB_MANAGED_SECRET_ARN || '');
+NODE
+) || return 1
+  [ -n "$secret_arn" ] || return 0
+  secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_arn" --query SecretString --output text) || return 1
+  password=$(SECRET_JSON="$secret_json" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.password!=="string"||!value.password)process.exit(1);process.stdout.write(value.password)') || return 1
+  unset secret_json
+  temporary=$(mktemp "${env_file}.db-rotation.XXXXXX") || return 1
+  if ! ENV_FILE="$env_file" DB_PASSWORD="$password" node - <<'NODE' > "$temporary"
+const fs = require('fs');
+const lines = fs.readFileSync(process.env.ENV_FILE, 'utf8').split('\n');
+let found = false;
+const updated = lines.map((line) => {
+  if (!line.startsWith('DB_PASSWORD=')) return line;
+  if (found) throw new Error('runtime environment contains duplicate DB_PASSWORD entries');
+  found = true;
+  return `DB_PASSWORD=${JSON.stringify(process.env.DB_PASSWORD)}`;
+});
+if (!found) throw new Error('runtime environment is missing DB_PASSWORD');
+process.stdout.write(updated.join('\n'));
+NODE
+  then
+    rm -f "$temporary"
+    unset password
+    return 1
+  fi
+  unset password
+  chown --reference="$env_file" "$temporary" || { rm -f "$temporary"; return 1; }
+  chmod --reference="$env_file" "$temporary" || { rm -f "$temporary"; return 1; }
+  mv "$temporary" "$env_file" || { rm -f "$temporary"; return 1; }
+}
+
 echo "==> Resolving runtime secrets"
 DB_MANAGED_SECRET_ARN=$(get_env_value DB_MANAGED_SECRET_ARN || true)
 if [ -n "$DB_MANAGED_SECRET_ARN" ]; then
@@ -356,6 +393,11 @@ SENDING_HANDOFF_REENABLED=false
 restore_previous_release() {
   local status=$?
   if [ "$status" -ne 0 ] && [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+    echo "!! Refreshing previous release database credential before automatic restore" >&2
+    if ! refresh_managed_db_password "$PREVIOUS_RELEASE/api/.env.prod"; then
+      echo "!! Unable to refresh the previous release database credential; refusing automatic restore" >&2
+      return
+    fi
     echo "!! Validating previous release before automatic restore" >&2
     if ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database "${RELEASE_CAPABILITY_ARGS[@]}"; then
       echo "!! Previous release is below the active capability floor; refusing unsafe automatic restore" >&2

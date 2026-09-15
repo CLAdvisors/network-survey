@@ -2193,6 +2193,7 @@ test('remote deployment quiesces old workers before state-converting migrations'
   assert.match(deploy,/processing=true AND heartbeat_at>now\(\)-interval '45 seconds'/);
   assert.ok(deploy.indexOf('trap restore_pre_activation_handoff EXIT')<sendingPause,'migration failures must enter the guarded handoff cleanup');
   assert.match(deploy,/MIGRATION_STARTED=true[\s\S]+run_database_migrations/);
+  assert.match(deploy,/refresh_managed_db_password "\$PREVIOUS_RELEASE\/api\/\.env\.prod"[\s\S]+validate-release-capabilities\.js" "\$PREVIOUS_RELEASE"/,'automatic restore must refresh a rotated managed credential before validation or startup');
   const preActivationRestore=deploy.slice(deploy.indexOf('restore_pre_activation_handoff()'),deploy.indexOf('trap restore_pre_activation_handoff EXIT'));
   assert.match(preActivationRestore,/MIGRATION_STARTED[\s\S]+validate-release-capabilities\.js[\s\S]+PREVIOUS_RELEASE[\s\S]+leaving email controls paused/,'post-migration failure must not resume an incompatible previous release');
 });
@@ -2239,6 +2240,8 @@ test('rollback database validation uses the installed runtime and enforces provi
   const rollback=fs.readFileSync(path.join(__dirname,'../../.github/workflows/rollback-api.yml'),'utf8');
   assert.match(rollback,/TRUSTED_VALIDATOR_B64=.*validate-release-capabilities\.js/);
   assert.match(rollback,/node \/tmp\/ona-trusted-release-validator\.js \/tmp\/ona-deploy --database --runtime-api-dir \/opt\/service\/current\/api/);
+  const validator=fs.readFileSync(path.join(__dirname,'../../scripts/deploy/validate-release-capabilities.js'),'utf8');
+  assert.match(validator,/spawnSync\('aws', \[[\s\S]+secretsmanager', 'get-secret-value'/,'trusted rollback validation must resolve the current managed credential independently of stale release files');
   assert.match(rollback,/test -f \/opt\/service\/alb-live-health-required; then LIVE_HEALTH_FLAG=--require-alb-live-health/);
   assert.match(rollback,/--require-prod-secondary-resend-isolation/);
   const deploy=fs.readFileSync(path.join(__dirname,'../../scripts/deploy/remote-deploy.sh'),'utf8');

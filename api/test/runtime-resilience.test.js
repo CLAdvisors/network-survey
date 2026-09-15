@@ -111,6 +111,9 @@ test('database retry classification is narrow and does not hide programming fail
   assert.equal(isTransientDatabaseError({ code:'57014' }), true);
   assert.equal(isTransientDatabaseError({ code:'ECONNRESET' }), true);
   assert.equal(isTransientDatabaseError(new Error('Query read timeout')), true);
+  assert.equal(isTransientDatabaseError({ code:'DB_CREDENTIAL_UNAVAILABLE' }), true);
+  assert.equal(isTransientDatabaseError({ code:'28P01' }, {}), false);
+  assert.equal(isTransientDatabaseError({ code:'28P01' }, { DB_MANAGED_SECRET_ARN:'managed' }), true);
   assert.equal(isTransientDatabaseError(new TypeError('broken invariant')), false);
 });
 

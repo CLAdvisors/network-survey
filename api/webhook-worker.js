@@ -839,7 +839,7 @@ class WebhookWorker {
           this.clearError('loop');
         } catch (error) {
           this.processing = false;
-          if (!isTransientDatabaseError(error)) throw error;
+          if (!isTransientDatabaseError(error, this.env)) throw error;
           this.recordError('loop', error);
           await this.sleep(Math.max(250, Number(this.env.DB_STALL_RETRY_MS || 1000)));
         }

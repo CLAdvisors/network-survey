@@ -3,6 +3,7 @@
 const fs = require('fs');
 const { monitorEventLoopDelay } = require('perf_hooks');
 const { Pool } = require('pg');
+const { createManagedDatabasePasswordProvider } = require('./db-credentials');
 const { emitMetrics } = require('./email-metrics');
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -80,8 +81,11 @@ function guardCheckedOutClient(client) {
   return client;
 }
 
-function createPool(env = process.env) {
-  const pool = new Pool(poolConfigFromEnv(env));
+function createPool(env = process.env, { secretsClient } = {}) {
+  const config = poolConfigFromEnv(env);
+  const managedPassword = createManagedDatabasePasswordProvider(env, { client:secretsClient });
+  if (managedPassword) config.password = managedPassword;
+  const pool = new Pool(config);
   const originalConnect = pool.connect.bind(pool);
   pool.connect = (callback) => {
     if (typeof callback === 'function') {
@@ -98,8 +102,10 @@ function createPool(env = process.env) {
   return pool;
 }
 
-function isTransientDatabaseError(error) {
+function isTransientDatabaseError(error, env = process.env) {
   const code = String(error?.code || '').toUpperCase();
+  if (code === 'DB_CREDENTIAL_UNAVAILABLE') return true;
+  if (code === '28P01' && String(env.DB_MANAGED_SECRET_ARN || '').trim()) return true;
   if (/^(08|53)/.test(code) || ['40001', '40P01', '57014', '57P01', '57P02', '57P03'].includes(code)) return true;
   if (['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'RUNTIME_TIMEOUT'].includes(code)) return true;
   return /query read timeout|connection terminated|connection timeout|timeout exceeded when trying to connect|remaining connection slots/i.test(String(error?.message || ''));

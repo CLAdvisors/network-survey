@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const releaseDir = path.resolve(process.argv[2] || '.');
 const checkDatabase = process.argv.includes('--database');
@@ -45,13 +46,31 @@ if (marker.reminder_provider_boundary === 1) {
 if (!Number.isSafeInteger(marker.schema?.webhook_delivery_truth) || marker.schema.webhook_delivery_truth < 1) {
   throw new Error('release lacks webhook delivery-truth schema capability');
 }
+function currentDatabasePassword() {
+  const secretArn = String(process.env.DB_MANAGED_SECRET_ARN || '').trim();
+  if (!secretArn) return process.env.DB_PASSWORD;
+  const region = secretArn.split(':')[3];
+  const result = spawnSync('aws', [
+    'secretsmanager', 'get-secret-value', '--region', region,
+    '--secret-id', secretArn, '--query', 'SecretString', '--output', 'text',
+  ], { encoding:'utf8', timeout:5000, maxBuffer:1024 * 1024 });
+  if (result.status !== 0) throw new Error('unable to resolve the current managed database credential');
+  let secret;
+  try { secret = JSON.parse(result.stdout); }
+  catch { throw new Error('managed database credential is not valid JSON'); }
+  if (!secret || typeof secret.password !== 'string' || !secret.password || secret.username !== process.env.DB_USER) {
+    throw new Error('managed database credential is invalid');
+  }
+  return secret.password;
+}
+
 async function validateDatabaseFloor() {
   if (!checkDatabase) return;
   require(path.join(runtimeApiDir, 'node_modules', 'dotenv')).config({ path: path.join(runtimeApiDir, '.env.prod') });
   const { Pool } = require(path.join(runtimeApiDir, 'node_modules', 'pg'));
   const env = process.env.EMAIL_WORKER_ENV;
   const pool = new Pool({
-    user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,
+    user:process.env.DB_USER,password:currentDatabasePassword(),host:process.env.DB_HOST,
     port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',
     ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined,
   });

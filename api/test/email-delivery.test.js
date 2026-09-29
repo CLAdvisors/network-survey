@@ -166,9 +166,9 @@ test('readiness validates the entire audience and exact normalized template cove
   const good = evaluateReadiness(survey, { recipients:[{respondent_id:1,contact_info:'A@example.com',uuid:'token',lang:'English'}], templates:[{lang:' english ',text:'Welcome',invitation_subject:' Team invitation '}] }, {SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.equal(good.canLaunch,true);
   const launchRecipient=index=>({respondent_id:index,contact_info:`launch${index}@example.test`,uuid:`launch-token-${index}`,lang:'English'});
-  const maximum=evaluateReadiness(survey,{recipients:Array.from({length:1500},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
-  assert.equal(maximum.canLaunch,true);assert.equal(maximum.eligibleCount,1500);
-  const overLimit=evaluateReadiness(survey,{recipients:Array.from({length:1501},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  const maximum=evaluateReadiness(survey,{recipients:Array.from({length:5000},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
+  assert.equal(maximum.canLaunch,true);assert.equal(maximum.eligibleCount,5000);
+  const overLimit=evaluateReadiness(survey,{recipients:Array.from({length:5001},(_,index)=>launchRecipient(index+1)),templates:[{lang:'English',text:'Welcome',invitation_subject:'Invitation'}]},{SURVEY_URL:'https://survey.test',RESEND_API_KEY:'key'});
   assert.ok(overLimit.blockers.some(({code})=>code==='recipients_limit_exceeded'));
   assert.deepEqual(good.languages,['english']);
   assert.deepEqual(good.templateCoverage,[{language:'english',covered:true}]);
@@ -200,7 +200,7 @@ test('readiness validates the entire audience and exact normalized template cove
   assert.equal(manyInvalid.blockers.at(-1).code, 'blockers_truncated');
 });
 
-test('reminder readiness handles zero, one, 1,500, localization, and privacy-safe blockers', () => {
+test('reminder readiness handles zero, one, 5,000, localization, and privacy-safe blockers', () => {
   const survey={lifecycle_status:'active',archived_at:null};
   const config={SURVEY_URL:'https://survey.test',RESEND_API_KEY:'fake',RESEND_PROVIDER_ACCOUNT_SCOPE:'test'};
   const template={language:'english',subject:'Reminder',body_text:'Please complete the survey.',configuration_version:1};
@@ -211,9 +211,9 @@ test('reminder readiness handles zero, one, 1,500, localization, and privacy-saf
   assert.ok(draft.blockers.some(item=>item.code==='survey_not_active'&&item.message==='Only a launched survey can receive reminders.'));
   const one=evaluateReminderReadiness(survey,{recipients:[recipient(1)],templates:[template]},config);
   assert.equal(one.canLaunch,true);assert.equal(one.targetCount,1);
-  const maximum=evaluateReminderReadiness(survey,{recipients:Array.from({length:1500},(_,index)=>recipient(index+1)),templates:[template]},config);
-  assert.equal(maximum.canLaunch,true);assert.equal(maximum.targetCount,1500);
-  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:1501},(_,index)=>recipient(index+1)),templates:[template]},config);
+  const maximum=evaluateReminderReadiness(survey,{recipients:Array.from({length:5000},(_,index)=>recipient(index+1)),templates:[template]},config);
+  assert.equal(maximum.canLaunch,true);assert.equal(maximum.targetCount,5000);
+  const over=evaluateReminderReadiness(survey,{recipients:Array.from({length:5001},(_,index)=>recipient(index+1)),templates:[template]},config);
   assert.ok(over.blockers.some(item=>item.code==='recipients_limit_exceeded'));
   const localized=evaluateReminderReadiness(survey,{recipients:[{...recipient(2),lang:'French'},{...recipient(3),lang:'Klingon'}],templates:[template]},config);
   assert.ok(localized.blockers.some(item=>item.code==='template_missing'&&item.language==='french'));
@@ -240,8 +240,8 @@ test('reminder implementation selects and rechecks only incomplete eligible resp
   assert.match(lifecycleSource,/displayedRespondentPredicate\('r'\)/);
   assert.match(lifecycleSource,/kind:'reminder'/);
   assert.match(launchReminder.toString(), /buildInvitationPayload\([\s\S]*rendererVersion:RENDERER_VERSION/);
-  assert.match(lifecycleSource,/prior_launch\.kind='reminder' AND \(prior\.status='uncertain' OR \(prior_launch\.provider_account_scope IS NULL/);
-  assert.match(lifecycleSource,/INSERT INTO survey_launches\(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id,provider_account_scope\)/);
+  assert.match(lifecycleSource,/prior\.status='uncertain' OR \(prior_launch\.kind='reminder' AND prior_launch\.provider_account_scope IS NULL/);
+  assert.match(lifecycleSource,/INSERT INTO survey_launches\(survey_id,organization_id,kind,idempotency_key,request_fingerprint,requested_by_user_id,provider_account_scope,schedule_id\)/);
   assert.match(lifecycleSource,/status\) VALUES[\s\S]*'reminder_pending'/);
   assert.match(workerSource,/row\.launch_kind==='reminder'.*row\.can_respond!==true\|\|row\.response!==null/s);
   assert.match(workerSource,/FOR UPDATE OF d FOR SHARE OF r/);
@@ -312,6 +312,23 @@ test('worker capability is fail-closed and bound to the suppression scope', asyn
   assert.match(selection.sql,/\$1::boolean OR l\.kind<>'reminder'/);
   assert.match(selection.sql,/l\.kind<>'reminder' OR l\.provider_account_scope=\$2/);
   assert.match(selection.sql,/\$1::boolean AND d\.status IN \('reminder_pending','reminder_retry_wait'\)/);
+});
+
+test('provider boundary cancels scheduled sends after close even if scheduler has not run yet', async () => {
+  const calls = [];
+  const row = { id: 'delivery-1', survey_id: '11111111-1111-4111-8111-111111111111', lease_token: 'lease-1', status: 'leased', launch_kind: 'initial', scheduled_expired: true, schedule_status: 'active' };
+  const client = { release() {}, async query(sql, values = []) {
+    calls.push({ sql, values });
+    if (/SELECT id,name,lifecycle_status/.test(sql)) return { rows: [{ id: row.survey_id, name: 'Scheduled', lifecycle_status: 'active' }] };
+    if (/SELECT d\.\*,r\.uuid/.test(sql)) return { rows: [row] };
+    return { rows: [], rowCount: 1 };
+  }};
+  let sent = 0;
+  const worker = new DeliveryWorker({ pool: { connect: async () => client }, provider: { send: async () => { sent += 1; } }, env: { NODE_ENV: 'test' } });
+  assert.deepEqual(await worker.startProviderRequest(row), { action: 'cancelled' });
+  assert.equal(sent, 0);
+  assert.match(calls.find(call => /SELECT d\.\*,r\.uuid/.test(call.sql)).sql, /s\.close_at<=now\(\) AS scheduled_expired/);
+  assert.ok(calls.some(call => /UPDATE survey_email_deliveries d SET status=CASE/.test(call.sql)));
 });
 
 test('provider boundary releases a reminder whose immutable launch scope mismatches the worker', async () => {

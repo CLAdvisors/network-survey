@@ -19,4 +19,6 @@ test('calendar-day cadence uses wall time across spring gap and fall overlap onl
   const fall = nextReminder('2026-10-31T01:30', 'America/New_York', 1, '2026-11-05T00:00:00Z');
   assert.equal(fall.at.toISOString(), '2026-11-01T05:30:00.000Z');
   assert.equal(nextReminder('2026-11-04T01:30', 'America/New_York', 1, '2026-11-05T00:00:00Z'), null);
+  // A skipped whole date (IANA dateline transition) also advances to the first valid minute.
+  assert.equal(localToInstant('2011-12-30T10:00', 'Pacific/Apia', { gap: 'next' }).toISOString(), '2011-12-30T10:00:00.000Z');
 });

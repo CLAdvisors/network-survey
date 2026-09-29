@@ -40,12 +40,16 @@ async function configure(pool, user, surveyId, input, config = process.env) {
     let nextDueAt = fields.startAt;
     let nextKind = 'initial';
     if (survey.lifecycle_status === 'active') {
-      const lastLocal = nextLocalDay(existing.start_local, existing.reminder_every_days * Math.max(0, existing.occurrence - 1));
+      // Derive from the durable last scheduled occurrence, not start+cadence×count:
+      // repeated cadence edits otherwise invent an occurrence that never fired.
+      const lastLocal = existing.next_kind === 'reminder'
+        ? nextLocalDay(existing.next_local, -existing.reminder_every_days)
+        : existing.next_kind === 'close' ? existing.next_local : existing.start_local;
       nextLocal = nextLocalDay(lastLocal, fields.reminderEveryDays);
       nextDueAt = localToInstant(nextLocal, fields.timezone, { overlap: 'earlier', gap: 'next' });
       // If a reminder is already overdue, leave it due; do not skip an occurrence.
       nextKind = 'reminder';
-      if (nextDueAt >= fields.closeAt) { nextDueAt = fields.closeAt; nextKind = 'close'; }
+      if (nextDueAt >= fields.closeAt) { nextDueAt = fields.closeAt; nextKind = 'close'; nextLocal = lastLocal; }
     }
     const saved = existing
       ? (await client.query(`UPDATE survey_delivery_schedules SET timezone=$2,start_local=$3,close_local=$4,start_at=$5,close_at=$6,reminder_every_days=$7,next_local=$8,next_due_at=$9,next_kind=$10,version=version+1,lease_token=NULL,lease_expires_at=NULL,updated_by_user_id=$11,updated_at=now() WHERE id=$1 RETURNING *`, [existing.id, fields.timezone, fields.startLocal, fields.closeLocal, fields.startAt, fields.closeAt, fields.reminderEveryDays, nextLocal, nextDueAt, nextKind, user.id])).rows[0]

@@ -28,21 +28,19 @@ function localToInstant(local, zone, { overlap = 'reject', gap = 'reject' } = {}
   catch { throw new Error('Use a valid IANA timezone.'); }
   let first = null;
   let matches = 0;
+  let next = null;
   for (let offset = -14 * 60; offset <= 14 * 60; offset++) {
     const time = naive + offset * 60000;
-    if (localParts(new Date(time), zone, formatter) !== local) continue;
+    const wall = localParts(new Date(time), zone, formatter);
+    if (gap === 'next' && wall > local && (!next || wall < next.wall || (wall === next.wall && time < next.time))) next = { wall, time };
+    if (wall !== local) continue;
     if (first === null) first = time;
     matches += 1;
     if (matches > 1 && overlap === 'reject') throw new Error('Ambiguous local time at daylight-saving transition; choose another time.');
     if (matches > 1) break;
   }
   if (first === null) {
-    if (gap === 'next') {
-      for (let minutes = 1; minutes <= 180; minutes++) {
-        const next = new Date(naive + minutes * 60000).toISOString().slice(0, 16);
-        try { return localToInstant(next, zone, { overlap: 'earlier' }); } catch { /* still in the gap */ }
-      }
-    }
+    if (gap === 'next' && next) return new Date(next.time);
     throw new Error('Nonexistent local time at daylight-saving transition; choose another time.');
   }
   return new Date(first);

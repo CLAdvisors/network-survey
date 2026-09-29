@@ -72,6 +72,42 @@ test('isolated PostgreSQL: scheduled launch survives worker restart and cancel f
   } finally { await pool.end(); }
 });
 
+test('isolated PostgreSQL: repeated cadence edits preserve last actual occurrence and close extension', { skip: !url }, async () => {
+  const pool = new Pool({ connectionString: url, max: 2 });
+  const nonce = crypto.randomUUID();
+  const name = `cadence-${nonce}`;
+  try {
+    const user = (await pool.query('INSERT INTO users(username,password) VALUES($1,$2) RETURNING id', [name, 'test-only'])).rows[0];
+    const org = (await pool.query('INSERT INTO organizations(name) VALUES($1) RETURNING id', [name])).rows[0];
+    await pool.query("INSERT INTO organization_memberships(organization_id,user_id,role) VALUES($1,$2,'admin')", [org.id, user.id]);
+    const survey = (await pool.query('INSERT INTO survey(name,organization_id) VALUES($1,$2) RETURNING id', [name, org.id])).rows[0];
+    const initial = { startLocal: '2026-10-01T09:00', closeLocal: '2026-10-28T09:00', timezone: 'UTC', reminderEveryDays: 3, expectedVersion: 0 };
+    const created = await schedule.configure(pool, user, survey.id, initial);
+    await pool.query("UPDATE survey SET lifecycle_status='active' WHERE id=$1", [survey.id]);
+    // Day0 launch and Day3 reminder have fired. Day6 is the old next occurrence.
+    await pool.query("UPDATE survey_delivery_schedules SET occurrence=2,next_kind='reminder',next_local='2026-10-07T09:00',next_due_at='2026-10-07T09:00Z' WHERE id=$1", [created.id]);
+    const firstEdit = await schedule.configure(pool, user, survey.id, { ...initial, reminderEveryDays: 5, expectedVersion: 1 });
+    assert.equal(firstEdit.nextDueAt.toISOString(), '2026-10-09T09:00:00.000Z'); // Day3 + 5
+    const secondEdit = await schedule.configure(pool, user, survey.id, { ...initial, reminderEveryDays: 7, expectedVersion: 2 });
+    assert.equal(secondEdit.nextDueAt.toISOString(), '2026-10-11T09:00:00.000Z'); // Day3 + 7, not Day5 + 7
+    const closeSoon = await schedule.configure(pool, user, survey.id, { ...initial, closeLocal: '2026-10-10T09:00', reminderEveryDays: 7, expectedVersion: 3 });
+    assert.equal(closeSoon.nextKind, 'close');
+    const extended = await schedule.configure(pool, user, survey.id, { ...initial, closeLocal: '2026-10-28T09:00', reminderEveryDays: 4, expectedVersion: 4 });
+    assert.equal(extended.nextDueAt.toISOString(), '2026-10-08T09:00:00.000Z'); // Day3 + 4
+
+    const dstSurvey = (await pool.query('INSERT INTO survey(name,organization_id) VALUES($1,$2) RETURNING id', [`dst-${name}`, org.id])).rows[0];
+    const dstInput = { startLocal: '2027-03-13T02:30', closeLocal: '2027-03-28T02:30', timezone: 'America/New_York', reminderEveryDays: 1, expectedVersion: 0 };
+    const dstCreated = await schedule.configure(pool, user, dstSurvey.id, dstInput);
+    await pool.query("UPDATE survey SET lifecycle_status='active' WHERE id=$1", [dstSurvey.id]);
+    // First reminder nominally March 14 02:30, shifted to 03:00 by spring DST gap.
+    await pool.query("UPDATE survey_delivery_schedules SET occurrence=2,next_kind='reminder',next_local='2027-03-15T02:30',next_due_at='2027-03-15T06:30Z' WHERE id=$1", [dstCreated.id]);
+    const dstFirst = await schedule.configure(pool, user, dstSurvey.id, { ...dstInput, reminderEveryDays: 2, expectedVersion: 1 });
+    assert.equal(dstFirst.nextDueAt.toISOString(), '2027-03-16T06:30:00.000Z');
+    const dstSecond = await schedule.configure(pool, user, dstSurvey.id, { ...dstInput, reminderEveryDays: 3, expectedVersion: 2 });
+    assert.equal(dstSecond.nextDueAt.toISOString(), '2027-03-17T06:30:00.000Z');
+  } finally { await pool.end(); }
+});
+
 test('isolated PostgreSQL: missed reminder past close advances to durable close without sending', { skip: !url }, async () => {
   const pool = new Pool({ connectionString: url, max: 3 });
   const nonce = crypto.randomUUID();

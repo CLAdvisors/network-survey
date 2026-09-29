@@ -17,6 +17,9 @@ vi.mock('@mui/x-data-grid', () => ({
       {processRowUpdate && rows[0] && <button onClick={() => processRowUpdate({ ...rows[0], name: `${rows[0].name} Edited` })}>Edit respondent</button>}
       {processRowUpdate && rows[0] && <button onClick={() => processRowUpdate({ ...rows[0], name: rows[0].name.replace(/ Edited$/, '') })}>Revert respondent</button>}
       {processRowUpdate && rows.slice(1).map((row) => <button key={row.id} onClick={() => processRowUpdate({ ...row, name: `${row.name} Edited` })}>Edit respondent {row.id}</button>)}
+      {columns.filter((column) => column.field === 'personalDelivery').map((column) => (
+        <section key={column.field} aria-label={column.headerName}>{rows.map((row) => <div key={row.id}>{column.renderCell({ row })}</div>)}</section>
+      ))}
       {columns.filter((column) => ['dispatchStatus', 'providerOutcome', 'providerOutcomeAt'].includes(column.field)).map((column) => (
         <section key={column.field} aria-label={column.headerName}>
           {rows.map((row) => {
@@ -42,7 +45,49 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  api.get.mockImplementation((url) => url.includes('personal-link-permission')
+    ? Promise.resolve({ data: { minimumRole: 'admin', canReveal: false, canResend: false, canConfigure: false } })
+    : Promise.resolve({ data: [] }));
+});
+
+test('personal link buttons appear only after server permission; reveal and copy use separately audited API purposes', async () => {
+  api.get.mockImplementation(url => url.includes('personal-link-permission')
+    ? Promise.resolve({ data: { minimumRole: 'admin', canReveal: true, canResend: false, canConfigure: false } })
+    : Promise.resolve({ data: [] }));
+  api.post.mockResolvedValue({ data: { link: 'https://survey.example.test/?userId=private-token' } });
+  const writeText = vi.fn().mockResolvedValue();
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  render(<RespondentTable revision={0} surveyName="survey-1" rows={[{ id: 13, name: 'One', email: 'one@example.test', language: 'English', canRespond: true }]} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Reveal link' }));
+  expect(api.post).toHaveBeenCalledWith('/surveys/survey-1/respondents/13/personal-link', { purpose: 'reveal' });
+  expect(await screen.findByText(/Treat this as a private bearer credential/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+  expect(api.post).toHaveBeenCalledWith('/surveys/survey-1/respondents/13/personal-link', { purpose: 'copy' });
+  expect(writeText).toHaveBeenCalledWith('https://survey.example.test/?userId=private-token');
+});
+
+test('explicit resend preserves uncertain Idempotency-Key and removes it after confirmed response', async () => {
+  api.get.mockImplementation(url => url.includes('personal-link-permission')
+    ? Promise.resolve({ data: { minimumRole: 'admin', canReveal: false, canResend: true, canConfigure: false } })
+    : Promise.resolve({ data: [] }));
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const storeKey = 'delivery-resend:survey-1:13';
+  window.sessionStorage.removeItem(storeKey);
+  api.post.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ data: { launch: { id: 'launch-1' } } });
+  render(<RespondentTable revision={0} surveyName="survey-1" rows={[{ id: 13, name: 'One', email: 'one@example.test', language: 'English', canRespond: true }]} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Resend' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+  const firstKey = api.post.mock.calls[0][2].headers['Idempotency-Key'];
+  expect(window.sessionStorage.getItem(storeKey)).toBe(firstKey);
+  await userEvent.click(screen.getByRole('button', { name: 'Resend' }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
+  expect(api.post.mock.calls[1][2].headers['Idempotency-Key']).toBe(firstKey);
+  await waitFor(() => expect(window.sessionStorage.getItem(storeKey)).toBe(null));
+  expect(confirm).toHaveBeenCalledTimes(2);
+  confirm.mockRestore();
+});
 
 test('presents dispatch and provider outcomes as separate respondent fields', async () => {
   const deliveredAt = '2026-01-02T03:04:05Z';

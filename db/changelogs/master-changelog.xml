@@ -21,4 +21,6 @@
     <!-- Already deployed to prod-secondary: preserve this changeset identity/checksum. -->
     <include file="v1_8_prod_secondary_controls.sql" relativeToChangelogFile="true" />
     <include file="v1_11_survey_email_history_pagination.sql" relativeToChangelogFile="true" />
+    <include file="v1_12_delivery_permissions.sql" relativeToChangelogFile="true" />
+    <include file="v1_12_delivery_schedule.sql" relativeToChangelogFile="true" />
 </databaseChangeLog>

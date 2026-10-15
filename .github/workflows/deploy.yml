@@ -1,8 +1,10 @@
 name: Deploy
 
 on:
-  push:
-    branches: [main] # auto-deploys to staging
+  # The main-push auto-deploy to the legacy source staging account is frozen
+  # (code-only candidate). Deploys are explicit workflow_dispatch only until the
+  # separately approved target staging cutover. See
+  # docs/runbooks/staging-target-freeze.md.
   workflow_dispatch:
     inputs:
       environment:
@@ -18,14 +20,14 @@ permissions:
 concurrency:
   # Serialize API release operations (deploys and previous-artifact redeploys)
   # per environment so SSM/PM2/current symlink/latest.tar.gz cannot race.
-  group: api-release-${{ github.event_name == 'push' && 'staging' || inputs.environment }}
+  group: api-release-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     # "production" can be given required reviewers under Settings → Environments
-    environment: ${{ github.event_name == 'push' && 'staging' || inputs.environment }}
+    environment: ${{ inputs.environment }}
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +36,9 @@ jobs:
         with:
           node-version: 20
 
+      - name: Guard staging routes (fail-closed)
+        run: bash scripts/ci/guard-staging-route.sh deploy "${{ inputs.environment }}"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,7 +46,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Assert target AWS account
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'prod-secondary' }}
+        if: ${{ inputs.environment == 'prod-secondary' }}
         env:
           EXPECTED_ACCOUNT_ID: '710054969994'
           ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
@@ -68,7 +73,7 @@ jobs:
           CONFIGURED_RESOURCE_TAGGING_REGION: ${{ vars.AWS_RESOURCE_TAGGING_REGION }}
         run: |
           set -euo pipefail
-          GH_ENV="${{ github.event_name == 'push' && 'staging' || inputs.environment }}"
+          GH_ENV="${{ inputs.environment }}"
           DEPLOYMENT_MODE=singleton
           case "$GH_ENV" in
             production)

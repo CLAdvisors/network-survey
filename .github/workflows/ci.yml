@@ -224,6 +224,12 @@ jobs:
       - name: Validate safe access logging contract
         run: node scripts/ci/validate-safe-access-logging.js
 
+      - name: Validate target staging contract
+        run: node scripts/ci/validate-staging-target-contract.js
+
+      - name: Test fail-closed staging route guard
+        run: bash scripts/ci/test-staging-route-guard.sh
+
       - name: Test prod-secondary /live migration preflight
         run: bash scripts/ci/test-prod-secondary-live-preflight.sh
 

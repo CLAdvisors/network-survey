@@ -49,14 +49,14 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_and_cloudfront" {
 
 locals {
   bucket_names = {
-    config    = "network-survey-prod-secondary-config-${var.account_id}"
-    artifacts = "network-survey-prod-secondary-artifacts-${var.account_id}"
-    dashboard = "network-survey-prod-secondary-dashboard-${var.account_id}"
-    survey    = "network-survey-prod-secondary-survey-${var.account_id}"
+    config    = "network-survey-${var.environment}-config-${var.account_id}"
+    artifacts = "network-survey-${var.environment}-artifacts-${var.account_id}"
+    dashboard = "network-survey-${var.environment}-dashboard-${var.account_id}"
+    survey    = "network-survey-${var.environment}-survey-${var.account_id}"
   }
 
   runtime_config = join("\n", [
-    "ENVIRONMENT=prod-secondary",
+    "ENVIRONMENT=${var.environment}",
     "DB_NAME=${var.db_name}",
     "DB_HOST=${aws_db_instance.postgres.address}",
     "DB_PORT=${aws_db_instance.postgres.port}",
@@ -75,32 +75,32 @@ locals {
     "HEALTH_DB_TIMEOUT_MS=2000",
     "RUNTIME_METRIC_NAMESPACE=NetworkSurvey/Runtime",
     "ACCESS_ERROR_TELEMETRY_ENABLED=true",
-    "SESSION_SECRET_PARAMETER=/network-survey/prod-secondary/api/session-secret",
-    "SESSION_COOKIE_NAME=prodSecondarySessionId",
+    "SESSION_SECRET_PARAMETER=/network-survey/${var.environment}/api/session-secret",
+    "SESSION_COOKIE_NAME=${var.environment == "prod-secondary" ? "prodSecondarySessionId" : "stagingSessionId"}",
     "TRUST_CLOUDFRONT_VIEWER_PROTO=true",
     "ALLOW_PUBLIC_SIGNUP=false",
     "FRONTEND_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.dashboard : aws_cloudfront_distribution.frontend["dashboard"].domain_name}",
     "SURVEY_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.survey : aws_cloudfront_distribution.frontend["survey"].domain_name}",
-    "EMAIL_WORKER_ENV=prod-secondary",
-    "EMAIL_RATE_BUDGET_ENV=prod-secondary",
+    "EMAIL_WORKER_ENV=${var.environment}",
+    "EMAIL_RATE_BUDGET_ENV=${var.environment}",
     "SURVEY_DELIVERY_V2_ENABLED=${var.enable_survey_delivery_v2}",
     "LEGACY_START_ENABLED=false",
     "EMAIL_CLAIMING_ENABLED=false",
     "EMAIL_SENDING_ENABLED=false",
     "RESEND_CREDENTIAL_LOAD_ENABLED=${var.enable_resend_credentials}",
-    "RESEND_API_KEY_PARAMETER=${var.enable_resend_credentials ? "/network-survey/prod-secondary/resend/api-key" : ""}",
-    "RESEND_PROVIDER_ACCOUNT_SCOPE=network-survey-resend-prod-secondary",
+    "RESEND_API_KEY_PARAMETER=${var.enable_resend_credentials ? "/network-survey/${var.environment}/resend/api-key" : ""}",
+    "RESEND_PROVIDER_ACCOUNT_SCOPE=network-survey-resend-${var.environment}",
     "SURVEY_EMAIL_SENDER=CLA Survey <survey@cladvisorsurveys.com>",
     "SURVEY_EMAIL_REPLY_TO=survey@cladvisors.com",
-    "RESEND_WEBHOOK_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-secret" : ""}",
-    "RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-previous-secret" : ""}",
+    "RESEND_WEBHOOK_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/${var.environment}/resend/webhook-secret" : ""}",
+    "RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/${var.environment}/resend/webhook-previous-secret" : ""}",
     "RESEND_WEBHOOK_INGEST_ENABLED=${var.enable_resend_webhook_ingest}",
     "WEBHOOK_PROCESSING_ENABLED=false",
     "BOOTSTRAP_ENABLED=${var.enable_owner_bootstrap}",
     "BOOTSTRAP_ADMIN_USERNAME=",
     "BOOTSTRAP_ADMIN_EMAIL=",
-    "BOOTSTRAP_ADMIN_IDENTITY_PARAMETER=${var.enable_owner_bootstrap ? "/network-survey/prod-secondary/api/bootstrap-admin-identity" : ""}",
-    "BOOTSTRAP_ADMIN_PASSWORD_PARAMETER=${var.enable_owner_bootstrap ? "/network-survey/prod-secondary/api/bootstrap-admin-password" : ""}",
+    "BOOTSTRAP_ADMIN_IDENTITY_PARAMETER=${var.enable_owner_bootstrap ? "/network-survey/${var.environment}/api/bootstrap-admin-identity" : ""}",
+    "BOOTSTRAP_ADMIN_PASSWORD_PARAMETER=${var.enable_owner_bootstrap ? "/network-survey/${var.environment}/api/bootstrap-admin-password" : ""}",
     "BOOTSTRAP_ORGANIZATION_NAME=CLA",
     "BOOTSTRAP_ORGANIZATION_SLUG=cla",
     "BOOTSTRAP_PLATFORM_ADMIN=false",
@@ -110,14 +110,17 @@ locals {
     "",
   ])
 
-  endpoint_services = toset([
+  # Interface endpoints are the staging cost lever. When disabled, AWS-service
+  # traffic leaves through the single NAT while the S3 gateway endpoint stays;
+  # an empty set creates no interface endpoints and leaves no dangling reference.
+  endpoint_services = var.enable_interface_endpoints ? toset([
     "ec2messages",
     "kms",
     "logs",
     "secretsmanager",
     "ssm",
     "ssmmessages",
-  ])
+  ]) : toset([])
 }
 
 resource "terraform_data" "safety_contract" {
@@ -145,6 +148,9 @@ resource "terraform_data" "safety_contract" {
 }
 
 resource "aws_s3_account_public_access_block" "this" {
+  # Account-global singleton: owned only by the existing prod-secondary state.
+  count = var.environment == "prod-secondary" ? 1 : 0
+
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -154,8 +160,18 @@ resource "aws_s3_account_public_access_block" "this" {
 }
 
 resource "aws_iam_service_linked_role" "autoscaling" {
+  # Account-global singleton: owned only by the existing prod-secondary state.
+  count = var.environment == "prod-secondary" ? 1 : 0
+
   aws_service_name = "autoscaling.amazonaws.com"
   description      = "Service-linked role for the prod-secondary private ASG"
+}
+
+# Staging consumes the account-global AutoScaling service-linked role that
+# prod-secondary already owns instead of re-creating it.
+data "aws_iam_role" "autoscaling_existing" {
+  count = var.environment == "staging" ? 1 : 0
+  name  = "AWSServiceRoleForAutoScaling"
 }
 
 data "aws_iam_policy_document" "data_kms" {
@@ -191,7 +207,7 @@ data "aws_iam_policy_document" "data_kms" {
     condition {
       test     = "ArnLike"
       variable = "kms:EncryptionContext:aws:logs:arn"
-      values   = ["arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${var.account_id}:log-group:/network-survey/prod-secondary/*"]
+      values   = ["arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${var.account_id}:log-group:/network-survey/${var.environment}/*"]
     }
   }
 
@@ -210,13 +226,13 @@ data "aws_iam_policy_document" "data_kms" {
 
     principals {
       type        = "AWS"
-      identifiers = [aws_iam_service_linked_role.autoscaling.arn]
+      identifiers = [var.environment == "prod-secondary" ? aws_iam_service_linked_role.autoscaling[0].arn : data.aws_iam_role.autoscaling_existing[0].arn]
     }
   }
 }
 
 resource "aws_kms_key" "data" {
-  description             = "prod-secondary application, S3, logs, and EBS encryption"
+  description             = "${var.environment} application, S3, logs, and EBS encryption"
   enable_key_rotation     = true
   deletion_window_in_days = 30
   policy                  = data.aws_iam_policy_document.data_kms.json
@@ -229,7 +245,7 @@ resource "aws_kms_alias" "data" {
 }
 
 resource "aws_kms_key" "rds" {
-  description             = "prod-secondary RDS storage and RDS-managed master secret encryption"
+  description             = "${var.environment} RDS storage and RDS-managed master secret encryption"
   enable_key_rotation     = true
   deletion_window_in_days = 30
   tags                    = merge(var.common_tags, { Name = "${var.name_prefix}-rds-kms" })
@@ -241,10 +257,14 @@ resource "aws_kms_alias" "rds" {
 }
 
 resource "aws_ebs_encryption_by_default" "this" {
+  # Account-global singleton: owned only by the existing prod-secondary state.
+  count   = var.environment == "prod-secondary" ? 1 : 0
   enabled = true
 }
 
 resource "aws_ebs_default_kms_key" "this" {
+  # Account-global singleton: owned only by the existing prod-secondary state.
+  count   = var.environment == "prod-secondary" ? 1 : 0
   key_arn = aws_kms_key.data.arn
 
   depends_on = [aws_ebs_encryption_by_default.this]
@@ -332,7 +352,7 @@ resource "aws_eip" "nat" {
 }
 
 resource "aws_nat_gateway" "this" {
-  count = 2
+  count = var.nat_gateway_count
 
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
@@ -355,7 +375,7 @@ resource "aws_route" "app_egress" {
 
   route_table_id         = aws_route_table.app[count.index].id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.this[count.index].id
+  nat_gateway_id         = aws_nat_gateway.this[count.index % var.nat_gateway_count].id
 }
 
 resource "aws_route_table_association" "app" {
@@ -624,11 +644,11 @@ resource "aws_cloudfront_distribution" "api" {
   enabled         = var.enable_public_aws_endpoints
   is_ipv6_enabled = true
   aliases         = var.enable_custom_domain_aliases ? [var.custom_domains.api] : []
-  comment         = "prod-secondary API edge"
+  comment         = "${var.environment} API edge"
 
   origin {
     domain_name = aws_lb.api.dns_name
-    origin_id   = "prod-secondary-api-alb"
+    origin_id   = "${var.environment}-api-alb"
 
     custom_origin_config {
       http_port              = 80
@@ -641,7 +661,7 @@ resource "aws_cloudfront_distribution" "api" {
   default_cache_behavior {
     allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "prod-secondary-api-alb"
+    target_origin_id       = "${var.environment}-api-alb"
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
 
@@ -746,7 +766,7 @@ resource "aws_db_instance" "postgres" {
 resource "aws_cloudwatch_log_group" "runtime" {
   for_each = toset(["api", "bootstrap", "email-worker", "host", "host-maintenance", "webhook-worker"])
 
-  name              = "/network-survey/prod-secondary/${each.value}"
+  name              = "/network-survey/${var.environment}/${each.value}"
   retention_in_days = 30
   kms_key_id        = aws_kms_key.data.arn
   tags              = merge(var.common_tags, { App = "ona-${each.value}" })
@@ -796,6 +816,9 @@ resource "aws_sns_topic_policy" "operations" {
 }
 
 resource "aws_sns_topic_subscription" "operations_email" {
+  # Null keeps the subscription disabled instead of creating an invalid email endpoint.
+  count = var.operations_alert_email == null ? 0 : 1
+
   topic_arn = aws_sns_topic.operations.arn
   protocol  = "email"
   endpoint  = var.operations_alert_email
@@ -803,7 +826,7 @@ resource "aws_sns_topic_subscription" "operations_email" {
 
 resource "aws_cloudwatch_metric_alarm" "alb_unhealthy" {
   alarm_name          = "${var.name_prefix}-alb-unhealthy-targets"
-  alarm_description   = "One or more prod-secondary API targets are unhealthy."
+  alarm_description   = "One or more ${var.environment} API targets are unhealthy."
   namespace           = "AWS/ApplicationELB"
   metric_name         = "UnHealthyHostCount"
   dimensions          = { LoadBalancer = aws_lb.api.arn_suffix, TargetGroup = aws_lb_target_group.api.arn_suffix }
@@ -821,12 +844,12 @@ resource "aws_cloudwatch_metric_alarm" "alb_unhealthy" {
 
 resource "aws_cloudwatch_metric_alarm" "asg_capacity" {
   alarm_name          = "${var.name_prefix}-asg-capacity"
-  alarm_description   = "Prod-secondary ASG has fewer than two in-service instances."
+  alarm_description   = var.environment == "prod-secondary" ? "Prod-secondary ASG has fewer than two in-service instances." : "Staging ASG has fewer than ${var.app_desired_capacity} in-service instances."
   namespace           = "AWS/AutoScaling"
   metric_name         = "GroupInServiceInstances"
   dimensions          = { AutoScalingGroupName = aws_autoscaling_group.app.name }
   comparison_operator = "LessThanThreshold"
-  threshold           = 2
+  threshold           = var.app_desired_capacity
   evaluation_periods  = 2
   datapoints_to_alarm = 2
   period              = 60
@@ -839,7 +862,7 @@ resource "aws_cloudwatch_metric_alarm" "asg_capacity" {
 
 resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   alarm_name          = "${var.name_prefix}-rds-high-cpu"
-  alarm_description   = "Prod-secondary RDS CPU exceeds 80 percent."
+  alarm_description   = var.environment == "prod-secondary" ? "Prod-secondary RDS CPU exceeds 80 percent." : "Staging RDS CPU exceeds 80 percent."
   namespace           = "AWS/RDS"
   metric_name         = "CPUUtilization"
   dimensions          = { DBInstanceIdentifier = aws_db_instance.postgres.identifier }
@@ -862,15 +885,15 @@ resource "aws_cloudwatch_log_metric_filter" "bootstrap_failure" {
 
   metric_transformation {
     name      = "BootstrapFailure"
-    namespace = "NetworkSurvey/ProdSecondary"
+    namespace = var.environment == "prod-secondary" ? "NetworkSurvey/ProdSecondary" : "NetworkSurvey/Staging"
     value     = "1"
   }
 }
 
 resource "aws_cloudwatch_metric_alarm" "bootstrap_failure" {
   alarm_name          = "${var.name_prefix}-bootstrap-failure"
-  alarm_description   = "A prod-secondary instance bootstrap failed after bounded retries."
-  namespace           = "NetworkSurvey/ProdSecondary"
+  alarm_description   = "A ${var.environment} instance bootstrap failed after bounded retries."
+  namespace           = var.environment == "prod-secondary" ? "NetworkSurvey/ProdSecondary" : "NetworkSurvey/Staging"
   metric_name         = "BootstrapFailure"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
@@ -890,15 +913,15 @@ resource "aws_cloudwatch_log_metric_filter" "security_upgrade_failure" {
 
   metric_transformation {
     name      = "SecurityUpgradeFailure"
-    namespace = "NetworkSurvey/ProdSecondary"
+    namespace = var.environment == "prod-secondary" ? "NetworkSurvey/ProdSecondary" : "NetworkSurvey/Staging"
     value     = "1"
   }
 }
 
 resource "aws_cloudwatch_metric_alarm" "security_upgrade_failure" {
   alarm_name          = "${var.name_prefix}-security-upgrade-failure"
-  alarm_description   = "A bounded prod-secondary security upgrade failed."
-  namespace           = "NetworkSurvey/ProdSecondary"
+  alarm_description   = "A bounded ${var.environment} security upgrade failed."
+  namespace           = var.environment == "prod-secondary" ? "NetworkSurvey/ProdSecondary" : "NetworkSurvey/Staging"
   metric_name         = "SecurityUpgradeFailure"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
@@ -913,7 +936,7 @@ resource "aws_cloudwatch_metric_alarm" "security_upgrade_failure" {
 
 resource "aws_cloudwatch_metric_alarm" "rds_storage" {
   alarm_name          = "${var.name_prefix}-rds-low-storage"
-  alarm_description   = "Prod-secondary RDS free storage is below 2 GiB."
+  alarm_description   = var.environment == "prod-secondary" ? "Prod-secondary RDS free storage is below 2 GiB." : "Staging RDS free storage is below 2 GiB."
   namespace           = "AWS/RDS"
   metric_name         = "FreeStorageSpace"
   dimensions          = { DBInstanceIdentifier = aws_db_instance.postgres.identifier }
@@ -986,12 +1009,12 @@ resource "aws_cloudwatch_metric_alarm" "process_heartbeat" {
   for_each = local.runtime_processes
 
   alarm_name          = "${var.name_prefix}-${each.key}-heartbeat"
-  alarm_description   = "Fewer than two ${each.key} processes reported across the fixed two-host ASG for three minutes."
+  alarm_description   = var.environment == "prod-secondary" ? "Fewer than two ${each.key} processes reported across the fixed two-host ASG for three minutes." : "Fewer than ${var.app_desired_capacity} ${each.key} processes reported across the staging ASG for three minutes."
   namespace           = "NetworkSurvey/Runtime"
   metric_name         = "ProcessHeartbeat"
   dimensions          = { Environment = var.environment, Process = each.key }
   comparison_operator = "LessThanThreshold"
-  threshold           = 2
+  threshold           = var.app_desired_capacity
   evaluation_periods  = 3
   datapoints_to_alarm = 3
   period              = 60
@@ -1272,7 +1295,7 @@ resource "aws_s3_bucket_policy" "runtime" {
 
 resource "aws_s3_object" "runtime_config" {
   bucket                 = aws_s3_bucket.runtime["config"].id
-  key                    = "configs/.env.prod-secondary"
+  key                    = "configs/.env.${var.environment}"
   content                = local.runtime_config
   server_side_encryption = "aws:kms"
   kms_key_id             = aws_kms_key.data.arn
@@ -1327,17 +1350,17 @@ data "aws_iam_policy_document" "app" {
     effect  = "Allow"
     actions = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = concat(
-      ["arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/api/session-secret"],
+      ["arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/${var.environment}/api/session-secret"],
       var.enable_resend_credentials ? [
-        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/resend/api-key",
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/${var.environment}/resend/api-key",
       ] : [],
       var.enable_resend_webhook_ingest ? [
-        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/resend/webhook-secret",
-        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/resend/webhook-previous-secret",
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/${var.environment}/resend/webhook-secret",
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/${var.environment}/resend/webhook-previous-secret",
       ] : [],
       var.enable_owner_bootstrap ? [
-        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/api/bootstrap-admin-identity",
-        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/prod-secondary/api/bootstrap-admin-password",
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/${var.environment}/api/bootstrap-admin-identity",
+        "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${var.account_id}:parameter/network-survey/${var.environment}/api/bootstrap-admin-password",
       ] : [],
     )
   }
@@ -1471,7 +1494,7 @@ resource "aws_launch_template" "app" {
   # headroom below EC2's 16 KiB decoded user-data API limit.
   user_data = base64gzip(templatefile("${path.module}/cloud-init.sh", {
     config_bucket              = aws_s3_bucket.runtime["config"].bucket
-    config_key                 = "configs/.env.prod-secondary"
+    config_key                 = "configs/.env.${var.environment}"
     artifacts_bucket           = aws_s3_bucket.runtime["artifacts"].bucket
     aws_region                 = var.aws_region
     environment                = var.environment
@@ -1506,9 +1529,9 @@ resource "aws_autoscaling_group" "app" {
   # ELB replacement remains useful for failed bootstrap/process startup, but
   # its /live signal is dependency-free so a shared DB stall cannot replace hosts.
   name                      = "${var.name_prefix}-app"
-  min_size                  = 2
-  desired_capacity          = 2
-  max_size                  = 3
+  min_size                  = var.app_desired_capacity
+  desired_capacity          = var.app_desired_capacity
+  max_size                  = var.app_max_capacity
   vpc_zone_identifier       = aws_subnet.app[*].id
   target_group_arns         = [aws_lb_target_group.api.arn]
   health_check_type         = "ELB"
@@ -1601,7 +1624,7 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
   for_each = aws_s3_bucket.frontend
 
   name                              = "${var.name_prefix}-${each.key}-oac"
-  description                       = "OAC for dark prod-secondary ${each.key} origin"
+  description                       = "OAC for dark ${var.environment} ${each.key} origin"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
@@ -1614,7 +1637,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   is_ipv6_enabled     = true
   aliases             = var.enable_custom_domain_aliases ? [var.custom_domains[each.key]] : []
   default_root_object = "index.html"
-  comment             = "prod-secondary ${each.key} edge"
+  comment             = "${var.environment} ${each.key} edge"
 
   origin {
     domain_name              = each.value.bucket_regional_domain_name
@@ -1705,7 +1728,9 @@ resource "aws_s3_bucket_policy" "frontend" {
 }
 
 data "aws_iam_role" "github_deploy" {
-  name = var.github_deploy_role_name
+  # Prod-secondary owns the account lookup; staging references its own root role by name.
+  count = var.environment == "prod-secondary" ? 1 : 0
+  name  = var.github_deploy_role_name
 }
 
 data "aws_iam_policy_document" "github_deploy" {
@@ -1785,6 +1810,6 @@ data "aws_iam_policy_document" "github_deploy" {
 
 resource "aws_iam_role_policy" "github_deploy" {
   name   = "${var.name_prefix}-deploy"
-  role   = data.aws_iam_role.github_deploy.id
+  role   = var.environment == "prod-secondary" ? data.aws_iam_role.github_deploy[0].id : var.github_deploy_role_name
   policy = data.aws_iam_policy_document.github_deploy.json
 }

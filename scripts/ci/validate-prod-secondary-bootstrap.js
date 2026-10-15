@@ -97,7 +97,7 @@ for (const value of [
   'runtime["host"]',
   'apt_helper                 = file("${path.module}/apt-helper.sh")',
   'security_upgrade           = file("${path.module}/security-upgrade.sh")',
-  'max_size                  = 3',
+  'max_size                  = var.app_max_capacity',
   'min_healthy_percentage = 100',
   'max_healthy_percentage = 150',
   'health_check_grace_period = 1800',

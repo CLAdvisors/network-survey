@@ -9,12 +9,12 @@ variable "aws_region" {
 }
 
 variable "environment" {
-  description = "Canonical machine environment identifier."
+  description = "Canonical machine environment identifier for a target-account instance of this module."
   type        = string
 
   validation {
-    condition     = var.environment == "prod-secondary"
-    error_message = "This module only supports the exact prod-secondary environment identifier."
+    condition     = contains(["prod-secondary", "staging"], var.environment)
+    error_message = "This module is allowed only for the target prod-secondary or isolated staging environment identifiers."
   }
 }
 
@@ -66,6 +66,51 @@ variable "db_subnet_cidrs" {
     condition     = length(var.db_subnet_cidrs) == 2
     error_message = "db_subnet_cidrs must contain exactly two CIDRs."
   }
+}
+
+variable "nat_gateway_count" {
+  description = "One NAT for budget-isolated staging egress, two for the existing prod-secondary AZ redundancy. Numeric topology default preserves prod-secondary."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = contains([1, 2], var.nat_gateway_count)
+    error_message = "Only one or two NAT gateways are supported."
+  }
+}
+
+variable "app_desired_capacity" {
+  description = "ASG desired capacity. Prod-secondary stays at two; staging starts at zero until a secure artifact and session parameter exist."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.environment == "prod-secondary" ? var.app_desired_capacity == 2 : contains([0, 1], var.app_desired_capacity)
+    error_message = "Prod-secondary must keep two hosts; staging may bootstrap at zero and run at most one."
+  }
+}
+
+variable "app_max_capacity" {
+  description = "Explicit ASG maximum capacity ceiling. Prod-secondary keeps its three-host rolling-refresh ceiling; staging stage 0 enforces zero with no capacity-raising headroom."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.app_max_capacity >= var.app_desired_capacity && var.app_max_capacity <= 3 && (var.environment == "prod-secondary" ? var.app_max_capacity == 3 : true)
+    error_message = "app_max_capacity must be at least app_desired_capacity and at most three; prod-secondary must keep its three-host ceiling."
+  }
+}
+
+variable "db_multi_az" {
+  description = "Keep prod-secondary Multi-AZ; allow cheaper isolated staging single-AZ."
+  type        = bool
+  default     = true
+}
+
+variable "enable_interface_endpoints" {
+  description = "Create the private interface endpoints for AWS services. Keep true for prod-secondary; staging carries AWS-service egress over one NAT while retaining the S3 gateway endpoint."
+  type        = bool
+  default     = true
 }
 
 variable "instance_type" {
@@ -188,8 +233,9 @@ variable "enable_owner_bootstrap" {
 }
 
 variable "operations_alert_email" {
-  description = "Initial operations email subscriber for prod-secondary alarms."
+  description = "Approved operations alarm subscriber. Null keeps the subscription disabled until a reviewed contact exists; prod-secondary passes its explicit address."
   type        = string
+  default     = null
 }
 
 variable "github_deploy_role_name" {
@@ -199,17 +245,17 @@ variable "github_deploy_role_name" {
 }
 
 variable "common_tags" {
-  description = "Required exact environment and ownership tags."
+  description = "Required exact target-account environment and ownership tags; every value is derived from the selected environment."
   type        = map(string)
 
   validation {
     condition = (
       lookup(var.common_tags, "Project", "") == "network-survey" &&
-      lookup(var.common_tags, "Environment", "") == "prod-secondary" &&
-      lookup(var.common_tags, "Stack", "") == "prod-secondary-v1" &&
+      lookup(var.common_tags, "Environment", "") == var.environment &&
+      lookup(var.common_tags, "Stack", "") == "${var.environment}-v1" &&
       lookup(var.common_tags, "ManagedBy", "") == "terraform" &&
-      lookup(var.common_tags, "AccountRole", "") == "prod-secondary"
+      lookup(var.common_tags, "AccountRole", "") == var.environment
     )
-    error_message = "common_tags must contain the exact prod-secondary naming contract."
+    error_message = "common_tags must match the exact selected target-account environment."
   }
 }

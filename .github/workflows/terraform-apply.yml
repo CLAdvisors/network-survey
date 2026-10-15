@@ -7,7 +7,7 @@ on:
         description: Environment to apply
         required: true
         type: choice
-        options: [staging, prod, prod-secondary]
+        options: [staging, staging-target, prod, prod-secondary]
         default: staging
 
 permissions:
@@ -32,6 +32,11 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.12.2
+
+      - name: Guard staging routes (fail-closed)
+        # staging-target apply is refused: the target root is unprovisioned and
+        # no live apply is approved.
+        run: bash scripts/ci/guard-staging-route.sh apply "${{ inputs.environment }}"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

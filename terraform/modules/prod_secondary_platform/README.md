@@ -1,13 +1,13 @@
 # prod-secondary platform module
 
-This module is intentionally specific to the independently isolated `prod-secondary` stack. It refuses any other environment identifier and is paired with an account/region assertion in the environment root.
+This module builds an independently isolated target-account stack. It is parameterized for the exact `prod-secondary` and `staging` environment identifiers and is paired with an account/region assertion in each environment root. Numeric topology defaults preserve the current prod-secondary shape (`nat_gateway_count=2`, `app_desired_capacity=2`, `app_max_capacity=3`, `db_multi_az=true`, interface endpoints on); staging explicitly overrides them (one NAT, interface endpoints off, `min=desired=max=0` at stage 0). Feature gates default off and come from each root's explicit inputs.
 
 It creates:
 
 - a dedicated VPC across two Availability Zones
 - public ALB, private application, and isolated database subnet tiers
-- S3 and interface endpoints plus one NAT gateway per AZ for controlled package/provider egress
-- a private ASG at `min=desired=2`, `max=3` only to permit one safe rolling-refresh surge, without public IPs or SSH
+- S3 gateway endpoint plus (when `enable_interface_endpoints` is true) interface endpoints, and one NAT gateway per AZ for controlled package/provider egress; staging keeps the S3 gateway and carries AWS-service egress over one NAT
+- a private ASG with variable-driven `min`/`desired`/`max` (prod-secondary `2/2/3` to permit one safe rolling-refresh surge; staging `0/0/0` until the secure-runtime gates pass), without public IPs or SSH
 - a direct-CIDR-fenced ALB whose HTTP origin accepts only the AWS-managed CloudFront origin-facing prefix when public AWS endpoints are enabled
 - a fresh, deletion-protected Multi-AZ PostgreSQL database
 - target-owned workload and RDS CMKs
@@ -15,7 +15,7 @@ It creates:
 - private/versioned config, artifact, dashboard, and survey buckets
 - CloudFront HTTPS distributions for the API, dashboard, and survey with optional validated ACM aliases while retaining default-domain access
 - field-selective CloudFront Standard Logging v2 for the API only, delivered as Hive-partitioned JSON to a private SSE-S3 bucket with 30-day expiration
-- exact `prod-secondary` runtime configuration with an isolated Resend scope/sender/Reply-To and credential, sending, claiming, webhook, bootstrap, cutover, and traffic gates off
+- environment-derived runtime configuration with an isolated Resend scope/sender/Reply-To and credential, sending, claiming, webhook, bootstrap, cutover, and traffic gates off
 - target-scoped deploy IAM, runtime/host/system log groups, SNS routing, and actionable ALB/ASG/RDS/host/process alarms
 - dependency-free ALB liveness for ELB replacement health, so failed bootstrap/process startup is replaced while shared database incidents cannot destroy both hosts
 

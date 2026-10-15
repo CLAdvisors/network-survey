@@ -35,6 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard staging routes (fail-closed)
+        run: bash scripts/ci/guard-staging-route.sh rollback "${{ inputs.environment }}"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:

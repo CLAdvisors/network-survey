@@ -11,7 +11,7 @@ and state are preserved unchanged and must never be reused or migrated here.
 | Path | `terraform/envs/staging` | `terraform/envs/staging-target` |
 | State bucket/key | `network-survey-terraform-state-438465164125` / `envs/staging/terraform.tfstate` | `network-survey-terraform-state-710054969994` / `envs/staging-target/terraform.tfstate` |
 | Provider account | source 438465164125 | target 710054969994 |
-| Status | retiring (deploy frozen) | **not provisioned; no live route** |
+| Status | retiring (deploy freeze proposed, pending an approved effective freeze) | **not provisioned; no live route** |
 
 ## Networking and cost shape
 
@@ -36,5 +36,6 @@ mandatory later work, not part of this code-only tranche.
 ## Bootstrap-independent inputs
 
 `ami_id` is supplied by the protected GitHub `staging` environment. No apply,
-plan against live state, or backend init is part of this tranche; see
+plan against live state, or backend init is part of this tranche; the freeze and
+route checklist (a candidate, not a live freeze) is in
 `docs/runbooks/staging-target-freeze.md`.

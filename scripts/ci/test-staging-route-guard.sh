@@ -11,9 +11,9 @@ fail() {
   exit 1
 }
 
-run_guard() { # route environment
+run_guard() { # route environment [configured_tf_env]
   GUARD_STATUS=0
-  GUARD_OUTPUT=$("$GUARD" "$1" "$2" 2>&1) || GUARD_STATUS=$?
+  GUARD_OUTPUT=$("$GUARD" "$1" "$2" "${3:-}" 2>&1) || GUARD_STATUS=$?
 }
 
 expect_allow() { # route environment
@@ -49,6 +49,28 @@ done
 # Unknown environments are refused.
 expect_refuse deploy not-an-environment
 expect_refuse plan staging-targets
+
+# A configured TF_ENV must not alias another environment's namespace (QA I1):
+# a production/prod-secondary/prod route carrying TF_ENV=staging would otherwise
+# resolve source-staging buckets and hosts after the guard allowed it.
+run_guard deploy production staging
+[[ "$GUARD_STATUS" == 1 ]] || fail "deploy production with TF_ENV=staging expected refusal, exited $GUARD_STATUS"
+echo "ok - refuse deploy production TF_ENV=staging"
+run_guard rollback production staging
+[[ "$GUARD_STATUS" == 1 ]] || fail "rollback production with TF_ENV=staging expected refusal, exited $GUARD_STATUS"
+echo "ok - refuse rollback production TF_ENV=staging"
+run_guard apply prod staging
+[[ "$GUARD_STATUS" == 1 ]] || fail "apply prod with TF_ENV=staging expected refusal, exited $GUARD_STATUS"
+echo "ok - refuse apply prod TF_ENV=staging"
+run_guard deploy prod-secondary staging
+[[ "$GUARD_STATUS" == 1 ]] || fail "deploy prod-secondary with TF_ENV=staging expected refusal, exited $GUARD_STATUS"
+echo "ok - refuse deploy prod-secondary TF_ENV=staging"
+run_guard deploy production prod
+[[ "$GUARD_STATUS" == 0 ]] || fail "deploy production with TF_ENV=prod expected allow, exited $GUARD_STATUS"
+echo "ok - allow deploy production TF_ENV=prod"
+run_guard deploy prod-secondary prod-secondary
+[[ "$GUARD_STATUS" == 0 ]] || fail "deploy prod-secondary with its own TF_ENV expected allow, exited $GUARD_STATUS"
+echo "ok - allow deploy prod-secondary TF_ENV=prod-secondary"
 
 # Unknown route and missing environment are usage errors.
 run_guard bogus-route staging

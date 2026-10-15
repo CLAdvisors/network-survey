@@ -37,7 +37,9 @@ jobs:
           node-version: 20
 
       - name: Guard staging routes (fail-closed)
-        run: bash scripts/ci/guard-staging-route.sh deploy "${{ inputs.environment }}"
+        env:
+          CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}
+        run: bash scripts/ci/guard-staging-route.sh deploy "${{ inputs.environment }}" "$CONFIGURED_TF_ENV"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

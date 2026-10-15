@@ -5,7 +5,7 @@ production stacks.
 
 | Environment | Current root | Backend key | Notes |
 |---|---|---|---|
-| staging | `terraform/envs/staging` | `envs/staging/terraform.tfstate` | Active legacy source-account staging stack. Migrated from the old workspace root. Deploy frozen (see `docs/runbooks/staging-target-freeze.md`). |
+| staging | `terraform/envs/staging` | `envs/staging/terraform.tfstate` | Active legacy source-account staging stack. Migrated from the old workspace root. Deploy freeze proposed (candidate; see `docs/runbooks/staging-target-freeze.md`). |
 | staging (target) | `terraform/envs/staging-target` | `envs/staging-target/terraform.tfstate` | Isolated target-account staging instance of `modules/prod_secondary_platform` (account 710054969994). Not provisioned; stage-0 zero hosts. |
 | prod | `terraform/envs/prod` | `envs/prod/terraform.tfstate` | Active production stack. Migrated from the old `prod-db/terraform.tfstate` key. |
 | prod-secondary | `terraform/envs/prod-secondary` | `envs/prod-secondary/terraform.tfstate` | Active secondary production stack. |

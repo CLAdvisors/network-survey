@@ -105,6 +105,10 @@ for (const [label, text] of Object.entries({ deployWorkflow, planWorkflow, apply
 matches(moduleMain, /min_size\s*=\s*var\.app_desired_capacity/, 'ASG min follows the explicit variable');
 matches(moduleMain, /desired_capacity\s*=\s*var\.app_desired_capacity/, 'ASG desired follows the explicit variable');
 matches(moduleMain, /max_size\s*=\s*var\.app_max_capacity/, 'ASG max follows the explicit ceiling');
+const natEipBlock = moduleMain.match(/resource "aws_eip" "nat" \{[\s\S]*?\n\}/);
+assert.ok(natEipBlock, 'NAT EIP block found');
+has(natEipBlock[0], 'count  = var.nat_gateway_count', 'one NAT EIP per NAT gateway (no idle public address)');
+matches(moduleMain, /multi_az\s*=\s*var\.db_multi_az/, 'RDS Multi-AZ follows the explicit variable');
 has(moduleMain, 'instance_refresh', 'instance_refresh named in the ceiling proof');
 hasNot(moduleMain, 'aws_autoscaling_policy', 'no scaling policy can raise capacity');
 hasNot(moduleMain, 'aws_autoscaling_schedule', 'no scheduled action can raise capacity');
@@ -163,5 +167,41 @@ has(rollbackWorkflow, 'scripts/ci/guard-staging-route.sh rollback', 'rollback ro
 has(planWorkflow, 'staging-target', 'plan exposes the disabled target route');
 has(applyWorkflow, 'staging-target', 'apply exposes the disabled target route');
 has(guard, 'staging-target)', 'guard recognises the target route');
+
+// Every guard step must run before OIDC credentials, and the routes that let
+// TF_ENV select the resolved namespace must pass it to the guard so a staging
+// alias cannot reach source-staging through a prod/production route.
+const assertGuardBeforeCredentials = (text, label) => {
+  const guardAt = text.indexOf('guard-staging-route.sh');
+  const credentialsAt = text.indexOf('aws-actions/configure-aws-credentials');
+  assert.ok(guardAt !== -1, `${label}: guard step present`);
+  assert.ok(credentialsAt !== -1, `${label}: credentials step present`);
+  assert.ok(guardAt < credentialsAt, `${label}: guard must run before any OIDC assumption`);
+};
+for (const [label, text] of Object.entries({ deployWorkflow, planWorkflow, applyWorkflow, rollbackWorkflow })) {
+  assertGuardBeforeCredentials(text, `${label} workflow`);
+}
+has(deployWorkflow, 'CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}', 'deploy passes its configured TF_ENV to the guard');
+has(rollbackWorkflow, 'CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}', 'rollback passes its configured TF_ENV to the guard');
+has(guard, 'configured_tf_env', 'guard binds a configured TF_ENV to the route namespace');
+
+// The generalized template must still render the exact prod-secondary values
+// that the pre-change module hardcoded.
+const prodResolved = moduleMain
+  .replace(/\$\{var\.environment == "prod-secondary" \? "prodSecondarySessionId" : "stagingSessionId"\}/g, 'prodSecondarySessionId')
+  .replace(/\$\{var\.environment\}/g, 'prod-secondary');
+for (const literal of [
+  'config    = "network-survey-prod-secondary-config-${var.account_id}"',
+  'SESSION_SECRET_PARAMETER=/network-survey/prod-secondary/api/session-secret',
+  'SESSION_COOKIE_NAME=prodSecondarySessionId',
+  'RESEND_API_KEY_PARAMETER=${var.enable_resend_credentials ? "/network-survey/prod-secondary/resend/api-key" : ""}',
+  'RESEND_PROVIDER_ACCOUNT_SCOPE=network-survey-resend-prod-secondary',
+  'RESEND_WEBHOOK_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-secret" : ""}',
+  'RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-previous-secret" : ""}',
+  'name              = "/network-survey/prod-secondary/${each.value}"',
+  'key                    = "configs/.env.prod-secondary"',
+]) {
+  has(prodResolved, literal, `prod-secondary rendering preserved: ${literal}`);
+}
 
 console.log('staging-target contract validation passed');

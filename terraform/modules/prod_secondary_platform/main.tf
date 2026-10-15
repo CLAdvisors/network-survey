@@ -344,7 +344,7 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_eip" "nat" {
-  count  = 2
+  count  = var.nat_gateway_count
   domain = "vpc"
 
   tags       = merge(var.common_tags, { Name = "${var.name_prefix}-nat-${count.index + 1}" })
@@ -407,6 +407,12 @@ resource "aws_security_group" "app" {
   tags = merge(var.common_tags, { Name = "${var.name_prefix}-app-sg" })
 }
 
+# The endpoint security group and its two app rules are intentionally
+# unconditional. Gating them would change the prod-secondary state addresses
+# (no-count -> [0]) and require state moves, for no staging benefit: when
+# `enable_interface_endpoints` is false the interface endpoint set is empty, so
+# this group has no members and its ingress/egress pair is inert. Nothing here
+# references a missing resource.
 resource "aws_security_group" "endpoints" {
   name        = "${var.name_prefix}-endpoints"
   description = "Private AWS service endpoints"
@@ -736,7 +742,7 @@ resource "aws_db_instance" "postgres" {
   manage_master_user_password   = true
   master_user_secret_kms_key_id = aws_kms_key.rds.arn
 
-  multi_az               = true
+  multi_az               = var.db_multi_az
   publicly_accessible    = false
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.db.id]

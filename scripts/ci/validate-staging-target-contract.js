@@ -109,6 +109,8 @@ const natEipBlock = moduleMain.match(/resource "aws_eip" "nat" \{[\s\S]*?\n\}/);
 assert.ok(natEipBlock, 'NAT EIP block found');
 has(natEipBlock[0], 'count  = var.nat_gateway_count', 'one NAT EIP per NAT gateway (no idle public address)');
 matches(moduleMain, /multi_az\s*=\s*var\.db_multi_az/, 'RDS Multi-AZ follows the explicit variable');
+assert.equal(/multi_az\s*=\s*true/.test(moduleMain), false, 'RDS Multi-AZ must not be hardcoded true');
+matches(moduleMain, /resource "aws_nat_gateway" "this" \{\n  count = var\.nat_gateway_count/, 'NAT gateway count follows the same variable');
 has(moduleMain, 'instance_refresh', 'instance_refresh named in the ceiling proof');
 hasNot(moduleMain, 'aws_autoscaling_policy', 'no scaling policy can raise capacity');
 hasNot(moduleMain, 'aws_autoscaling_schedule', 'no scheduled action can raise capacity');
@@ -180,6 +182,10 @@ const assertGuardBeforeCredentials = (text, label) => {
 };
 for (const [label, text] of Object.entries({ deployWorkflow, planWorkflow, applyWorkflow, rollbackWorkflow })) {
   assertGuardBeforeCredentials(text, `${label} workflow`);
+  const guardAt = text.indexOf('guard-staging-route.sh');
+  const resolveAt = text.indexOf('- name: Resolve ');
+  assert.ok(resolveAt !== -1, `${label}: resolver step present`);
+  assert.ok(guardAt < resolveAt, `${label}: guard must run before route resolution`);
 }
 has(deployWorkflow, 'CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}', 'deploy passes its configured TF_ENV to the guard');
 has(rollbackWorkflow, 'CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}', 'rollback passes its configured TF_ENV to the guard');

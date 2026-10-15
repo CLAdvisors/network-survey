@@ -12,14 +12,15 @@ incomplete, and how the freeze is lifted.
 (`terraform/envs/staging`, account 438465164125). The approved plan is to build a
 new isolated **target-account** staging environment (710054969994) and only then
 cut over. Until the target exists and its secure runtime, artifact, session and
-smoke gates pass, every **mutating** staging route (push, deploy, apply,
-rollback) fails closed for both meanings of "staging".
+smoke gates pass, **every** staging route (push, deploy, plan, apply, rollback)
+fails closed for both meanings of "staging".
 
-One deliberate, non-mutating exception is retained: a read-only `plan` of the
-legacy source staging root stays allowed. It writes nothing and never touches the
-target root. This exception is coordinator-dispositioned scope, recorded here so
-it is not mistaken for an oversight; freezing it too is a one-line guard change
-if the coordinator prefers.
+There is no source-plan exception. A normal Terraform route runs `terraform init`
+against the remote backend and a default-locking `plan`, so it reads live state
+and can write lock objects and local cache/outputs; it is not offline and is
+therefore frozen too. The legacy root and state remain preserved for a future,
+separately approved read-only operator procedure, but no automatic plan route is
+kept.
 
 The gate is `scripts/ci/guard-staging-route.sh`, called by every staging route
 workflow before any AWS OIDC assumption. It also binds a configured `TF_ENV`
@@ -35,7 +36,7 @@ runtime bypass variable**; lifting a refusal requires a reviewed code change.
 | 2 | **Queued / duplicate runs** | `deploy.yml` / `rollback-api.yml` concurrency | serialized per environment, not cancelled | `cancel-in-progress: false`; **serialization does not revoke already-queued or old-revision runs** — see the effective-freeze prerequisite below |
 | 3 | **Manual deploy** | `deploy.yml` dispatch `staging` | frozen | guard refuses route `deploy` |
 | 4 | **Manual rollback** | `rollback-api.yml` dispatch `staging` | frozen | guard refuses route `rollback` |
-| 5 | **Plan** | `terraform-plan.yml` dispatch `staging` | read-only legacy plan allowed (documented exception) | guard allows route `plan` only |
+| 5 | **Plan** | `terraform-plan.yml` dispatch/PR `staging` | frozen | guard refuses route `plan` before OIDC/init; PR and default selections are denied too |
 | 6 | **Plan (target)** | `terraform-plan.yml` dispatch `staging-target` | disabled | guard refuses route `plan`; no live plan/state read |
 | 7 | **Apply** | `terraform-apply.yml` dispatch `staging` | frozen | guard refuses route `apply` |
 | 8 | **Apply (target)** | `terraform-apply.yml` dispatch `staging-target` | disabled | guard refuses route `apply` |
@@ -82,8 +83,18 @@ list plus the post-landing refusal check.
 - A target route is enabled by adding it to the workflow's route resolution and
   removing the corresponding `staging-target` refusal from the guard, citing the
   approved provisioning/readiness evidence.
-- The legacy source staging deploy freeze is lifted only by an approved change
+- The legacy source staging route freeze is lifted only by an approved change
   that names the target cutover; it is never lifted by an environment variable.
+  A future read-only source plan, if needed, is re-added explicitly with its
+  state/lock/cache behavior documented, not by restoring an implicit default.
+
+## Known consequence of the freeze
+
+`terraform-plan.yml` still triggers on `pull_request` to `terraform/**` and
+still defaults a dispatch to `staging`. Both now hit the guard and fail closed,
+so a Terraform pull request check is expected to fail until the freeze is lifted.
+That is the intended fail-closed behaviour, not a broken workflow; it is
+recorded here so it is not mistaken for a regression.
 
 ## Explicitly not proven here
 

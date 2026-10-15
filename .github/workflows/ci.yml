@@ -230,6 +230,9 @@ jobs:
       - name: Test fail-closed staging route guard
         run: bash scripts/ci/test-staging-route-guard.sh
 
+      - name: Test staging route alias guard wiring
+        run: bash scripts/ci/test-staging-route-alias-guard.sh
+
       - name: Test prod-secondary /live migration preflight
         run: bash scripts/ci/test-prod-secondary-live-preflight.sh
 

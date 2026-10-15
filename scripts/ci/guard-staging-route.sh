@@ -23,13 +23,12 @@
 #   staging-target         refused on every route: the target staging root is
 #                          not provisioned, and no live plan/state read, apply
 #                          or deploy to it is approved yet.
-#   staging (legacy source) refused on mutating routes (push/deploy/apply/
-#                          rollback): source deploy is frozen until the approved
-#                          target cutover. The read-only plan route is kept as an
-#                          explicit, coordinator-dispositioned exception (see
-#                          docs/runbooks/staging-target-freeze.md): it is
-#                          non-mutating and is the only route that does not
-#                          touch the target root.
+#   staging (legacy source) refused on every route (push/deploy/plan/apply/
+#                          rollback): source deploy and source plan are frozen
+#                          until the separately approved target cutover. The
+#                          legacy root/state is preserved for future explicitly
+#                          approved read-only operator procedures, but no
+#                          automatic source-plan route is kept.
 #   production|prod|prod-secondary
 #                          unchanged; not part of the staging migration. A
 #                          configured TF_ENV must match the route's namespace so
@@ -82,15 +81,8 @@ case "$environment" in
     exit 1
     ;;
   staging)
-    case "$route" in
-      plan)
-        echo "Allowing read-only ${route} route to the legacy source staging root."
-        ;;
-      *)
-        echo "Refusing ${route} route to the legacy source staging root: source deploy is frozen until the separately approved target staging cutover." >&2
-        exit 1
-        ;;
-    esac
+    echo "Refusing ${route} route to the legacy source staging root: source staging routes (including plan) are frozen until the separately approved target staging cutover." >&2
+    exit 1
     ;;
   production | prod | prod-secondary)
     echo "Allowing ${route} route to ${environment}."

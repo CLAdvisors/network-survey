@@ -33,11 +33,11 @@ for route in push deploy plan apply rollback; do
   expect_refuse "$route" staging-target
 done
 
-# Legacy source staging is frozen on every mutating route; read-only plan stays.
-for route in push deploy apply rollback; do
+# Legacy source staging is frozen on every route, including read-only plan
+# (coordinator disposition A: no automatic source-plan loophole).
+for route in push deploy plan apply rollback; do
   expect_refuse "$route" staging
 done
-expect_allow plan staging
 
 # Prod/prod-secondary routes are untouched.
 for environment in prod prod-secondary production; do

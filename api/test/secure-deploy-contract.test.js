@@ -11,41 +11,48 @@ const script = fs.readFileSync(path.join(root, 'scripts/deploy/remote-deploy.sh'
 const runtimeSecrets = fs.readFileSync(path.join(root, 'api/runtime-secrets.js'), 'utf8');
 const runtimePool = fs.readFileSync(path.join(root, 'scripts/deploy/runtime-pool.js'), 'utf8');
 const ecosystemSource = fs.readFileSync(path.join(root, 'scripts/deploy/ecosystem.config.js'), 'utf8');
+const bootstrapAdmin = fs.readFileSync(path.join(root, 'scripts/deploy/bootstrap-admin.js'), 'utf8');
+const deployWorkflow = fs.readFileSync(path.join(root, '.github/workflows/deploy.yml'), 'utf8');
 
-test('the deploy script parses and targets staging as its only secure runtime environment', () => {
+test('the deploy script parses and binds the secure path to the explicit target flag', () => {
   const syntax = spawnSync('bash', ['-n', path.join(root, 'scripts/deploy/remote-deploy.sh')], { encoding: 'utf8' });
   assert.equal(syntax.status, 0, syntax.stderr);
-  assert.match(script, /SECURE_RUNTIME=false\nif \[ "\$ENVIRONMENT" = "staging" \]; then\n  SECURE_RUNTIME=true/);
+  assert.match(script, /if \[ "\$ENVIRONMENT" = "staging" \] && \[ "\$\{SECURE_RUNTIME_ENABLED:-false\}" = "true" \]; then\n  SECURE_RUNTIME=true/);
   assert.match(script, /Secret-safe deployments refuse shell xtrace/);
-  assert.match(script, /if \[ "\$SECURE_RUNTIME" = true \] && \[\[ \$- == \*x\* \]\]/);
+  assert.match(script, /if \[ "\$ENVIRONMENT" = "prod-secondary" \] \|\| \[ "\$SECURE_RUNTIME" = true \]; then\n  # Serialize/);
 });
 
-test('every secure-runtime module agrees on the staging-only secure set', () => {
-  assert.match(runtimeSecrets, /SECURE_RUNTIME_ENVIRONMENTS = Object\.freeze\(\['staging'\]\)/);
-  assert.match(runtimePool, /SECURE_RUNTIME_ENVIRONMENTS = Object\.freeze\(\['staging'\]\)/);
-  assert.match(ecosystemSource, /const secureHosted = process\.env\.EMAIL_WORKER_ENV === 'staging';/);
-  for (const [label, text] of Object.entries({ runtimeSecrets, runtimePool, ecosystemSource })) {
+test('every secure-runtime module agrees on the explicit SECURE_RUNTIME_ENABLED identity', () => {
+  assert.match(runtimeSecrets, /String\(env\.SECURE_RUNTIME_ENABLED \|\| ''\) === 'true'/);
+  assert.match(runtimePool, /String\(env\.SECURE_RUNTIME_ENABLED \|\| ''\) === 'true'/);
+  assert.match(ecosystemSource, /const secureHosted = process\.env\.SECURE_RUNTIME_ENABLED === 'true';/);
+  assert.match(bootstrapAdmin, /process\.env\.SECURE_RUNTIME_ENABLED === 'true'/);
+  for (const [label, text] of Object.entries({ runtimeSecrets, runtimePool, ecosystemSource, bootstrapAdmin })) {
     assert.equal(/analysis/i.test(text), false, `${label}: no analysis worker is pulled in`);
+    assert.equal(/'staging'/.test(text.replace(/.*legacy.*/gi, '')), false, `${label}: the logical name is not the secure selector`);
   }
-  assert.equal(/secureHosted = process\.env\.EMAIL_WORKER_ENV === 'staging';/.test(ecosystemSource), true, 'ecosystem secure routing is staging-only');
   assert.equal(/ona-analysis-worker|ANALYSIS_WORKER_ENABLED/.test(script), false, 'remote-deploy must not touch the optional analysis worker');
 });
 
-test('the secure deploy refuses inline credentials before any legacy write', () => {
-  assert.match(script, /RELEASE_CAPABILITY_ARGS\+=\(--require-transient-runtime-secrets\)/);
-  assert.match(script, /Runtime configuration contains inline credential keys; refusing deploy/);
-  assert.match(script, /if \[ "\$SECURE_RUNTIME" = true \]; then\n  test -n "\$DB_MANAGED_SECRET_ARN"/);
-  assert.match(script, /test "\$\(get_env_value SESSION_SECRET_PARAMETER\)" = "\/network-survey\/\$ENVIRONMENT\/api\/session-secret"/);
+test('the secure deploy validates reference-only config before writing it and requires the /live floor', () => {
+  assert.match(script, /RELEASE_CAPABILITY_ARGS\+=\(--require-transient-runtime-secrets --require-alb-live-health\)/);
+  assert.match(script, /aws s3 cp "s3:\/\/\$CONFIG_BUCKET\/\$CONFIG_KEY" - \| node "\$RELEASE_DIR\/deploy\/runtime-config-check\.js"/);
+  assert.match(script, /test "\$\(get_env_value SECURE_RUNTIME_ENABLED\)" = "true"/);
   assert.match(script, /fi # legacy secret-to-disk path; never execute for a secure runtime environment/);
   const marker = JSON.parse(fs.readFileSync(path.join(root, 'scripts/deploy/CAPABILITIES.json'), 'utf8'));
   assert.equal(marker.transient_runtime_secrets, 1);
+  assert.equal(marker.alb_live_health, 1);
 });
 
-test('secure migrations keep the credential off Liquibase argv and rollback refuses insecure artifacts', () => {
+test('secure migrations and credential parses never put a secret on argv or leak a payload', () => {
   assert.match(script, /LIQUIBASE_COMMAND_PASSWORD="\$DB_PASSWORD" liquibase/);
+  assert.equal(script.includes('read-managed-password.js'), true, 'managed-secret parsing goes through the sanitized helper');
+  assert.equal(script.includes("node -e 'const value=JSON.parse(process.env.SECRET_JSON)"), false, 'no raw managed-secret parser remains');
+  assert.equal(script.includes("node -e 'const s=JSON.parse(process.env.SECRET_JSON)"), false, 'no raw managed-secret parser remains');
   assert.match(script, /secure-artifact-check\.js" "\$PREVIOUS_RELEASE"/);
   assert.match(script, /host remains out of service, no insecure rollback/);
-  assert.equal(/refresh_managed_db_password "\$PREVIOUS_RELEASE\/api\/\.env\.prod"/.test(script), true, 'legacy refresh path still exists for non-secure environments');
+  assert.match(script, /PREVIOUS_API_DIR="\$PREVIOUS_RELEASE\/api"/);
+  assert.match(script, /runtimePool\(process\.env\.PREVIOUS_API_DIR\)/);
 });
 
 test('every deploy-invoked query resolves the DB credential through the managed callback', () => {
@@ -55,14 +62,17 @@ test('every deploy-invoked query resolves the DB credential through the managed 
   assert.match(script, /if \[ "\$SECURE_RUNTIME" != true \]; then\n        ls -1dt "\$SERVICE_DIR"\/releases\/\*/);
 });
 
+test('secure staging and prod-secondary both serve /live before traffic is trusted', () => {
+  assert.match(script, /live_ok\(\) \{\n  case "\$ENVIRONMENT" in\n    prod-secondary\|staging\)/);
+  assert.equal((script.match(/\blive_ok &&/g) || []).length, 2, 'both the deploy and restore health predicates check /live');
+});
+
 test('the PM2 app environment carries only non-secret keys', () => {
-  // pm2 jlist/save exposes each app's pm2_env. The ecosystem must not add any
-  // key outside this allow-list, so no secret can reach the PM2 parent or dump.
-  const allowed = new Set(['NODE_ENV', 'RELEASE_REVISION', 'DEPLOYMENT_ID', 'EMAIL_WORKER_ENV', 'APP_ENV']);
+  const allowed = new Set(['NODE_ENV', 'RELEASE_REVISION', 'DEPLOYMENT_ID', 'EMAIL_WORKER_ENV', 'APP_ENV', 'SECURE_RUNTIME_ENABLED']);
   const configPath = require.resolve('../../scripts/deploy/ecosystem.config');
-  const previous = process.env.EMAIL_WORKER_ENV;
+  const previous = process.env.SECURE_RUNTIME_ENABLED;
   try {
-    process.env.EMAIL_WORKER_ENV = 'staging';
+    process.env.SECURE_RUNTIME_ENABLED = 'true';
     delete require.cache[configPath];
     const config = require(configPath);
     for (const app of config.apps) {
@@ -71,8 +81,14 @@ test('the PM2 app environment carries only non-secret keys', () => {
       }
     }
   } finally {
-    if (previous === undefined) delete process.env.EMAIL_WORKER_ENV;
-    else process.env.EMAIL_WORKER_ENV = previous;
+    if (previous === undefined) delete process.env.SECURE_RUNTIME_ENABLED;
+    else process.env.SECURE_RUNTIME_ENABLED = previous;
     delete require.cache[configPath];
+  }
+});
+
+test('the deploy artifact packages every secure-runtime file', () => {
+  for (const file of ['api/secure-runtime.js', 'api/runtime-secrets.js', 'deploy/runtime-pool.js', 'deploy/secure-artifact-check.js', 'deploy/runtime-config-check.js', 'deploy/read-managed-password.js']) {
+    assert.match(deployWorkflow, new RegExp(`test -f "\\$STAGE_DIR/${file.replace(/[.]/g, '\\.')}"`), `deploy.yml must assert ${file}`);
   }
 });

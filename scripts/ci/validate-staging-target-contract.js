@@ -16,6 +16,7 @@ const moduleMain = read('terraform/modules/prod_secondary_platform/main.tf');
 const moduleVars = read('terraform/modules/prod_secondary_platform/variables.tf');
 const moduleMoved = read('terraform/modules/prod_secondary_platform/moved.tf');
 const moduleLogging = read('terraform/modules/prod_secondary_platform/access-logging.tf');
+const moduleCloudInit = read('terraform/modules/prod_secondary_platform/cloud-init.sh');
 
 const targetProvider = read('terraform/envs/staging-target/provider.tf');
 const targetLocals = read('terraform/envs/staging-target/locals.tf');
@@ -126,6 +127,17 @@ for (const gate of [
 ]) {
   has(targetMain, gate, `staging feature gate stays off: ${gate}`);
 }
+
+// --- Secure-runtime identity is target-staging only -----------------------
+// The secure-runtime flag is stamped by the module into deploy.env and the
+// runtime config. Only this root sets it true, so the retained source staging
+// (a separate root/module) keeps its existing deploy path.
+matches(moduleVars, /variable "secure_runtime_enabled"[\s\S]*?default\s*=\s*false/, 'secure runtime identity defaults off');
+has(moduleMain, '"SECURE_RUNTIME_ENABLED=${var.secure_runtime_enabled}"', 'runtime config carries the secure identity');
+has(moduleCloudInit, 'SECURE_RUNTIME_ENABLED=${secure_runtime_enabled}', 'deploy.env carries the secure identity');
+matches(targetMain, /secure_runtime_enabled\s+=\s+true/, 'target staging stamps the secure identity');
+hasNot(prodMain, 'secure_runtime_enabled', 'prod-secondary inherits the secure-off default');
+hasNot(read('terraform/envs/staging/main.tf'), 'secure_runtime_enabled', 'legacy source staging never stamps the secure identity');
 
 // --- NAT / S3 gateway / no interface endpoints, no dangling refs ----------
 

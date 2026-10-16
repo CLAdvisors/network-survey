@@ -2,15 +2,18 @@
 'use strict';
 
 // Exit 0 only for a secure-capable release: it declares the
-// transient-runtime-secrets capability and its runtime env file carries no
-// inline credential keys. Used before any automatic rollback so an older
-// plaintext artifact is never restored. Prints only a category, never a value.
+// transient-runtime-secrets capability, ships the secure runtime entrypoint
+// and its PM2 ecosystem, and its runtime env file carries no inline credential
+// keys (in any dotenv assignment form). Used before any automatic rollback so
+// an older plaintext artifact is never restored. Prints only a category.
 const fs = require('fs');
 const path = require('path');
+const { validate } = require('./runtime-config-check');
 
-const CREDENTIAL_KEYS = Object.freeze([
-  'DB_PASSWORD', 'SESSION_SECRET', 'RESEND_API_KEY', 'RESEND_KEY',
-  'RESEND_WEBHOOK_SECRET', 'RESEND_WEBHOOK_PREVIOUS_SECRET',
+const REQUIRED_SECURE_FILES = Object.freeze([
+  ['api', 'secure-runtime.js'],
+  ['api', 'runtime-secrets.js'],
+  ['deploy', 'ecosystem.config.js'],
 ]);
 
 function insecureReason(releaseDir) {
@@ -23,15 +26,18 @@ function insecureReason(releaseDir) {
   if (marker.transient_runtime_secrets !== 1) {
     return 'release lacks transient runtime secret capability';
   }
+  for (const segments of REQUIRED_SECURE_FILES) {
+    if (!fs.existsSync(path.join(releaseDir, ...segments))) {
+      return `release is missing its secure runtime entrypoint (${segments.join('/')})`;
+    }
+  }
   let content;
   try {
     content = fs.readFileSync(path.join(releaseDir, 'api', '.env.prod'), 'utf8');
   } catch {
     return 'release runtime environment is missing';
   }
-  const hasInline = content.split('\n').some((line) => CREDENTIAL_KEYS.some((key) => line.startsWith(`${key}=`)));
-  if (hasInline) return 'release runtime environment contains inline credential keys';
-  return null;
+  return validate(content);
 }
 
 if (require.main === module) {
@@ -50,4 +56,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { insecureReason, CREDENTIAL_KEYS };
+module.exports = { insecureReason, REQUIRED_SECURE_FILES };

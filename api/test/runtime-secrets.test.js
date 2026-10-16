@@ -2,11 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadRuntimeSecrets, isSecureRuntimeEnvironment, SECURE_RUNTIME_ENVIRONMENTS } = require('../runtime-secrets');
+const { loadRuntimeSecrets, isSecureRuntimeEnabled } = require('../runtime-secrets');
 
-// Staging runtime config carries references only; every credential arrives
-// from SSM/Secrets Manager after PM2 has already spawned the process.
+// Target staging runtime config carries references only; every credential
+// arrives from SSM/Secrets Manager after PM2 has already spawned the process.
+// The SECURE_RUNTIME_ENABLED flag is stamped by the target Terraform.
 const secureStaging = () => ({
+  SECURE_RUNTIME_ENABLED: 'true',
   EMAIL_WORKER_ENV: 'staging',
   DB_MANAGED_SECRET_ARN: 'arn:aws:secretsmanager:us-east-1:710054969994:secret:rds!db-synthetic',
   SESSION_SECRET_PARAMETER: '/network-survey/staging/api/session-secret',
@@ -16,12 +18,12 @@ const secureStaging = () => ({
 
 const fake = (handler) => ({ send: async (command, options) => handler(command.input, options) });
 
-test('secure set is exactly staging for this tranche', () => {
-  assert.deepEqual([...SECURE_RUNTIME_ENVIRONMENTS], ['staging']);
-  assert.equal(isSecureRuntimeEnvironment('staging'), true);
-  for (const env of ['prod', 'prod-secondary', 'dev', 'local', 'test', undefined]) {
-    assert.equal(isSecureRuntimeEnvironment(env), false, `${env} must stay on the legacy path`);
-  }
+test('the secure identity is the explicit target flag, not the environment name', () => {
+  assert.equal(isSecureRuntimeEnabled({ SECURE_RUNTIME_ENABLED: 'true' }), true);
+  assert.equal(isSecureRuntimeEnabled({ SECURE_RUNTIME_ENABLED: 'false' }), false);
+  assert.equal(isSecureRuntimeEnabled({}), false);
+  // Legacy source staging shares the logical name but never sets the flag.
+  assert.equal(isSecureRuntimeEnabled({ EMAIL_WORKER_ENV: 'staging' }), false);
 });
 
 test('loads the staging session SecureString only into the supplied process environment', async () => {
@@ -121,9 +123,13 @@ test('a disabled gate with an active reference is rejected', async () => {
   assert.equal(reads, 1, 'only the session secret may be read before the inactive reference is rejected');
 });
 
-test('legacy hosted and local environments are returned untouched without any AWS read', async () => {
-  for (const environment of ['prod', 'prod-secondary', 'local', 'test']) {
-    const env = { EMAIL_WORKER_ENV: environment, SESSION_SECRET: 'synthetic-test-only' };
+test('a legacy or local environment without the flag is returned untouched without any AWS read', async () => {
+  for (const env of [
+    { EMAIL_WORKER_ENV: 'staging', SESSION_SECRET: 'synthetic-test-only' },
+    { EMAIL_WORKER_ENV: 'prod', SESSION_SECRET: 'synthetic-test-only' },
+    { EMAIL_WORKER_ENV: 'prod-secondary', SESSION_SECRET: 'synthetic-test-only' },
+    { EMAIL_WORKER_ENV: 'local', SESSION_SECRET: 'synthetic-test-only' },
+  ]) {
     const result = await loadRuntimeSecrets(env, { client: fake(() => { throw Error('must not call'); }) });
     assert.equal(result, env);
     assert.equal(env.SESSION_SECRET, 'synthetic-test-only');

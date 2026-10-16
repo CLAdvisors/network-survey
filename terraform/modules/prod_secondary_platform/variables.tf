@@ -232,6 +232,12 @@ variable "enable_owner_bootstrap" {
   default     = false
 }
 
+variable "secure_runtime_enabled" {
+  description = "Stamp the target secure-runtime identity into deploy.env and the runtime config. Keep false for every existing environment; only the target staging root sets it true. It makes the API, both workers and every deploy-invoked tool resolve credentials transiently instead of from a plaintext file."
+  type        = bool
+  default     = false
+}
+
 variable "operations_alert_email" {
   description = "Approved operations alarm subscriber. Null keeps the subscription disabled until a reviewed contact exists; prod-secondary passes its explicit address."
   type        = string

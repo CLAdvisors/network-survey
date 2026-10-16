@@ -21,11 +21,12 @@ PM2_WEBHOOK_WORKER=ona-email-webhook-worker
 source "$SERVICE_DIR/deploy.env"
 export AWS_DEFAULT_REGION
 
-# Hosted environments whose runtime must resolve credentials transiently and
-# never write them to disk. Keep in sync with api/runtime-secrets.js,
-# deploy/runtime-pool.js and deploy/ecosystem.config.js.
+# Hosted runtime identity stamped by the target Terraform into deploy.env. Only
+# the target staging root sets SECURE_RUNTIME_ENABLED=true; the retained source
+# staging is a separate root/module and never sets it, so it keeps its existing
+# deploy path. Secure decisions key on this flag, not on the environment name.
 SECURE_RUNTIME=false
-if [ "$ENVIRONMENT" = "staging" ]; then
+if [ "$ENVIRONMENT" = "staging" ] && [ "${SECURE_RUNTIME_ENABLED:-false}" = "true" ]; then
   SECURE_RUNTIME=true
 fi
 if [ "$SECURE_RUNTIME" = true ] && [[ $- == *x* ]]; then
@@ -33,9 +34,10 @@ if [ "$SECURE_RUNTIME" = true ] && [[ $- == *x* ]]; then
   exit 1
 fi
 
-if [ "$ENVIRONMENT" = "prod-secondary" ]; then
-  # Serialize prod-secondary cloud-init, CI, rollback, and operator deployments.
-  # Concurrent release symlink, migration, and control-handoff mutation is unsafe.
+if [ "$ENVIRONMENT" = "prod-secondary" ] || [ "$SECURE_RUNTIME" = true ]; then
+  # Serialize prod-secondary and secure staging cloud-init, CI, rollback and
+  # operator deployments. Concurrent release symlink, migration, and
+  # control-handoff mutation is unsafe. CI serialization is not host exclusion.
   exec 8>/run/lock/ona-deploy.lock
   flock -w 60 8 || { echo 'Another deployment still holds /run/lock/ona-deploy.lock' >&2; exit 75; }
 fi
@@ -43,7 +45,8 @@ fi
 REVISION=$(cat "$SOURCE_DIR/REVISION")
 RELEASE_CAPABILITY_ARGS=()
 if [ "$SECURE_RUNTIME" = true ]; then
-  RELEASE_CAPABILITY_ARGS+=(--require-transient-runtime-secrets)
+  # The secure runtime must also preserve the dependency-free /live floor.
+  RELEASE_CAPABILITY_ARGS+=(--require-transient-runtime-secrets --require-alb-live-health)
 fi
 if [ "$ENVIRONMENT" = "prod-secondary" ]; then
   RELEASE_CAPABILITY_ARGS+=(--require-prod-secondary-resend-isolation)
@@ -64,7 +67,19 @@ if [ -n "$PREVIOUS_RELEASE" ] && [ "$RELEASE_DIR" = "$PREVIOUS_RELEASE" ]; then
 fi
 
 run_pm2() {
-  sudo -u ubuntu -H env NODE_ENV=prod EMAIL_WORKER_ENV="${WORKER_ENV:-prod}" RELEASE_REVISION="${REVISION:-unknown}" DEPLOYMENT_ID="${DEPLOYMENT_ID:-unknown}" PM2_HOME=/home/ubuntu/.pm2 pm2 "$@"
+  sudo -u ubuntu -H env NODE_ENV=prod EMAIL_WORKER_ENV="${WORKER_ENV:-prod}" SECURE_RUNTIME_ENABLED="${SECURE_RUNTIME:-false}" RELEASE_REVISION="${REVISION:-unknown}" DEPLOYMENT_ID="${DEPLOYMENT_ID:-unknown}" PM2_HOME=/home/ubuntu/.pm2 pm2 "$@"
+}
+
+# /live is a dependency-free process signal. prod-secondary and secure staging
+# hosts must serve it before traffic is trusted; legacy environments keep their
+# existing /health-only check.
+live_ok() {
+  case "$ENVIRONMENT" in
+    prod-secondary|staging)
+      curl -fsS --connect-timeout 2 --max-time 5 http://localhost:3000/live >/dev/null 2>&1 ;;
+    *)
+      return 0 ;;
+  esac
 }
 
 echo "==> Installing release $REVISION to $RELEASE_DIR"
@@ -78,12 +93,14 @@ echo "==> Installing production dependencies"
 
 echo "==> Fetching runtime config"
 CONFIG_KEY=${CONFIG_KEY:-configs/.env.prod}
-aws s3 cp "s3://$CONFIG_BUCKET/$CONFIG_KEY" "$RELEASE_DIR/api/.env.prod"
-chmod 600 "$RELEASE_DIR/api/.env.prod"
-if [ "$SECURE_RUNTIME" = true ] && grep -Eq '^(DB_PASSWORD|SESSION_SECRET|RESEND_API_KEY|RESEND_KEY|RESEND_WEBHOOK_SECRET|RESEND_WEBHOOK_PREVIOUS_SECRET)=' "$RELEASE_DIR/api/.env.prod"; then
-  echo 'Runtime configuration contains inline credential keys; refusing deploy' >&2
-  exit 1
+if [ "$SECURE_RUNTIME" = true ]; then
+  # Validate the reference-only config in memory before any credential-bearing
+  # file is written; a rejected config never lands on disk.
+  aws s3 cp "s3://$CONFIG_BUCKET/$CONFIG_KEY" - | node "$RELEASE_DIR/deploy/runtime-config-check.js" "$RELEASE_DIR/api/.env.prod"
+else
+  aws s3 cp "s3://$CONFIG_BUCKET/$CONFIG_KEY" "$RELEASE_DIR/api/.env.prod"
 fi
+chmod 600 "$RELEASE_DIR/api/.env.prod"
 
 get_env_value() {
   grep "^$1=" "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-
@@ -136,7 +153,7 @@ NODE
 ) || return 1
   [ -n "$secret_arn" ] || return 0
   secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_arn" --query SecretString --output text) || return 1
-  password=$(SECRET_JSON="$secret_json" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.password!=="string"||!value.password)process.exit(1);process.stdout.write(value.password)') || return 1
+  password=$(SECRET_JSON="$secret_json" node "$RELEASE_DIR/deploy/read-managed-password.js") || return 1
   unset secret_json
   temporary=$(mktemp "${env_file}.db-rotation.XXXXXX") || return 1
   if ! ENV_FILE="$env_file" DB_PASSWORD="$password" node - <<'NODE' > "$temporary"
@@ -167,6 +184,7 @@ echo "==> Resolving runtime secret references"
 DB_MANAGED_SECRET_ARN=$(get_env_value DB_MANAGED_SECRET_ARN || true)
 if [ "$SECURE_RUNTIME" = true ]; then
   test -n "$DB_MANAGED_SECRET_ARN" || { echo 'Secure runtime requires the managed DB secret ARN' >&2; exit 1; }
+  test "$(get_env_value SECURE_RUNTIME_ENABLED)" = "true" || { echo 'Secure runtime config identity mismatch' >&2; exit 1; }
   test "$(get_env_value EMAIL_WORKER_ENV)" = "$ENVIRONMENT" || { echo 'Secure runtime config environment mismatch' >&2; exit 1; }
   test "$(get_env_value SESSION_SECRET_PARAMETER)" = "/network-survey/$ENVIRONMENT/api/session-secret" || { echo 'Secure runtime session reference mismatch' >&2; exit 1; }
   if [ "$(get_env_value RESEND_CREDENTIAL_LOAD_ENABLED)" = true ]; then
@@ -183,7 +201,7 @@ if [ "$SECURE_RUNTIME" = true ]; then
 else
 if [ -n "$DB_MANAGED_SECRET_ARN" ]; then
   DB_MANAGED_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_MANAGED_SECRET_ARN" --query SecretString --output text)
-  DB_MANAGED_PASSWORD=$(SECRET_JSON="$DB_MANAGED_SECRET_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.password!=="string"||!value.password)process.exit(1);process.stdout.write(value.password)')
+  DB_MANAGED_PASSWORD=$(SECRET_JSON="$DB_MANAGED_SECRET_JSON" node "$RELEASE_DIR/deploy/read-managed-password.js")
   append_secret_value DB_PASSWORD "$DB_MANAGED_PASSWORD"
   unset DB_MANAGED_SECRET_JSON DB_MANAGED_PASSWORD
 else
@@ -270,7 +288,7 @@ if [ "$SECURE_RUNTIME" = true ]; then
   # Read the current managed password into shell memory only for Liquibase. It
   # is never written to a file, argv, the PM2 environment or a log.
   DB_MANAGED_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_MANAGED_SECRET_ARN" --query SecretString --output text)
-  DB_PASSWORD=$(SECRET_JSON="$DB_MANAGED_SECRET_JSON" EXPECTED_DB_USER="$DB_USER" node -e 'const s=JSON.parse(process.env.SECRET_JSON);if(s.username!==process.env.EXPECTED_DB_USER||!s.password)process.exit(1);process.stdout.write(s.password)')
+  DB_PASSWORD=$(SECRET_JSON="$DB_MANAGED_SECRET_JSON" EXPECTED_DB_USER="$DB_USER" node "$RELEASE_DIR/deploy/read-managed-password.js")
   unset DB_MANAGED_SECRET_JSON
 else
   DB_PASSWORD=$(read_runtime_env DB_PASSWORD)
@@ -313,8 +331,8 @@ if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
   BOOTSTRAP_ADMIN_IDENTITY_PARAMETER=$(get_env_value BOOTSTRAP_ADMIN_IDENTITY_PARAMETER || true)
   if [ -n "$BOOTSTRAP_ADMIN_IDENTITY_PARAMETER" ]; then
     BOOTSTRAP_ADMIN_IDENTITY_JSON=$(get_secret_from_ssm BOOTSTRAP_ADMIN_IDENTITY_PARAMETER)
-    BOOTSTRAP_ADMIN_USERNAME=$(SECRET_JSON="$BOOTSTRAP_ADMIN_IDENTITY_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.username!=="string"||!value.username)process.exit(1);process.stdout.write(value.username)')
-    BOOTSTRAP_ADMIN_EMAIL=$(SECRET_JSON="$BOOTSTRAP_ADMIN_IDENTITY_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.email!=="string"||!value.email)process.exit(1);process.stdout.write(value.email)')
+    BOOTSTRAP_ADMIN_USERNAME=$(SECRET_JSON="$BOOTSTRAP_ADMIN_IDENTITY_JSON" node -e 'try{const v=JSON.parse(process.env.SECRET_JSON);if(typeof v.username!=="string"||!v.username)throw 0;process.stdout.write(v.username)}catch{process.exit(1)}')
+    BOOTSTRAP_ADMIN_EMAIL=$(SECRET_JSON="$BOOTSTRAP_ADMIN_IDENTITY_JSON" node -e 'try{const v=JSON.parse(process.env.SECRET_JSON);if(typeof v.email!=="string"||!v.email)throw 0;process.stdout.write(v.email)}catch{process.exit(1)}')
     unset BOOTSTRAP_ADMIN_IDENTITY_JSON
   fi
   if [ "$SECURE_RUNTIME" = true ]; then
@@ -326,7 +344,7 @@ if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
       BOOTSTRAP_ACCOUNT_MODE=$(get_env_value BOOTSTRAP_ACCOUNT_MODE) \
       BOOTSTRAP_ADMIN_PASSWORD="$BOOTSTRAP_ADMIN_PASSWORD" \
       DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" \
-      DB_MANAGED_SECRET_ARN="$DB_MANAGED_SECRET_ARN" EMAIL_WORKER_ENV="$WORKER_ENV" \
+      DB_MANAGED_SECRET_ARN="$DB_MANAGED_SECRET_ARN" EMAIL_WORKER_ENV="$WORKER_ENV" SECURE_RUNTIME_ENABLED="$SECURE_RUNTIME" \
       DB_SSL=true DB_SSL_CA="$SERVICE_DIR/certs/rds-global-bundle.pem" \
       node "$RELEASE_DIR/deploy/bootstrap-admin.js"
   else
@@ -505,8 +523,8 @@ restore_previous_release() {
     echo "!! Verifying restored API and fresh paused worker heartbeats before restoring traffic" >&2
     RESTORE_HEALTHY=false
     for _ in $(seq 1 15); do
-      if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && { [ "$ENVIRONMENT" != "prod-secondary" ] || curl -fsS http://localhost:3000/live >/dev/null 2>&1; } && (cd "$PREVIOUS_RELEASE/api" && EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
-const p=require('../deploy/runtime-pool').runtimePool();Promise.all([p.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID]),p.query(`SELECT 1 FROM email_webhook_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID])]).then(r=>process.exitCode=r.every(x=>x.rowCount)?0:1).catch(()=>process.exitCode=1).finally(()=>p.end());
+      if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && live_ok && (cd "$RELEASE_DIR/api" && PREVIOUS_API_DIR="$PREVIOUS_RELEASE/api" EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
+const p=require('../deploy/runtime-pool').runtimePool(process.env.PREVIOUS_API_DIR);Promise.all([p.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID]),p.query(`SELECT 1 FROM email_webhook_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID])]).then(r=>process.exitCode=r.every(x=>x.rowCount)?0:1).catch(()=>process.exitCode=1).finally(()=>p.end());
 NODE
       ); then RESTORE_HEALTHY=true; break; fi
       sleep 2
@@ -549,7 +567,7 @@ run_pm2 save
 echo "==> Waiting for health check"
 for i in $(seq 1 15); do
   if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && \
-    { [ "$ENVIRONMENT" != "prod-secondary" ] || curl -fsS http://localhost:3000/live >/dev/null 2>&1; } && \
+    live_ok && \
     run_pm2 jlist | EXPECTED_REVISION="$REVISION" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node -e '
       let input=""; process.stdin.on("data",d=>input+=d); process.stdin.on("end",()=>{const app=JSON.parse(input).find(p=>p.name==="ona-api"); process.exit(app?.pm2_env?.RELEASE_REVISION===process.env.EXPECTED_REVISION&&app?.pm2_env?.DEPLOYMENT_ID===process.env.EXPECTED_DEPLOYMENT_ID?0:1);});
     '; then

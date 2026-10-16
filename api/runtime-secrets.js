@@ -2,12 +2,14 @@
 
 const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
 
-// Hosted environments whose runtime must resolve credentials transiently at
-// process start and never read them from a plaintext file. This tranche enables
-// staging only; prod and prod-secondary keep their existing deploy path until a
-// separate, explicitly approved change. Keep this list in sync with
-// scripts/deploy/runtime-pool.js and scripts/deploy/ecosystem.config.js.
-const SECURE_RUNTIME_ENVIRONMENTS = Object.freeze(['staging']);
+// Hosted runtime identity stamped by the target Terraform into both deploy.env
+// and the runtime config. Only the target staging root sets it true; the
+// retained source staging (a separate root/module) never does, so it keeps its
+// existing deploy path. Secure decisions key on this flag, not on the logical
+// environment name.
+function isSecureRuntimeEnabled(env = process.env) {
+  return String(env.SECURE_RUNTIME_ENABLED || '') === 'true';
+}
 
 // [process env key, reference env key, expected SSM suffix, enabled?, optional?]
 const SECRET_REFERENCES = Object.freeze([
@@ -17,16 +19,12 @@ const SECRET_REFERENCES = Object.freeze([
   ['RESEND_WEBHOOK_PREVIOUS_SECRET', 'RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER', '/resend/webhook-previous-secret', (env) => env.RESEND_WEBHOOK_INGEST_ENABLED === 'true', true],
 ]);
 
-function isSecureRuntimeEnvironment(environment) {
-  return SECURE_RUNTIME_ENVIRONMENTS.includes(environment);
-}
-
 // Load into the application process only, after PM2 has spawned it. Never pass
 // these values through the PM2 parent, ecosystem config, release files, argv,
 // logs or the PM2 dump. Errors are sanitized so a provider/AWS error body can
 // never surface the failing parameter value.
 async function loadRuntimeSecrets(env = process.env, { client, timeoutMs = 5000 } = {}) {
-  if (!isSecureRuntimeEnvironment(env.EMAIL_WORKER_ENV)) return env;
+  if (!isSecureRuntimeEnabled(env)) return env;
   const prefix = `/network-survey/${env.EMAIL_WORKER_ENV}`;
   if (!env.DB_MANAGED_SECRET_ARN || env.DB_PASSWORD) {
     throw new Error('Secure runtime requires the managed database secret without an inline password');
@@ -75,4 +73,4 @@ async function loadRuntimeSecrets(env = process.env, { client, timeoutMs = 5000 
   }
 }
 
-module.exports = { loadRuntimeSecrets, isSecureRuntimeEnvironment, SECURE_RUNTIME_ENVIRONMENTS };
+module.exports = { loadRuntimeSecrets, isSecureRuntimeEnabled };

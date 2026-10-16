@@ -1,4 +1,34 @@
-# Staging secure-runtime boundary (mandatory later work)
+# Staging secure-runtime boundary
+
+Status: **delivered in tranche 2** (code only, unmerged/unapplied). The
+inclusion boundary below is implemented; the pre-start and later-effect gates
+still apply. It is not provisioning, secret-creation or host-start approval.
+
+## Delivered in tranche 2 (commit `d04494c`+)
+
+- `api/runtime-secrets.js` loads `SESSION_SECRET` (and gated Resend references)
+  from SSM SecureStrings into process memory after PM2 spawn; fail-closed and
+  sanitized. `api/secure-runtime.js` starts the API, email and webhook workers
+  through it (`server.js`/`email-worker.js`/`webhook-worker.js` expose
+  `startServer`/`main`). No optional analysis worker.
+- The secure identity is the explicit `SECURE_RUNTIME_ENABLED` flag stamped by
+  the target Terraform into `deploy.env` and the runtime config. Only
+  `terraform/envs/staging-target` sets it; the retained source staging is a
+  separate root/module and keeps its existing path.
+- `scripts/deploy/remote-deploy.sh` validates exact SSM/Secrets references,
+  streams a reference-only config through `runtime-config-check.js` before any
+  file is written, passes the Liquibase password via `LIQUIBASE_COMMAND_PASSWORD`
+  (never argv), bootstraps through the managed-DB callback
+  (`read-managed-password.js`), and never repopulates `api/.env.prod`. Staging
+  now takes the same host deploy lock and the `/live` capability/health floor as
+  prod-secondary, and never prunes old releases.
+- Ordinary and previous-artifact rollback start only a capability-verified
+  secure artifact (`secure-artifact-check.js`); an insecure previous release is
+  refused and the host is left out of service. Deploy-invoked migration/
+  control/heartbeat tooling uses the managed callback (`runtime-pool.js`).
+- Focused tests live in `api/test/`.
+
+# Original boundary map (first tranche)
 
 Status: boundary map only. **No secure-runtime integration is implemented in the
 first code-only tranche.** This document records what the later staging runtime

@@ -83,6 +83,10 @@ module "platform" {
   enable_resend_credentials    = false
   enable_resend_webhook_ingest = false
   enable_survey_delivery_v2    = false
-  operations_alert_email       = var.staging_operations_alert_email
-  github_deploy_role_name      = aws_iam_role.github_staging_deploy.name
+  # This root is the only place that stamps the secure-runtime identity. It
+  # makes the API, both workers and every deploy-invoked tool resolve
+  # credentials transiently instead of from api/.env.prod.
+  secure_runtime_enabled  = true
+  operations_alert_email  = var.staging_operations_alert_email
+  github_deploy_role_name = aws_iam_role.github_staging_deploy.name
 }

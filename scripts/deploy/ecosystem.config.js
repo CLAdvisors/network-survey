@@ -3,10 +3,11 @@
 // shapes. Their 784 MiB aggregate leaves substantial OS/agent headroom. A
 // worker memory restart is safe because durable leases and provider idempotency
 // keys fence replay after an ambiguous termination.
-// Hosted environments whose processes must load credentials from SSM/Secrets
-// Manager after spawn instead of receiving them from the PM2 parent. Keep in
-// sync with api/runtime-secrets.js and deploy/runtime-pool.js.
-const secureHosted = process.env.EMAIL_WORKER_ENV === 'staging';
+// Hosted runtime identity stamped by the target Terraform into deploy.env and
+// passed through by remote-deploy.sh. Processes must load credentials from
+// SSM/Secrets Manager after spawn instead of receiving them from the PM2
+// parent. Legacy environments leave it false and keep their entrypoints.
+const secureHosted = process.env.SECURE_RUNTIME_ENABLED === 'true';
 const memoryLimit = (limit) => process.env.EMAIL_WORKER_ENV === 'prod-secondary'
   ? { max_memory_restart: limit }
   : {};
@@ -32,6 +33,7 @@ module.exports = {
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
+        SECURE_RUNTIME_ENABLED: process.env.SECURE_RUNTIME_ENABLED,
       },
       kill_timeout: 30000,
       ...memoryLimit('352M'),
@@ -47,6 +49,7 @@ module.exports = {
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
+        SECURE_RUNTIME_ENABLED: process.env.SECURE_RUNTIME_ENABLED,
       },
       kill_timeout: 30000,
       ...memoryLimit('176M'),
@@ -63,6 +66,7 @@ module.exports = {
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
+        SECURE_RUNTIME_ENABLED: process.env.SECURE_RUNTIME_ENABLED,
       },
       kill_timeout: 30000,
       ...memoryLimit('256M'),

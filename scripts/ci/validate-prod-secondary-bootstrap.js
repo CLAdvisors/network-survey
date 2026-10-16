@@ -83,7 +83,7 @@ if (/if\s+aws s3 cp/.test(cloudInit)) throw new Error('missing release artifact 
 if (/artifact_revision.*current_revision/s.test(cloudInit)) throw new Error('API health/revision must not bypass complete deployment verification');
 if (cloudInit.indexOf('ufw allow 3000') < cloudInit.indexOf('remote-deploy.sh')) throw new Error('ALB port must remain closed until deployment succeeds');
 
-for (const value of ['if [ "$ENVIRONMENT" = "prod-secondary" ]; then', 'ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
+for (const value of ['if [ "$ENVIRONMENT" = "prod-secondary" ] || [ "$SECURE_RUNTIME" = true ]; then', 'ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
 
 for (const value of [
   'elasticloadbalancing:DescribeTargetHealth',
@@ -124,6 +124,7 @@ const substitutions = {
   config_key: 'configs/runtime.env',
   artifacts_bucket: 'artifacts-bucket',
   environment: 'prod-secondary',
+  secure_runtime_enabled: 'false',
   bootstrap_log_group: '/test/bootstrap',
   host_maintenance_log_group: '/test/host-maintenance',
   host_log_group: '/test/host',

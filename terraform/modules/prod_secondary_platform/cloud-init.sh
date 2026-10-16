@@ -166,6 +166,7 @@ CONFIG_KEY=${config_key}
 ARTIFACTS_BUCKET=${artifacts_bucket}
 AWS_DEFAULT_REGION=${aws_region}
 ENVIRONMENT=${environment}
+SECURE_RUNTIME_ENABLED=${secure_runtime_enabled}
 EOF
 chown ubuntu:ubuntu "$SERVICE_DIR/deploy.env"
 chmod 0640 "$SERVICE_DIR/deploy.env"

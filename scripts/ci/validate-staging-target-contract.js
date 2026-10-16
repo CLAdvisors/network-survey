@@ -210,4 +210,33 @@ for (const literal of [
   has(prodResolved, literal, `prod-secondary rendering preserved: ${literal}`);
 }
 
+// --- Least-privilege staging runtime secret read policy -------------------
+// The secure staging runtime reads its session SecureString and the RDS
+// managed secret with the instance role only. This is Terraform code and was
+// not applied. Staging leaves every resend/bootstrap gate off, so the only SSM
+// parameter it may read is its own session secret.
+const runtimeParamsBlock = moduleMain.match(/sid\s+=\s+"ReadRuntimeParameters"[\s\S]*?\n  \}/);
+assert.ok(runtimeParamsBlock, 'runtime SSM parameter statement present');
+has(runtimeParamsBlock[0], 'actions = ["ssm:GetParameter", "ssm:GetParameters"]', 'runtime reads SSM parameters');
+has(runtimeParamsBlock[0], 'parameter/network-survey/${var.environment}/api/session-secret', 'runtime session secret is environment-derived');
+hasNot(runtimeParamsBlock[0], 'parameter/network-survey/${var.environment}/*', 'runtime must not wildcard the parameter namespace');
+has(runtimeParamsBlock[0], 'var.enable_resend_credentials ? [', 'resend read is gated by the staging-off feature flag');
+has(runtimeParamsBlock[0], 'var.enable_owner_bootstrap ? [', 'bootstrap read is gated by the staging-off feature flag');
+
+const managedSecretBlock = moduleMain.match(/sid\s+=\s+"ReadRDSManagedSecret"[\s\S]*?\n  \}/);
+assert.ok(managedSecretBlock, 'runtime RDS managed-secret statement present');
+has(managedSecretBlock[0], 'actions   = ["secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue"]', 'runtime reads the managed secret');
+has(managedSecretBlock[0], 'resources = [aws_db_instance.postgres.master_user_secret[0].secret_arn]', 'managed-secret read is scoped to the RDS secret');
+hasNot(managedSecretBlock[0], '"*"', 'managed-secret read is not wildcarded');
+
+const decryptBlock = moduleMain.match(/sid\s+=\s+"DecryptTargetDataOnly"[\s\S]*?\n  \}/);
+assert.ok(decryptBlock, 'runtime decrypt statement present');
+has(decryptBlock[0], 'aws_kms_key.rds.arn', 'managed DB secret key is decryptable');
+
+const ssmCoreBlock = moduleMain.match(/data "aws_iam_policy_document" "ssm_core_without_parameter_reads" \{[\s\S]*?\n\}/);
+assert.ok(ssmCoreBlock, 'SSM core policy present');
+hasNot(ssmCoreBlock[0], 'ssm:GetParameter"', 'SSM core policy must not grant parameter reads');
+hasNot(ssmCoreBlock[0], 'ssm:GetParameters"', 'SSM core policy must not grant parameter reads');
+hasNot(moduleMain, 'parameter/network-survey/*', 'no wildcard parameter resource anywhere');
+
 console.log('staging-target contract validation passed');

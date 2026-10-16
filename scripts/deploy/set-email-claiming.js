@@ -1,11 +1,8 @@
 'use strict';
 
-const path = require('path');
-const fs = require('fs');
-const dotenv = require(path.join(process.cwd(), 'node_modules/dotenv'));
-dotenv.config({ path: path.join(process.cwd(), '.env.prod') });
-const { Pool } = require(path.join(process.cwd(), 'node_modules/pg'));
+const { runtimePool } = require('./runtime-pool');
 const { HOSTED_ENVIRONMENTS_DESCRIPTION, isHostedEnvironment } = require('./hosted-environments');
+const pool = runtimePool();
 
 if (!['true', 'false'].includes(process.argv[2])) {
   throw new Error('usage: set-email-claiming.js <true|false> [reason]');
@@ -20,20 +17,6 @@ if (!isHostedEnvironment(environment)) {
 if (enabled && !expectedRevision) {
   throw new Error('EXPECTED_RELEASE_REVISION is required when enabling email claiming');
 }
-
-const pool = new Pool({
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME || 'ONA',
-  ssl: process.env.DB_SSL === 'true'
-    ? {
-        ca: process.env.DB_SSL_CA ? fs.readFileSync(process.env.DB_SSL_CA, 'utf8') : undefined,
-        rejectUnauthorized: Boolean(process.env.DB_SSL_CA),
-      }
-    : undefined,
-});
 
 (async () => {
   const client = await pool.connect();

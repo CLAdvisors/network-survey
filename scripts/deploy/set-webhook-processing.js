@@ -1,11 +1,8 @@
 'use strict';
 
-const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
-const dotenv = require(path.join(process.cwd(), 'node_modules/dotenv'));
-dotenv.config({ path: path.join(process.cwd(), '.env.prod') });
-const { Pool } = require(path.join(process.cwd(), 'node_modules/pg'));
+const { runtimePool } = require('./runtime-pool');
+const pool = runtimePool();
 const { HOSTED_ENVIRONMENTS_DESCRIPTION, isHostedEnvironment } = require('./hosted-environments');
 
 const [enabledArg, revisionArg, actorArg, ...reasonParts] = process.argv.slice(2);
@@ -21,12 +18,6 @@ const actor = actorArg.slice(0, 255);
 const reason = reasonParts.join(' ').slice(0, 500);
 if (!isHostedEnvironment(environment)) throw new Error(`EMAIL_WORKER_ENV must be one of: ${HOSTED_ENVIRONMENTS_DESCRIPTION}`);
 if (enabled && (!release || !deploymentId)) throw new Error('enabling requires EXPECTED_RELEASE_REVISION and EXPECTED_DEPLOYMENT_ID');
-
-const pool = new Pool({
-  user: process.env.DB_USER, password: process.env.DB_PASSWORD, host: process.env.DB_HOST,
-  port: process.env.DB_PORT, database: process.env.DB_NAME || 'ONA',
-  ssl: process.env.DB_SSL === 'true' ? { ca: process.env.DB_SSL_CA ? fs.readFileSync(process.env.DB_SSL_CA, 'utf8') : undefined, rejectUnauthorized: Boolean(process.env.DB_SSL_CA) } : undefined,
-});
 
 (async () => {
   const client = await pool.connect();

@@ -21,6 +21,18 @@ PM2_WEBHOOK_WORKER=ona-email-webhook-worker
 source "$SERVICE_DIR/deploy.env"
 export AWS_DEFAULT_REGION
 
+# Hosted environments whose runtime must resolve credentials transiently and
+# never write them to disk. Keep in sync with api/runtime-secrets.js,
+# deploy/runtime-pool.js and deploy/ecosystem.config.js.
+SECURE_RUNTIME=false
+if [ "$ENVIRONMENT" = "staging" ]; then
+  SECURE_RUNTIME=true
+fi
+if [ "$SECURE_RUNTIME" = true ] && [[ $- == *x* ]]; then
+  echo 'Secret-safe deployments refuse shell xtrace' >&2
+  exit 1
+fi
+
 if [ "$ENVIRONMENT" = "prod-secondary" ]; then
   # Serialize prod-secondary cloud-init, CI, rollback, and operator deployments.
   # Concurrent release symlink, migration, and control-handoff mutation is unsafe.
@@ -30,6 +42,9 @@ fi
 
 REVISION=$(cat "$SOURCE_DIR/REVISION")
 RELEASE_CAPABILITY_ARGS=()
+if [ "$SECURE_RUNTIME" = true ]; then
+  RELEASE_CAPABILITY_ARGS+=(--require-transient-runtime-secrets)
+fi
 if [ "$ENVIRONMENT" = "prod-secondary" ]; then
   RELEASE_CAPABILITY_ARGS+=(--require-prod-secondary-resend-isolation)
   # Absent only during the prerequisite rollout while ALB still checks /health.
@@ -65,6 +80,10 @@ echo "==> Fetching runtime config"
 CONFIG_KEY=${CONFIG_KEY:-configs/.env.prod}
 aws s3 cp "s3://$CONFIG_BUCKET/$CONFIG_KEY" "$RELEASE_DIR/api/.env.prod"
 chmod 600 "$RELEASE_DIR/api/.env.prod"
+if [ "$SECURE_RUNTIME" = true ] && grep -Eq '^(DB_PASSWORD|SESSION_SECRET|RESEND_API_KEY|RESEND_KEY|RESEND_WEBHOOK_SECRET|RESEND_WEBHOOK_PREVIOUS_SECRET)=' "$RELEASE_DIR/api/.env.prod"; then
+  echo 'Runtime configuration contains inline credential keys; refusing deploy' >&2
+  exit 1
+fi
 
 get_env_value() {
   grep "^$1=" "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-
@@ -144,8 +163,24 @@ NODE
   mv "$temporary" "$env_file" || { rm -f "$temporary"; return 1; }
 }
 
-echo "==> Resolving runtime secrets"
+echo "==> Resolving runtime secret references"
 DB_MANAGED_SECRET_ARN=$(get_env_value DB_MANAGED_SECRET_ARN || true)
+if [ "$SECURE_RUNTIME" = true ]; then
+  test -n "$DB_MANAGED_SECRET_ARN" || { echo 'Secure runtime requires the managed DB secret ARN' >&2; exit 1; }
+  test "$(get_env_value EMAIL_WORKER_ENV)" = "$ENVIRONMENT" || { echo 'Secure runtime config environment mismatch' >&2; exit 1; }
+  test "$(get_env_value SESSION_SECRET_PARAMETER)" = "/network-survey/$ENVIRONMENT/api/session-secret" || { echo 'Secure runtime session reference mismatch' >&2; exit 1; }
+  if [ "$(get_env_value RESEND_CREDENTIAL_LOAD_ENABLED)" = true ]; then
+    test "$(get_env_value RESEND_API_KEY_PARAMETER)" = "/network-survey/$ENVIRONMENT/resend/api-key" || { echo 'Secure runtime provider reference mismatch' >&2; exit 1; }
+  else
+    test -z "$(get_env_value RESEND_API_KEY_PARAMETER)" || { echo 'Disabled provider has an active reference' >&2; exit 1; }
+  fi
+  if [ "$(get_env_value RESEND_WEBHOOK_INGEST_ENABLED)" = true ]; then
+    test "$(get_env_value RESEND_WEBHOOK_SECRET_PARAMETER)" = "/network-survey/$ENVIRONMENT/resend/webhook-secret" || { echo 'Secure runtime webhook reference mismatch' >&2; exit 1; }
+    test "$(get_env_value RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER)" = "/network-survey/$ENVIRONMENT/resend/webhook-previous-secret" || { echo 'Secure runtime previous webhook reference mismatch' >&2; exit 1; }
+  else
+    test -z "$(get_env_value RESEND_WEBHOOK_SECRET_PARAMETER)$(get_env_value RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER)" || { echo 'Disabled webhook has active references' >&2; exit 1; }
+  fi
+else
 if [ -n "$DB_MANAGED_SECRET_ARN" ]; then
   DB_MANAGED_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_MANAGED_SECRET_ARN" --query SecretString --output text)
   DB_MANAGED_PASSWORD=$(SECRET_JSON="$DB_MANAGED_SECRET_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.password!=="string"||!value.password)process.exit(1);process.stdout.write(value.password)')
@@ -208,6 +243,7 @@ NODE
   unset PREVIOUS_WEBHOOK_SECRET
   fi
 fi
+fi # legacy secret-to-disk path; never execute for a secure runtime environment
 WORKER_ENV=$(get_env_value EMAIL_WORKER_ENV)
 case "$WORKER_ENV" in
   staging|prod|prod-secondary) ;;
@@ -230,7 +266,15 @@ DB_HOST=$(read_runtime_env DB_HOST)
 DB_PORT=$(read_runtime_env DB_PORT)
 DB_NAME=$(read_runtime_env DB_NAME)
 DB_USER=$(read_runtime_env DB_USER)
-DB_PASSWORD=$(read_runtime_env DB_PASSWORD)
+if [ "$SECURE_RUNTIME" = true ]; then
+  # Read the current managed password into shell memory only for Liquibase. It
+  # is never written to a file, argv, the PM2 environment or a log.
+  DB_MANAGED_SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$DB_MANAGED_SECRET_ARN" --query SecretString --output text)
+  DB_PASSWORD=$(SECRET_JSON="$DB_MANAGED_SECRET_JSON" EXPECTED_DB_USER="$DB_USER" node -e 'const s=JSON.parse(process.env.SECRET_JSON);if(s.username!==process.env.EXPECTED_DB_USER||!s.password)process.exit(1);process.stdout.write(s.password)')
+  unset DB_MANAGED_SECRET_JSON
+else
+  DB_PASSWORD=$(read_runtime_env DB_PASSWORD)
+fi
 # changeLogFile must stay under "changelogs/..." — included changeset paths are
 # the identities recorded in DATABASECHANGELOG by all prior runs. The dedicated
 # cutover root is selected only by explicit production runtime configuration;
@@ -241,13 +285,23 @@ if [ "$(get_env_value CLA_PRODUCTION_CUTOVER)" = "true" ]; then
 fi
 run_database_migrations() {
   echo "==> Running database migrations after worker quiescence"
-  liquibase \
-    --url="jdbc:postgresql://$DB_HOST:$DB_PORT/${DB_NAME:-ONA}?sslmode=verify-full&sslrootcert=$SERVICE_DIR/certs/rds-global-bundle.pem" \
-    --username="$DB_USER" \
-    --password="$DB_PASSWORD" \
-    --changeLogFile="$CHANGELOG_FILE" \
-    --searchPath="$RELEASE_DIR/db" \
-    update
+  if [ "$SECURE_RUNTIME" = true ]; then
+    # Pass the credential through the Liquibase environment, never the argv.
+    LIQUIBASE_COMMAND_PASSWORD="$DB_PASSWORD" liquibase \
+      --url="jdbc:postgresql://$DB_HOST:$DB_PORT/${DB_NAME:-ONA}?sslmode=verify-full&sslrootcert=$SERVICE_DIR/certs/rds-global-bundle.pem" \
+      --username="$DB_USER" \
+      --changeLogFile="$CHANGELOG_FILE" \
+      --searchPath="$RELEASE_DIR/db" \
+      update
+  else
+    liquibase \
+      --url="jdbc:postgresql://$DB_HOST:$DB_PORT/${DB_NAME:-ONA}?sslmode=verify-full&sslrootcert=$SERVICE_DIR/certs/rds-global-bundle.pem" \
+      --username="$DB_USER" \
+      --password="$DB_PASSWORD" \
+      --changeLogFile="$CHANGELOG_FILE" \
+      --searchPath="$RELEASE_DIR/db" \
+      update
+  fi
 }
 
 ensure_bootstrap_administrator() {
@@ -263,16 +317,30 @@ if [ -n "$(get_env_value BOOTSTRAP_ADMIN_PASSWORD_PARAMETER)" ]; then
     BOOTSTRAP_ADMIN_EMAIL=$(SECRET_JSON="$BOOTSTRAP_ADMIN_IDENTITY_JSON" node -e 'const value=JSON.parse(process.env.SECRET_JSON);if(typeof value.email!=="string"||!value.email)process.exit(1);process.stdout.write(value.email)')
     unset BOOTSTRAP_ADMIN_IDENTITY_JSON
   fi
-  BOOTSTRAP_ADMIN_USERNAME="$BOOTSTRAP_ADMIN_USERNAME" \
-    BOOTSTRAP_ADMIN_EMAIL="$BOOTSTRAP_ADMIN_EMAIL" \
-    BOOTSTRAP_ORGANIZATION_NAME=$(get_env_value BOOTSTRAP_ORGANIZATION_NAME) \
-    BOOTSTRAP_ORGANIZATION_SLUG=$(get_env_value BOOTSTRAP_ORGANIZATION_SLUG) \
-    BOOTSTRAP_PLATFORM_ADMIN=$(get_env_value BOOTSTRAP_PLATFORM_ADMIN) \
-    BOOTSTRAP_ACCOUNT_MODE=$(get_env_value BOOTSTRAP_ACCOUNT_MODE) \
-    BOOTSTRAP_ADMIN_PASSWORD="$BOOTSTRAP_ADMIN_PASSWORD" \
-    DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" \
-    DB_SSL=true DB_SSL_CA="$SERVICE_DIR/certs/rds-global-bundle.pem" \
-    node "$RELEASE_DIR/deploy/bootstrap-admin.js"
+  if [ "$SECURE_RUNTIME" = true ]; then
+    BOOTSTRAP_ADMIN_USERNAME="$BOOTSTRAP_ADMIN_USERNAME" \
+      BOOTSTRAP_ADMIN_EMAIL="$BOOTSTRAP_ADMIN_EMAIL" \
+      BOOTSTRAP_ORGANIZATION_NAME=$(get_env_value BOOTSTRAP_ORGANIZATION_NAME) \
+      BOOTSTRAP_ORGANIZATION_SLUG=$(get_env_value BOOTSTRAP_ORGANIZATION_SLUG) \
+      BOOTSTRAP_PLATFORM_ADMIN=$(get_env_value BOOTSTRAP_PLATFORM_ADMIN) \
+      BOOTSTRAP_ACCOUNT_MODE=$(get_env_value BOOTSTRAP_ACCOUNT_MODE) \
+      BOOTSTRAP_ADMIN_PASSWORD="$BOOTSTRAP_ADMIN_PASSWORD" \
+      DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" \
+      DB_MANAGED_SECRET_ARN="$DB_MANAGED_SECRET_ARN" EMAIL_WORKER_ENV="$WORKER_ENV" \
+      DB_SSL=true DB_SSL_CA="$SERVICE_DIR/certs/rds-global-bundle.pem" \
+      node "$RELEASE_DIR/deploy/bootstrap-admin.js"
+  else
+    BOOTSTRAP_ADMIN_USERNAME="$BOOTSTRAP_ADMIN_USERNAME" \
+      BOOTSTRAP_ADMIN_EMAIL="$BOOTSTRAP_ADMIN_EMAIL" \
+      BOOTSTRAP_ORGANIZATION_NAME=$(get_env_value BOOTSTRAP_ORGANIZATION_NAME) \
+      BOOTSTRAP_ORGANIZATION_SLUG=$(get_env_value BOOTSTRAP_ORGANIZATION_SLUG) \
+      BOOTSTRAP_PLATFORM_ADMIN=$(get_env_value BOOTSTRAP_PLATFORM_ADMIN) \
+      BOOTSTRAP_ACCOUNT_MODE=$(get_env_value BOOTSTRAP_ACCOUNT_MODE) \
+      BOOTSTRAP_ADMIN_PASSWORD="$BOOTSTRAP_ADMIN_PASSWORD" \
+      DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" \
+      DB_SSL=true DB_SSL_CA="$SERVICE_DIR/certs/rds-global-bundle.pem" \
+      node "$RELEASE_DIR/deploy/bootstrap-admin.js"
+  fi
   unset BOOTSTRAP_ADMIN_PASSWORD BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_EMAIL
 fi
 }
@@ -311,9 +379,7 @@ restore_pre_activation_handoff() {
 trap restore_pre_activation_handoff EXIT
 
 SENDING_CONTROL=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
-require('dotenv').config({path:'.env.prod'});
-const {Pool}=require('pg');
-const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+const pool=require('../deploy/runtime-pool').runtimePool();
 (async()=>{const exists=(await pool.query(`SELECT to_regclass('email_sending_control') AS table_name`)).rows[0]?.table_name;if(!exists)return process.stdout.write('false:0');const r=await pool.query('SELECT sending_enabled,control_revision FROM email_sending_control WHERE environment=$1',[process.env.EMAIL_WORKER_ENV]);process.stdout.write(`${r.rows[0]?.sending_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}`);})().finally(()=>pool.end());
 NODE
 )
@@ -326,9 +392,7 @@ if [ "$SENDING_WAS_ENABLED" = true ]; then
 fi
 
 CLAIMING_WAS_ENABLED=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
-require('dotenv').config({path:'.env.prod'});
-const {Pool}=require('pg');
-const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+const pool=require('../deploy/runtime-pool').runtimePool();
 (async()=>{const exists=(await pool.query(`SELECT to_regclass('email_worker_control') AS table_name`)).rows[0]?.table_name;if(!exists)return process.stdout.write('false');const r=await pool.query('SELECT claiming_enabled FROM email_worker_control WHERE environment=$1',[process.env.EMAIL_WORKER_ENV]);process.stdout.write(r.rows[0]?.claiming_enabled?'true':'false');})().finally(()=>pool.end());
 NODE
 )
@@ -338,9 +402,7 @@ if [ "$CLAIMING_WAS_ENABLED" = true ]; then
 fi
 
 WEBHOOK_CONTROL=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
-require('dotenv').config({path:'.env.prod'});
-const {Pool}=require('pg');
-const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+const pool=require('../deploy/runtime-pool').runtimePool();
 (async()=>{const exists=(await pool.query(`SELECT to_regclass('email_webhook_worker_control') AS table_name`)).rows[0]?.table_name;if(!exists)return process.stdout.write('false:0:');const r=await pool.query(`SELECT c.processing_enabled,c.control_revision,(SELECT split_part(h.worker_instance,'/',1) FROM email_webhook_worker_heartbeats h WHERE h.environment=c.environment AND h.heartbeat_at>now()-interval '45 seconds' ORDER BY h.heartbeat_at DESC LIMIT 1) AS deployment_id FROM email_webhook_worker_control c WHERE c.environment=$1`,[process.env.EMAIL_WORKER_ENV]);process.stdout.write(`${r.rows[0]?.processing_enabled?'true':'false'}:${r.rows[0]?.control_revision??0}:${r.rows[0]?.deployment_id??''}`);})().finally(()=>pool.end());
 NODE
 )
@@ -358,9 +420,7 @@ echo "==> Waiting for dispatch and webhook workers to observe disabled controls"
 WORKERS_QUIESCED=false
 for _ in $(seq 1 90); do
   ACTIVE_WORKERS=$(cd "$RELEASE_DIR/api" && node - <<'NODE'
-require('dotenv').config({path:'.env.prod'});
-const fs=require('fs');const {Pool}=require('pg');
-const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
+const pool=require('../deploy/runtime-pool').runtimePool();
 (async()=>{const tables=(await pool.query(`SELECT to_regclass('email_worker_heartbeats') AS email,to_regclass('email_webhook_worker_heartbeats') AS webhook`)).rows[0];let active=0;if(tables.email)active+=Number((await pool.query(`SELECT count(*)::int AS count FROM email_worker_heartbeats WHERE environment=$1 AND claiming=true AND heartbeat_at>now()-interval '45 seconds'`,[process.env.EMAIL_WORKER_ENV])).rows[0].count);if(tables.webhook)active+=Number((await pool.query(`SELECT count(*)::int AS count FROM email_webhook_worker_heartbeats WHERE environment=$1 AND processing=true AND heartbeat_at>now()-interval '45 seconds'`,[process.env.EMAIL_WORKER_ENV])).rows[0].count);process.stdout.write(String(active));})().finally(()=>pool.end());
 NODE
 )
@@ -393,10 +453,21 @@ SENDING_HANDOFF_REENABLED=false
 restore_previous_release() {
   local status=$?
   if [ "$status" -ne 0 ] && [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
-    echo "!! Refreshing previous release database credential before automatic restore" >&2
-    if ! refresh_managed_db_password "$PREVIOUS_RELEASE/api/.env.prod"; then
-      echo "!! Unable to refresh the previous release database credential; refusing automatic restore" >&2
-      return
+    if [ "$SECURE_RUNTIME" = true ]; then
+      # Never restore an older artifact that needs plaintext credentials. A
+      # failing first secure rollout leaves this host out of service; a
+      # deliberately reviewed replacement artifact is the fallback.
+      if ! node "$RELEASE_DIR/deploy/secure-artifact-check.js" "$PREVIOUS_RELEASE" >/dev/null 2>&1; then
+        echo '!! Previous release lacks transient-secret capability; host remains out of service, no insecure rollback' >&2
+        run_pm2 stop "$PM2_APP" "$PM2_WORKER" "$PM2_WEBHOOK_WORKER" >/dev/null 2>&1 || true
+        return
+      fi
+    else
+      echo "!! Refreshing previous release database credential before automatic restore" >&2
+      if ! refresh_managed_db_password "$PREVIOUS_RELEASE/api/.env.prod"; then
+        echo "!! Unable to refresh the previous release database credential; refusing automatic restore" >&2
+        return
+      fi
     fi
     echo "!! Validating previous release before automatic restore" >&2
     if ! node "$RELEASE_DIR/deploy/validate-release-capabilities.js" "$PREVIOUS_RELEASE" --database "${RELEASE_CAPABILITY_ARGS[@]}"; then
@@ -435,7 +506,7 @@ restore_previous_release() {
     RESTORE_HEALTHY=false
     for _ in $(seq 1 15); do
       if curl -fsS http://localhost:3000/health >/dev/null 2>&1 && { [ "$ENVIRONMENT" != "prod-secondary" ] || curl -fsS http://localhost:3000/live >/dev/null 2>&1; } && (cd "$PREVIOUS_RELEASE/api" && EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
-require('dotenv').config({path:'.env.prod'});const{Pool}=require('pg');const fs=require('fs');const p=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});Promise.all([p.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID]),p.query(`SELECT 1 FROM email_webhook_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID])]).then(r=>process.exitCode=r.every(x=>x.rowCount)?0:1).catch(()=>process.exitCode=1).finally(()=>p.end());
+const p=require('../deploy/runtime-pool').runtimePool();Promise.all([p.query(`SELECT 1 FROM email_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID]),p.query(`SELECT 1 FROM email_webhook_worker_heartbeats WHERE environment=$1 AND release_revision=$2 AND worker_instance LIKE $3||'/%' AND heartbeat_at>now()-interval '20 seconds'`,[process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_REVISION,process.env.EXPECTED_DEPLOYMENT_ID])]).then(r=>process.exitCode=r.every(x=>x.rowCount)?0:1).catch(()=>process.exitCode=1).finally(()=>p.end());
 NODE
       ); then RESTORE_HEALTHY=true; break; fi
       sleep 2
@@ -483,9 +554,7 @@ for i in $(seq 1 15); do
       let input=""; process.stdin.on("data",d=>input+=d); process.stdin.on("end",()=>{const app=JSON.parse(input).find(p=>p.name==="ona-api"); process.exit(app?.pm2_env?.RELEASE_REVISION===process.env.EXPECTED_REVISION&&app?.pm2_env?.DEPLOYMENT_ID===process.env.EXPECTED_DEPLOYMENT_ID?0:1);});
     '; then
     if (cd "$RELEASE_DIR/api" && EXPECTED_REVISION="$REVISION" EXPECTED_WORKER_ENV="$WORKER_ENV" EXPECTED_DEPLOYMENT_ID="$DEPLOYMENT_ID" node - <<'NODE'
-require('dotenv').config({path:'.env.prod'});
-const { Pool } = require('pg');
-const pool = new Pool({ user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?require('fs').readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined });
+const pool = require('../deploy/runtime-pool').runtimePool();
 Promise.all([
   pool.query(`SELECT 1 FROM email_worker_heartbeats h JOIN email_worker_control c USING(environment) WHERE h.environment=$2 AND h.release_revision=$1 AND h.worker_instance LIKE $3||'/%' AND h.enabled=true AND h.claiming=c.claiming_enabled AND h.heartbeat_at>now()-interval '45 seconds' LIMIT 1`,[process.env.EXPECTED_REVISION,process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_DEPLOYMENT_ID]),
   pool.query(`SELECT 1 FROM email_webhook_worker_heartbeats h JOIN email_webhook_worker_control c USING(environment) WHERE h.environment=$2 AND h.release_revision=$1 AND h.worker_instance LIKE $3||'/%' AND h.enabled=true AND h.processing=c.processing_enabled AND h.heartbeat_at>now()-interval '45 seconds' LIMIT 1`,[process.env.EXPECTED_REVISION,process.env.EXPECTED_WORKER_ENV,process.env.EXPECTED_DEPLOYMENT_ID]),
@@ -516,8 +585,11 @@ NODE
         continue
       fi
       echo "==> Deploy of $REVISION succeeded (API, delivery worker, and webhook worker healthy)"
-      # Keep the five most recent releases
-      ls -1dt "$SERVICE_DIR"/releases/* | tail -n +6 | xargs -r rm -rf
+      # Target old releases may contain plaintext. Inventory, backup and
+      # rotation/removal need a separate approved cleanup; never prune here.
+      if [ "$SECURE_RUNTIME" != true ]; then
+        ls -1dt "$SERVICE_DIR"/releases/* | tail -n +6 | xargs -r rm -rf
+      fi
       trap - EXIT
       exit 0
     fi

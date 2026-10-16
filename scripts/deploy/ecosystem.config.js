@@ -3,6 +3,10 @@
 // shapes. Their 784 MiB aggregate leaves substantial OS/agent headroom. A
 // worker memory restart is safe because durable leases and provider idempotency
 // keys fence replay after an ambiguous termination.
+// Hosted environments whose processes must load credentials from SSM/Secrets
+// Manager after spawn instead of receiving them from the PM2 parent. Keep in
+// sync with api/runtime-secrets.js and deploy/runtime-pool.js.
+const secureHosted = process.env.EMAIL_WORKER_ENV === 'staging';
 const memoryLimit = (limit) => process.env.EMAIL_WORKER_ENV === 'prod-secondary'
   ? { max_memory_restart: limit }
   : {};
@@ -20,10 +24,11 @@ module.exports = {
   apps: [
     {
       name: 'ona-api',
-      script: 'server.js',
+      script: secureHosted ? 'secure-runtime.js' : 'server.js',
+      args: secureHosted ? 'api' : undefined,
       cwd: '/opt/service/current/api',
       env: {
-        NODE_ENV: 'prod',
+        NODE_ENV: secureHosted ? 'production' : 'prod',
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
@@ -34,10 +39,11 @@ module.exports = {
     },
     {
       name: 'ona-email-worker',
-      script: 'email-worker.js',
+      script: secureHosted ? 'secure-runtime.js' : 'email-worker.js',
+      args: secureHosted ? 'delivery' : undefined,
       cwd: '/opt/service/current/api',
       env: {
-        NODE_ENV: 'prod',
+        NODE_ENV: secureHosted ? 'production' : 'prod',
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
@@ -48,10 +54,11 @@ module.exports = {
     },
     {
       name: 'ona-email-webhook-worker',
-      script: 'webhook-worker.js',
+      script: secureHosted ? 'secure-runtime.js' : 'webhook-worker.js',
+      args: secureHosted ? 'webhook' : undefined,
       cwd: '/opt/service/current/api',
       env: {
-        NODE_ENV: 'prod',
+        NODE_ENV: secureHosted ? 'production' : 'prod',
         APP_ENV: process.env.EMAIL_WORKER_ENV,
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,

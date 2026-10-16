@@ -877,6 +877,7 @@ module.exports = {
   SUPPRESSION_REASONS,
   TERMINAL_EVENT_STATES,
   WebhookWorker,
+  main,
   canaryAddress,
   canaryTags,
   effectiveProviderOutcome,

@@ -8,6 +8,7 @@ const releaseDir = path.resolve(process.argv[2] || '.');
 const checkDatabase = process.argv.includes('--database');
 const requireProdSecondaryResendIsolation = process.argv.includes('--require-prod-secondary-resend-isolation');
 const requireAlbLiveHealth = process.argv.includes('--require-alb-live-health');
+const requireTransientSecrets = process.argv.includes('--require-transient-runtime-secrets');
 const runtimeApiDirIndex = process.argv.indexOf('--runtime-api-dir');
 if (runtimeApiDirIndex >= 0 && !process.argv[runtimeApiDirIndex + 1]) throw new Error('--runtime-api-dir requires a path');
 const runtimeApiDir = runtimeApiDirIndex >= 0
@@ -28,6 +29,9 @@ if (requireProdSecondaryResendIsolation && marker.prod_secondary_resend_isolatio
 }
 if (requireAlbLiveHealth && marker.alb_live_health !== 1) {
   throw new Error('release lacks required dependency-free ALB /live health capability');
+}
+if (requireTransientSecrets && marker.transient_runtime_secrets !== 1) {
+  throw new Error('release lacks transient runtime secret capability');
 }
 if (marker.alb_live_health !== undefined && marker.alb_live_health !== 1) {
   throw new Error('release has an invalid ALB /live health capability');

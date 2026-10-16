@@ -1,8 +1,8 @@
 'use strict';
 
 const path=require('path'),fs=require('fs'),crypto=require('crypto'),{spawnSync}=require('child_process');
-require(path.join(process.cwd(),'node_modules/dotenv')).config({path:path.join(process.cwd(),'.env.prod')});
-const{Pool}=require(path.join(process.cwd(),'node_modules/pg'));
+const{runtimePool}=require('./runtime-pool');
+const pool=runtimePool();
 const{isHostedEnvironment}=require('./hosted-environments');
 const EVENTS=['email.sent','email.delivered','email.delivery_delayed','email.bounced','email.complained','email.failed','email.suppressed','suppression.added','suppression.removed'];
 const EVENT_HASH=crypto.createHash('sha256').update(EVENTS.slice().sort().join('\n')).digest('hex');
@@ -24,7 +24,6 @@ const secretParameter=process.env.RESEND_WEBHOOK_SECRET_PARAMETER,previousSecret
 if(environment==='prod-secondary'&&['bootstrap','rotate','retire-previous'].includes(command)&&secretParameter!=='/network-survey/prod-secondary/resend/webhook-secret')throw new Error('prod-secondary requires its exact webhook secret parameter');
 if(environment==='prod-secondary'&&['rotate','retire-previous'].includes(command)&&previousSecretParameter!=='/network-survey/prod-secondary/resend/webhook-previous-secret')throw new Error('prod-secondary requires its exact previous webhook secret parameter');
 const urlHash=crypto.createHash('sha256').update(url).digest('hex');
-const pool=new Pool({user:process.env.DB_USER,password:process.env.DB_PASSWORD,host:process.env.DB_HOST,port:process.env.DB_PORT,database:process.env.DB_NAME||'ONA',ssl:process.env.DB_SSL==='true'?{ca:process.env.DB_SSL_CA?fs.readFileSync(process.env.DB_SSL_CA,'utf8'):undefined,rejectUnauthorized:Boolean(process.env.DB_SSL_CA)}:undefined});
 async function provider(method,route,body){const response=await fetch(`https://api.resend.com${route}`,{method,headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const text=await response.text();if(!response.ok)throw new Error(`Resend ${method} ${route} failed with HTTP ${response.status}`);return text?JSON.parse(text):{};}
 function items(body){const value=body.data??body;return Array.isArray(value)?value:(Array.isArray(value?.data)?value.data:[]);}function endpointUrl(e){return e.endpoint||e.endpoint_url||e.url;}function endpointEvents(e){return (e.events||[]).slice().sort();}function matches(e){return endpointUrl(e)===url&&JSON.stringify(endpointEvents(e))===JSON.stringify(EVENTS.slice().sort());}
 function putSecret(value,name=secretParameter){if(typeof value!=='string'||!value)throw new Error('provider response did not include a signing secret');const input=JSON.stringify({Name:name,Type:'SecureString',Overwrite:true,Value:value});const result=spawnSync('aws',['ssm','put-parameter','--cli-input-json','file:///dev/stdin','--query','Version','--output','text'],{input,encoding:'utf8',stdio:['pipe','pipe','pipe']});if(result.status!==0)throw new Error('failed to write webhook secret to SSM');const version=Number(result.stdout.trim());if(!Number.isSafeInteger(version)||version<1)throw new Error('SSM returned an invalid parameter version');return version;}

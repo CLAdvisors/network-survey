@@ -1,13 +1,30 @@
 import React, { useMemo } from 'react';
 import { DataGrid, GridToolbar } from '@mui/x-data-grid';
 import { alpha } from '@mui/material/styles';
-import { Chip, Stack, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, LinearProgress, Stack, Tooltip, Typography } from '@mui/material';
+import HubIcon from '@mui/icons-material/Hub';
+import { STUDIO } from '../theme/studioTokens';
 import MenuCell from './SurveyTableMenuCell';
 import { LifecycleChip } from './SurveyLifecyclePanel';
 import { launchCounts, lifecycleStatus, providerCounts } from './surveyLifecycle';
 import { responseRateDescription, responseRateLabel, responseRateSortValue, responseRateSummary } from './surveyResponseRate';
 
 export const surveyTableSx = {
+  border: 0,
+  '& .MuiDataGrid-columnHeaders': {
+    backgroundColor: '#fbfcfb',
+    borderBottom: `1px solid ${STUDIO.line}`,
+  },
+  '& .MuiDataGrid-columnHeaderTitle': {
+    fontSize: 10,
+    letterSpacing: '0.5px',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    color: '#72817b',
+  },
+  '& .MuiDataGrid-cell': { borderColor: '#edf1ee', fontSize: 12 },
+  '& .MuiDataGrid-row': { minHeight: 72 },
+  '& .MuiDataGrid-footerContainer': { borderTop: `1px solid ${STUDIO.line}` },
   '& .MuiDataGrid-columnHeader:hover': { backgroundColor: 'rgba(66, 179, 175, 0.3)' },
   '& .MuiDataGrid-row:hover': { backgroundColor: 'rgba(0, 178, 140, 0.2)' },
   '& .MuiDataGrid-row.Mui-selected': {
@@ -84,10 +101,31 @@ const SurveyTable = ({
 
   const columns = useMemo(() => [
     { field: 'id', headerName: 'ID', width: 90 },
-    { field: 'name', headerName: 'Survey Name', minWidth: 170, flex: 1 },
+    {
+      field: 'name',
+      headerName: 'Survey',
+      minWidth: 200,
+      flex: 1,
+      renderCell: ({ row }) => {
+        const count = row.questions === 'null' || row.questions == null ? 0 : row.questions;
+        return (
+          <Stack direction="row" alignItems="center" spacing={1.5} sx={{ minWidth: 0 }}>
+            <Box aria-hidden="true" sx={{ display: 'grid', placeItems: 'center', flexShrink: 0, width: 38, height: 38, bgcolor: '#edf8f7', border: '1px solid #e2efed', borderRadius: '10px', color: '#555' }}>
+              <HubIcon sx={{ fontSize: 21 }} />
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography component="span" sx={{ display: 'block', fontSize: 13, fontWeight: 700, color: STUDIO.ink }} noWrap>
+                {row.name}
+              </Typography>
+              <Typography sx={{ fontSize: 11, color: STUDIO.muted, mt: 0.25 }} noWrap>{count} questions</Typography>
+            </Box>
+          </Stack>
+        );
+      },
+    },
     {
       field: 'lifecycle',
-      headerName: 'Lifecycle',
+      headerName: 'Status',
       width: 110,
       sortable: false,
       renderCell: ({ row }) => <LifecycleChip status={lifecycleStatus(row)} />,
@@ -100,16 +138,29 @@ const SurveyTable = ({
       valueFormatter: (_value, row) => responseRateLabel(row.responseRate),
       renderCell: ({ row, hasFocus }) => {
         const details = responseRateDescription(row.responseRate);
-        return <Tooltip title={details} arrow>
-          <Typography
-            variant="body2"
-            aria-label={details}
-            tabIndex={hasFocus ? 0 : -1}
-            noWrap
-          >
-            {responseRateLabel(row.responseRate)}
-          </Typography>
-        </Tooltip>;
+        const summary = row.responseRate || {};
+        const percent = summary.eligibleCount > 0 && summary.responseRatePercent !== null ? summary.responseRatePercent : 0;
+        return <Box sx={{ minWidth: 0, width: '100%' }}>
+          <Tooltip title={details} arrow>
+            <Typography
+              variant="body2"
+              aria-label={details}
+              tabIndex={hasFocus ? 0 : -1}
+              noWrap
+              sx={{ fontWeight: 600 }}
+            >
+              {responseRateLabel(row.responseRate)}
+            </Typography>
+          </Tooltip>
+          {summary.eligibleCount > 0 && (
+            <LinearProgress
+              variant="determinate"
+              value={percent}
+              aria-hidden="true"
+              sx={{ mt: 0.5, height: 5, borderRadius: 5, bgcolor: '#edf2ef', '& .MuiLinearProgress-bar': { bgcolor: STUDIO.brand } }}
+            />
+          )}
+        </Box>;
       },
     },
     { field: 'questions', headerName: 'Questions', width: 110 },
@@ -163,7 +214,7 @@ const SurveyTable = ({
         </Tooltip>;
       },
     },
-    { field: 'date', headerName: 'Creation Date', width: 170 },
+    { field: 'date', headerName: 'Created', width: 170 },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -192,7 +243,7 @@ const SurveyTable = ({
         getRowId={(row) => row.id || row.name}
         initialState={{
           pagination: { paginationModel: { pageSize: 10 } },
-          columns: { columnVisibilityModel: { id: false } },
+          columns: { columnVisibilityModel: { id: false, questions: false, invitationSummary: false, providerSummary: false } },
         }}
         pageSizeOptions={[5, 10, 25, 50, { value: -1, label: 'All' }]}
         disableRowSelectionOnClick

@@ -1,9 +1,7 @@
 import React from "react";
-import SurveyTable from "./SurveyTable";
-import { Alert, Box, Button, Snackbar } from "@mui/material";
-import { useTheme } from "@emotion/react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Alert, Box, Snackbar } from "@mui/material";
 import RespondentTable from "./RespondentTable";
-import AddIcon from "@mui/icons-material/Add";
 import api from "../api/axios";
 import QuestionTable from "./QuestionTable";
 import CreateSurveyDialog from "./CreateSurveyDialog";
@@ -11,15 +9,28 @@ import EmailNotificationEditor from "./EmailNotificationEditor";
 import InvitationSubjectEditor from "./InvitationSubjectEditor";
 import SurveyInstructionsEditor from "./SurveyInstructionsEditor";
 import ReminderTemplateEditor from "./ReminderTemplateEditor";
-import CollapsibleSection from "./CollapsibleSection";
 import { useAuth } from "../context/AuthContext";
 import SurveyLifecyclePanel from "./SurveyLifecyclePanel";
 import EmailHistory from "./EmailHistory";
+import SurveysList from "./SurveysList";
+import SurveyWorkspace from "./SurveyWorkspace";
+import SurveyOverviewPanel from "./SurveyOverviewPanel";
+import SurveyPrimaryAction from "./SurveyPrimaryAction";
+import SurveyTableMenuCell from "./SurveyTableMenuCell";
 import { lifecycleLabel, lifecycleStatus, surveyId } from "./surveyLifecycle";
+import { responseRateSummary } from "./surveyResponseRate";
 import { surveyOperationGeneration } from "./useSurveyOperationState";
 
 const Dashboard = () => {
-  const theme = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // The dashboard area is served by a single route; the workspace URL is parsed
+  // here so navigating between the list and a survey never remounts this page
+  // (drafts and pending operations survive list/tab/back navigation).
+  const pathSegments = location.pathname.split('/').filter(Boolean);
+  const isWorkspaceRoute = pathSegments[0] === 'surveys' && Boolean(pathSegments[1]);
+  const routeSurveyId = isWorkspaceRoute ? decodeURIComponent(pathSegments[1]) : null;
+  const routeTab = isWorkspaceRoute ? (pathSegments[2] || 'overview') : null;
   const [surveyData, setSurveyData] = React.useState(null);
   const [selectSurvey, setSelectSurvey] = React.useState(null);
   const [questionData, setQuestionData] = React.useState(null);
@@ -34,9 +45,12 @@ const Dashboard = () => {
   const [snackbar, setSnackbar] = React.useState(null);
   const [dirtyBySurvey, setDirtyBySurvey] = React.useState({});
   const [operationsBySurvey, setOperationsBySurvey] = React.useState({});
+  const [launchSignal, setLaunchSignal] = React.useState(0);
+  const [lifecycleRefreshToken, setLifecycleRefreshToken] = React.useState(0);
   const surveyRequest = React.useRef(0);
   const pendingSelectionId = React.useRef(null);
   const relatedRequest = React.useRef(0);
+  const selectionRef = React.useRef(null);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey, hasSurveyRole } = useAuth();
 
   const fetchSurveyData = React.useCallback(async () => {
@@ -52,6 +66,7 @@ const Dashboard = () => {
           const preferred = surveys.find((survey) => surveyId(survey) === preferredId);
           if (preferred) {
             pendingSelectionId.current = null;
+            selectionRef.current = preferredId;
             return preferred;
           }
         }
@@ -72,6 +87,48 @@ const Dashboard = () => {
     const timer = setInterval(fetchSurveyData, 30000);
     return () => clearInterval(timer);
   }, [fetchSurveyData]);
+
+  // Selecting a survey resets the related questions/respondents so stale data
+  // from a previous survey is never shown while the next one loads.
+  const applySelection = React.useCallback((next) => {
+    const nextId = next ? surveyId(next) : null;
+    if (nextId !== selectionRef.current) {
+      relatedRequest.current += 1;
+      setQuestionData(null);
+      setQuestionLoading(Boolean(next));
+      setQuestionError(null);
+      setRespondentData(null);
+      setRespondentRevision(null);
+      setRespondentLoading(Boolean(next) && canViewSensitiveSurveyData(next));
+      setRespondentError(null);
+    }
+    selectionRef.current = nextId;
+    setSelectSurvey(next);
+  }, [canViewSensitiveSurveyData]);
+
+  // Keep the selected survey in sync with the workspace URL (direct links,
+  // browser back/forward, and the plain survey list route).
+  React.useEffect(() => {
+    const urlId = routeSurveyId || null;
+    if (urlId) {
+      if (!surveyData) return;
+      const found = surveyData.find((survey) => surveyId(survey) === urlId);
+      if (!found) return;
+      setSelectSurvey((current) => {
+        if (current && surveyId(current) === urlId) return current;
+        selectionRef.current = urlId;
+        return found;
+      });
+      return;
+    }
+    if (!isWorkspaceRoute) {
+      setSelectSurvey((current) => {
+        if (!current) return current;
+        selectionRef.current = null;
+        return null;
+      });
+    }
+  }, [routeSurveyId, surveyData, isWorkspaceRoute]);
 
   React.useEffect(() => {
     const request = ++relatedRequest.current;
@@ -156,17 +213,8 @@ const Dashboard = () => {
 
   const handleSelectRow = (childData) => {
     pendingSelectionId.current = null;
-    if (surveyId(childData) !== surveyId(selectSurvey)) {
-      relatedRequest.current += 1;
-      setQuestionData(null);
-      setQuestionLoading(true);
-      setQuestionError(null);
-      setRespondentData(null);
-      setRespondentRevision(null);
-      setRespondentLoading(canViewSensitiveSurveyData(childData));
-      setRespondentError(null);
-    }
-    setSelectSurvey(childData);
+    applySelection(childData);
+    navigate(`/surveys/${surveyId(childData)}/overview`);
   };
 
   const handleCreateSurvey = async (surveyName, organizationId) => {
@@ -199,6 +247,7 @@ const Dashboard = () => {
     setRespondentData(null);
     setRespondentLoading(true);
     setRespondentError(null);
+    navigate(`/surveys/${copiedId}/overview`);
     const surveys = await fetchSurveyData();
     if (!surveys.some((survey) => surveyId(survey) === copiedId)) {
       setSnackbar({ severity: 'info', message: 'The copied survey was created and will be selected when refresh completes.' });
@@ -208,11 +257,17 @@ const Dashboard = () => {
   const handleSurveyDeleted = async (deletedSurveyName) => {
     await fetchSurveyData();
     if (selectSurvey && selectSurvey.name === deletedSurveyName) {
-      setSelectSurvey(null);
-      setQuestionData(null);
-      setRespondentData(null);
+      applySelection(null);
+      navigate('/');
     }
   };
+
+  const handleSurveyUpdated = React.useCallback((updated) => {
+    if (!updated) return;
+    setSelectSurvey((current) => (
+      current && surveyId(current) === surveyId(updated) ? { ...current, ...updated } : current
+    ));
+  }, []);
 
   const handlePanelSurveyRefresh = React.useCallback(async (selectedId) => {
     const surveys = await fetchSurveyData();
@@ -251,6 +306,13 @@ const Dashboard = () => {
     });
   }, []);
 
+  const handleTabChange = React.useCallback((nextTab) => {
+    if (!selectSurvey) return;
+    navigate(`/surveys/${surveyId(selectSurvey)}/${nextTab}`);
+  }, [navigate, selectSurvey]);
+
+  const handleBack = React.useCallback(() => navigate('/'), [navigate]);
+
   const selectedIsLifecycleLocked = Boolean(selectSurvey) && lifecycleStatus(selectSurvey) !== 'draft';
   const selectedCanEdit = canEditSurvey(selectSurvey);
   const selectedCanViewRespondents = canViewSensitiveSurveyData(selectSurvey);
@@ -264,21 +326,132 @@ const Dashboard = () => {
   const hasReminderOperations = Object.values(operationsBySurvey).some((pending) => pending.reminderTemplate);
   const hasInvitationOperations = Object.values(operationsBySurvey).some((pending) => pending.invitationSubject || pending.invitationBody || pending.reminderTemplate);
   const hasRespondentOperations = Object.values(operationsBySurvey).some((pending) => pending.respondents);
+  const canCreateSurvey = Boolean(memberships?.some((membership) => ['owner', 'admin', 'editor'].includes(membership.role)));
+  const selectedId = selectSurvey ? surveyId(selectSurvey) : null;
+  const selectedDirty = selectedId ? dirtyBySurvey[selectedId] || {} : {};
+  const selectedOperations = selectedId ? operationsBySurvey[selectedId] || {} : {};
+  const activeTab = routeTab || 'overview';
+
+  const workspaceSubtitle = selectSurvey && lifecycleStatus(selectSurvey) !== 'draft'
+    ? `${responseRateSummary(selectSurvey).eligibleCount || selectSurvey.respondents || 0} respondents`
+    : null;
+
+  const lifecycleDetails = selectSurvey && lifecycleStatus(selectSurvey) !== 'draft'
+    ? <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} refreshToken={lifecycleRefreshToken} />
+    : null;
+
+  const workspacePanels = selectSurvey ? [
+    {
+      key: 'overview',
+      node: (
+        <SurveyOverviewPanel
+          survey={selectSurvey}
+          onGoToTab={handleTabChange}
+          onViewResults={() => navigate('/results')}
+          onRefresh={() => setLifecycleRefreshToken((value) => value + 1)}
+          onReviewLaunch={() => setLaunchSignal((value) => value + 1)}
+          canLaunch={selectedCanEdit && lifecycleStatus(selectSurvey) === 'draft'}
+          lifecycleDetails={lifecycleDetails}
+          refreshToken={lifecycleRefreshToken}
+        />
+      ),
+    },
+    {
+      key: 'content',
+      node: (
+        <Box>
+          <SurveyInstructionsEditor
+            surveyId={surveyId(selectSurvey)}
+            readOnly={selectedReadOnly}
+            readOnlyMessage={selectedIsLifecycleLocked
+              ? `Instructions are read-only while this survey is ${lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.`
+              : 'You do not have permission to update these instructions.'}
+            onDirtyChange={handleDirtyChange}
+            onOperationChange={handleOperationChange}
+          />
+          <Box sx={{ mt: 3 }}>
+            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
+            <QuestionTable
+              rows={questionData}
+              loading={questionLoading}
+              loadError={questionError}
+              onRetry={() => setRelatedRefresh((value) => value + 1)}
+              surveyName={surveyId(selectSurvey)}
+              onSurveyDataChanged={fetchSurveyData}
+              readOnly={selectedReadOnly}
+              onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
+            />
+          </Box>
+        </Box>
+      ),
+    },
+    ...(selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations ? [{
+      key: 'respondents',
+      node: (
+        <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
+          {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
+          <RespondentTable
+            rows={selectedCanViewRespondents ? respondentData : null}
+            revision={selectedCanViewRespondents ? respondentRevision : null}
+            loading={selectedCanViewRespondents && respondentLoading}
+            loadError={selectedCanViewRespondents ? respondentError : null}
+            onRetry={() => setRelatedRefresh((value) => value + 1)}
+            surveyName={selectedCanViewRespondents ? surveyId(selectSurvey) : null}
+            onSurveyDataChanged={fetchSurveyData}
+            readOnly={selectedReadOnly}
+            onDirtyChange={handleDirtyChange}
+            onOperationChange={handleOperationChange}
+          />
+        </Box>
+      ),
+    }] : []),
+    ...(selectedCanEdit || selectedCanViewRespondents || hasInvitationDrafts || hasInvitationOperations ? [{
+      key: 'email',
+      node: (
+        <Box>
+          <Box sx={{ display: selectedCanEdit ? 'block' : 'none' }} aria-hidden={!selectedCanEdit}>
+            <InvitationSubjectEditor
+              key="invitation-subject-editor"
+              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
+              readOnly={selectedIsLifecycleLocked}
+              onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
+            />
+            <EmailNotificationEditor
+              key="invitation-body-editor"
+              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
+              readOnly={selectedIsLifecycleLocked}
+              onDirtyChange={handleDirtyChange}
+              onOperationChange={handleOperationChange}
+            />
+            {(selectedCanAdminister || hasReminderDrafts || hasReminderOperations) && (
+              <Box sx={{ display: selectedCanAdminister && lifecycleStatus(selectSurvey) !== 'draft' ? 'block' : 'none' }} aria-hidden={!(selectedCanAdminister && lifecycleStatus(selectSurvey) !== 'draft')}>
+                <ReminderTemplateEditor
+                  surveyId={selectedCanAdminister ? surveyId(selectSurvey) : null}
+                  editable={selectedCanAdminister && lifecycleStatus(selectSurvey) === 'active'}
+                  onDirtyChange={handleDirtyChange}
+                  onOperationChange={handleOperationChange}
+                />
+              </Box>
+            )}
+          </Box>
+          {selectedCanViewRespondents && <Box sx={{ mt: 3 }}><EmailHistory survey={selectSurvey} /></Box>}
+        </Box>
+      ),
+    }] : []),
+  ] : [];
 
   return (
     <Box
       data-testid="dashboard-shell"
       sx={{
-        mt: '20px',
-        px: { xs: 1.5, sm: 3, md: 5 },
-        py: { xs: 2, sm: 3, md: 5 },
-        mx: { xs: 1, sm: 2, md: '13%' },
-        border: `1px solid ${theme.palette.divider}`,
-        borderRadius: "8px",
-        boxShadow: theme.palette.mode === "light"
-          ? "0 4px 8px rgba(0, 0, 0, 0.1)"
-          : "0 4px 8px rgba(0, 0, 0, 0.3)",
-        backgroundColor: theme.palette.background.paper,
+        mt: '8px',
+        px: { xs: 1.5, sm: 3, md: 4 },
+        py: { xs: 2, sm: 3, md: 4 },
+        width: '100%',
+        maxWidth: 1470,
+        mx: 'auto',
       }}
     >
       <Snackbar
@@ -297,32 +470,51 @@ const Dashboard = () => {
         </Alert>
       </Snackbar>
 
-      <CollapsibleSection 
-        title="Surveys"
-        actions={
-          memberships?.some(m => ['owner', 'admin', 'editor'].includes(m.role)) ? (
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setCreateDialogOpen(true)}
-              size="small"
-            >
-              Create Survey
-            </Button>
-          ) : null
-        }
-      >
-        <SurveyTable 
-          rows={surveyData} 
+      {!selectSurvey ? (
+        <SurveysList
+          rows={surveyData}
           selectRow={handleSelectRow}
           onSurveyDeleted={handleSurveyDeleted}
           onSurveyCopied={handleSurveyCopied}
-          selectedSurvey={selectSurvey}
           onLifecycleChange={fetchSurveyData}
           dirtyBySurvey={dirtyBySurvey}
           operationsBySurvey={operationsBySurvey}
+          canCreate={canCreateSurvey}
+          onCreate={() => setCreateDialogOpen(true)}
         />
-      </CollapsibleSection>
+      ) : (
+        <SurveyWorkspace
+          survey={selectSurvey}
+          tab={activeTab}
+          onTabChange={handleTabChange}
+          onBack={handleBack}
+          subtitle={workspaceSubtitle}
+          primaryAction={(
+            <SurveyPrimaryAction
+              survey={selectSurvey}
+              unsavedChanges={selectedDirty}
+              pendingOperations={selectedOperations}
+              onLifecycleChange={fetchSurveyData}
+              onSurveyUpdated={handleSurveyUpdated}
+              onNotify={setSnackbar}
+              onViewResults={() => navigate('/results')}
+              launchSignal={launchSignal}
+            />
+          )}
+          menu={(
+            <SurveyTableMenuCell
+              row={selectSurvey}
+              onSurveyDeleted={handleSurveyDeleted}
+              onSurveyCopied={handleSurveyCopied}
+              onLifecycleChange={fetchSurveyData}
+              onViewLifecycle={handleSurveyUpdated}
+              unsavedChanges={selectedDirty}
+              pendingOperations={selectedOperations}
+            />
+          )}
+          panels={workspacePanels}
+        />
+      )}
 
       <CreateSurveyDialog
         open={createDialogOpen}
@@ -330,89 +522,6 @@ const Dashboard = () => {
         onSubmit={handleCreateSurvey}
         memberships={memberships}
       />
-
-      {selectSurvey && <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} />}
-      {selectSurvey && selectedCanViewRespondents && <EmailHistory survey={selectSurvey} />}
-
-      {selectSurvey && (
-        <CollapsibleSection title="Survey Instructions">
-          <SurveyInstructionsEditor
-            surveyId={surveyId(selectSurvey)}
-            readOnly={selectedReadOnly}
-            readOnlyMessage={selectedIsLifecycleLocked
-              ? `Instructions are read-only while this survey is ${lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.`
-              : 'You do not have permission to update these instructions.'}
-            onDirtyChange={handleDirtyChange}
-            onOperationChange={handleOperationChange}
-          />
-        </CollapsibleSection>
-      )}
-
-      <CollapsibleSection title="Survey Questions">
-        {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Questions are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
-        <QuestionTable
-          rows={questionData}
-          loading={questionLoading}
-          loadError={questionError}
-          onRetry={() => setRelatedRefresh((value) => value + 1)}
-          surveyName={surveyId(selectSurvey)}
-          onSurveyDataChanged={fetchSurveyData}
-          readOnly={selectedReadOnly}
-          onDirtyChange={handleDirtyChange}
-          onOperationChange={handleOperationChange}
-        />
-      </CollapsibleSection>
-
-      {(selectedCanEdit || hasInvitationDrafts || hasInvitationOperations) && (
-        <Box sx={{ display: selectedCanEdit ? 'block' : 'none' }} aria-hidden={!selectedCanEdit}>
-          <CollapsibleSection title="Email Notifications">
-            <InvitationSubjectEditor
-              key="invitation-subject-editor"
-              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
-              readOnly={selectedIsLifecycleLocked}
-              onDirtyChange={handleDirtyChange}
-              onOperationChange={handleOperationChange}
-            />
-            <EmailNotificationEditor
-              key="invitation-body-editor"
-              surveyId={selectedCanEdit ? surveyId(selectSurvey) : null}
-              readOnly={selectedIsLifecycleLocked}
-              onDirtyChange={handleDirtyChange}
-              onOperationChange={handleOperationChange}
-            />
-            {(selectedCanAdminister || hasReminderDrafts || hasReminderOperations) && (
-              <Box sx={{display:selectedCanAdminister && lifecycleStatus(selectSurvey) !== 'draft' ? 'block' : 'none'}} aria-hidden={!(selectedCanAdminister && lifecycleStatus(selectSurvey) !== 'draft')}>
-                <ReminderTemplateEditor
-                  surveyId={selectedCanAdminister ? surveyId(selectSurvey) : null}
-                  editable={selectedCanAdminister && lifecycleStatus(selectSurvey) === 'active'}
-                  onDirtyChange={handleDirtyChange}
-                  onOperationChange={handleOperationChange}
-                />
-              </Box>
-            )}
-          </CollapsibleSection>
-        </Box>
-      )}
-
-      {(selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations) && (
-        <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
-          <CollapsibleSection title="Survey Respondents">
-            {selectedIsLifecycleLocked && <Alert severity="info" sx={{ mb: 2 }}>Respondent identities are read-only while this survey is {lifecycleLabel(lifecycleStatus(selectSurvey)).toLowerCase()}.</Alert>}
-            <RespondentTable
-              rows={selectedCanViewRespondents ? respondentData : null}
-              revision={selectedCanViewRespondents ? respondentRevision : null}
-              loading={selectedCanViewRespondents && respondentLoading}
-              loadError={selectedCanViewRespondents ? respondentError : null}
-              onRetry={() => setRelatedRefresh((value) => value + 1)}
-              surveyName={selectedCanViewRespondents ? surveyId(selectSurvey) : null}
-              onSurveyDataChanged={fetchSurveyData}
-              readOnly={selectedReadOnly}
-              onDirtyChange={handleDirtyChange}
-              onOperationChange={handleOperationChange}
-            />
-          </CollapsibleSection>
-        </Box>
-      )}
     </Box>
   );
 };

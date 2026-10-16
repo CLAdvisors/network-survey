@@ -114,12 +114,13 @@ const AppContent = () => {
               </Alert>
             </Snackbar>
             <Routes>
-              <Route path="/" element={<Dashboard />} />
               <Route path="/results" element={<Results />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/signup" element={<SignUp />} />
               <Route path="/editor" element={<SurveyEditor />} /> {/* Add route for SurveyEditor */}
-              <Route path="*" element={<Navigate to="/" />} />
+              {/* Dashboard owns both the survey list and the /surveys/:id/:tab workspace;
+                  a single route keeps list/workspace navigation from remounting drafts. */}
+              <Route path="*" element={<Dashboard />} />
             </Routes>
           </DashboardLayout>
         </NetworkProvider>

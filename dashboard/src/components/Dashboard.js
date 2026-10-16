@@ -381,6 +381,7 @@ const Dashboard = () => {
           campaign={selectOverviewCampaign(launchInfo, selectSurvey)}
           campaignLoading={launchInfo.loading}
           campaignError={launchInfo.error}
+          campaignLoaded={launchInfo.loaded}
           canOpenRespondents={showRespondentsPanel}
           canOpenEmail={showEmailPanel}
           onGoToTab={handleTabChange}
@@ -484,7 +485,7 @@ const Dashboard = () => {
   const workspaceMissing = showWorkspace && surveyList.loaded && !surveyList.error && Array.isArray(surveyData)
     && !surveyData.some((survey) => surveyId(survey) === route.surveyId);
   const workspaceReady = showWorkspace && Boolean(selectSurvey) && selectedId === route.surveyId && !workspaceMissing;
-  const workspaceListError = showWorkspace && Boolean(surveyList.error) && !surveyData;
+  const workspaceListError = showWorkspace && Boolean(surveyList.error) && !workspaceReady && !workspaceMissing;
   const workspaceLoading = showWorkspace && !workspaceReady && !workspaceMissing && !workspaceListError;
   const listLoading = !surveyList.loaded && !surveyList.error;
 

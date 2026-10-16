@@ -1,6 +1,6 @@
 import React from 'react';
 import { readFileSync } from 'node:fs';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider as EmotionThemeProvider } from '@emotion/react';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
@@ -461,4 +461,29 @@ test('uses the authoritative campaign once loaded, even when it confirms none', 
   expect(selectOverviewCampaign({ loaded: false }, { latestLaunch: { id: 'list' } })).toEqual({ id: 'list' });
   expect(selectOverviewCampaign({ loaded: false }, { latest_launch: { id: 'list-snake' } })).toEqual({ id: 'list-snake' });
   expect(selectOverviewCampaign(undefined, undefined)).toBeNull();
+});
+
+test('shows a workspace error after a cached-empty index then a failed refresh', async () => {
+  vi.useFakeTimers();
+  try {
+    let surveyCalls = 0;
+    api.get.mockImplementation((url) => {
+      if (url === '/surveys') {
+        surveyCalls += 1;
+        // First load returns a confirmed empty inventory; the later poll fails.
+        return surveyCalls === 1 ? Promise.resolve({ data: { surveys: [] } }) : Promise.reject(new Error('down'));
+      }
+      if (url.startsWith('/listQuestions')) return Promise.resolve({ data: { questions: [] } });
+      return Promise.resolve({ data: [] });
+    });
+    renderDashboard();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.queryByTestId('survey-list-loading')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open survey-a' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(screen.getByTestId('workspace-list-error')).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -172,7 +172,7 @@ const campaignState = (campaign, dispatch) => {
   return 'In progress';
 };
 
-const EmailActivity = ({ campaign, campaignLoading, campaignError, onRefresh, onViewEmailHistory, canOpenEmail }) => {
+const EmailActivity = ({ campaign, campaignLoading, campaignError, campaignLoaded = false, onRefresh, onViewEmailHistory, canOpenEmail }) => {
   const counts = launchCounts(campaign);
   const outcomes = providerCounts(campaign);
   const dispatch = launchCountAvailability(campaign);
@@ -181,21 +181,25 @@ const EmailActivity = ({ campaign, campaignLoading, campaignError, onRefresh, on
   const notConfirmed = counts.failed + counts.uncertain + counts.cancelled;
   const isReminder = campaign?.kind === 'reminder';
   const kindLabel = isReminder ? 'Reminder' : 'Initial invitations';
-  const rawEmails = isReminder ? 'reminders' : 'emails';
   const created = campaign ? formatDateTime(campaign.createdAt || campaign.created_at) : '';
   const dateLabel = created && created !== '—' ? ` · ${created}` : '';
   const state = campaignState(campaign, dispatch);
   const submittedReady = dispatch.accepted && dispatch.target;
   const submittedPercent = submittedReady && counts.target > 0 ? Math.min(100, Math.round((counts.accepted / counts.target) * 100)) : 0;
+  const scopeText = campaign
+    ? `Latest campaign · ${kindLabel}${dateLabel}`
+    : campaignError
+      ? 'Campaign data unavailable'
+      : campaignLoaded
+        ? 'No campaign has been sent yet.'
+        : 'Loading campaign data…';
 
   return (
     <Box component="section" aria-label="Email activity" sx={{ mt: { xs: 2.5, md: 3 } }}>
       <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={2} sx={{ mb: 2 }}>
         <Box>
           <Typography component="h2" sx={{ fontSize: 17, fontWeight: 600, color: STUDIO.ink }}>Email activity</Typography>
-          <Typography sx={{ fontSize: 11, color: STUDIO.muted, mt: 0.5 }}>
-            {campaign ? `Latest campaign · ${kindLabel}${dateLabel}` : 'No campaign has been sent yet.'}
-          </Typography>
+          <Typography sx={{ fontSize: 11, color: STUDIO.muted, mt: 0.5 }}>{scopeText}</Typography>
           {campaignError && (
             <Typography role="status" sx={{ fontSize: 11, color: STUDIO.red, mt: 0.5 }}>
               Couldn’t refresh campaign data — showing the last known values.
@@ -212,7 +216,11 @@ const EmailActivity = ({ campaign, campaignLoading, campaignError, onRefresh, on
 
       {!campaign && (
         <Box sx={{ ...studioPanelSx, p: 3, color: STUDIO.muted, fontSize: 13 }}>
-          Sending and delivery indicators appear here after an invitation campaign starts.
+          {campaignError
+            ? 'The latest campaign could not be loaded. Retry to try again.'
+            : campaignLoaded
+              ? 'No invitation or reminder campaign has been sent for this survey yet.'
+              : 'Loading the latest campaign…'}
         </Box>
       )}
 
@@ -335,6 +343,7 @@ const SurveyOverviewPanel = ({
   campaign,
   campaignLoading = false,
   campaignError = '',
+  campaignLoaded = false,
   canOpenRespondents = false,
   canOpenEmail = false,
   onGoToTab,
@@ -352,7 +361,8 @@ const SurveyOverviewPanel = ({
   }
 
   const summary = responseRateSummary(survey);
-  const activeCampaign = campaign || survey.latestLaunch || survey.latest_launch;
+  // The parent owns campaign selection; an explicit null means "no campaign".
+  const activeCampaign = campaign ?? null;
   const outcomes = providerCounts(activeCampaign);
   const provider = providerOutcomeAvailability(activeCampaign);
   const isReminder = activeCampaign?.kind === 'reminder';
@@ -380,6 +390,7 @@ const SurveyOverviewPanel = ({
         campaign={activeCampaign}
         campaignLoading={campaignLoading}
         campaignError={campaignError}
+        campaignLoaded={campaignLoaded}
         onRefresh={onRefresh}
         onViewEmailHistory={() => onGoToTab('email')}
         canOpenEmail={canOpenEmail}

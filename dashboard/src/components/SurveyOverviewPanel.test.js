@@ -21,6 +21,9 @@ const renderPanel = (campaign, overrides = {}) => render(
     <SurveyOverviewPanel
       survey={{ ...activeSurvey, ...(overrides.survey || {}) }}
       campaign={campaign}
+      campaignLoaded={overrides.campaignLoaded ?? false}
+      campaignLoading={overrides.campaignLoading ?? false}
+      campaignError={overrides.campaignError ?? ''}
       onGoToTab={() => {}}
       onViewResults={() => {}}
       onRefresh={() => {}}
@@ -105,4 +108,21 @@ test('hides respondent and email destinations the viewer cannot open', () => {
   expect(screen.queryByRole('button', { name: 'View respondents' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Email history' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /Review emails/ })).not.toBeInTheDocument();
+});
+
+test('an explicit no-campaign does not revive the stale list snapshot', () => {
+  renderPanel(null, {
+    campaignLoaded: true,
+    survey: { latestLaunch: { id: 'stale', kind: 'initial', provider_outcome_counts: { provider_problem_count: 5, delivered_count: 1 } } },
+  });
+  expect(screen.getByText('No campaign has been sent yet.')).toBeInTheDocument();
+  expect(screen.queryByText('Delivery confirmations')).not.toBeInTheDocument();
+  expect(screen.queryByText('emails with delivery problems')).not.toBeInTheDocument();
+  expect(within(screen.getByLabelText('Latest campaign')).getByText('Unavailable')).toBeInTheDocument();
+});
+
+test('distinguishes a loading campaign from a confirmed empty one', () => {
+  renderPanel(null, { campaignLoaded: false, campaignLoading: true });
+  expect(screen.getByText('Loading campaign data…')).toBeInTheDocument();
+  expect(screen.queryByText('No campaign has been sent yet.')).not.toBeInTheDocument();
 });

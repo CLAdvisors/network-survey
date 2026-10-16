@@ -17,12 +17,12 @@ const applyWorkflow=read('.github/workflows/terraform-apply.yml');
 
 for(const value of [
   'RESEND_CREDENTIAL_LOAD_ENABLED=${var.enable_resend_credentials}',
-  'RESEND_API_KEY_PARAMETER=${var.enable_resend_credentials ? "/network-survey/prod-secondary/resend/api-key" : ""}',
-  'RESEND_PROVIDER_ACCOUNT_SCOPE=network-survey-resend-prod-secondary',
+  'RESEND_API_KEY_PARAMETER=${var.enable_resend_credentials ? "/network-survey/${var.environment}/resend/api-key" : ""}',
+  'RESEND_PROVIDER_ACCOUNT_SCOPE=network-survey-resend-${var.environment}',
   'SURVEY_EMAIL_SENDER=CLA Survey <survey@cladvisorsurveys.com>',
   'SURVEY_EMAIL_REPLY_TO=survey@cladvisors.com',
-  'RESEND_WEBHOOK_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-secret" : ""}',
-  'RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/prod-secondary/resend/webhook-previous-secret" : ""}',
+  'RESEND_WEBHOOK_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/${var.environment}/resend/webhook-secret" : ""}',
+  'RESEND_WEBHOOK_PREVIOUS_SECRET_PARAMETER=${var.enable_resend_webhook_ingest ? "/network-survey/${var.environment}/resend/webhook-previous-secret" : ""}',
   'RESEND_WEBHOOK_INGEST_ENABLED=${var.enable_resend_webhook_ingest}',
   'SURVEY_DELIVERY_V2_ENABLED=${var.enable_survey_delivery_v2}',
 ]) required(moduleMain,value,'target module');

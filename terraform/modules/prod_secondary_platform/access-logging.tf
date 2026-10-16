@@ -1,5 +1,5 @@
 locals {
-  cloudfront_access_log_bucket_name = "network-survey-prod-secondary-access-logs-${var.account_id}"
+  cloudfront_access_log_bucket_name = "network-survey-${var.environment}-access-logs-${var.account_id}"
   cloudfront_access_log_source_name = "${var.name_prefix}-api-access"
   cloudfront_access_log_fields = [
     "date",

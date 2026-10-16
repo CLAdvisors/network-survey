@@ -83,7 +83,7 @@ if (/if\s+aws s3 cp/.test(cloudInit)) throw new Error('missing release artifact 
 if (/artifact_revision.*current_revision/s.test(cloudInit)) throw new Error('API health/revision must not bypass complete deployment verification');
 if (cloudInit.indexOf('ufw allow 3000') < cloudInit.indexOf('remote-deploy.sh')) throw new Error('ALB port must remain closed until deployment succeeds');
 
-for (const value of ['if [ "$ENVIRONMENT" = "prod-secondary" ]; then', 'ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
+for (const value of ['if [ "$ENVIRONMENT" = "prod-secondary" ] || [ "$SECURE_RUNTIME" = true ]; then', 'ona-deploy.lock', 'flock -w 60 8']) required(remoteDeploy, value, remoteDeployPath);
 
 for (const value of [
   'elasticloadbalancing:DescribeTargetHealth',
@@ -97,7 +97,7 @@ for (const value of [
   'runtime["host"]',
   'apt_helper                 = file("${path.module}/apt-helper.sh")',
   'security_upgrade           = file("${path.module}/security-upgrade.sh")',
-  'max_size                  = 3',
+  'max_size                  = var.app_max_capacity',
   'min_healthy_percentage = 100',
   'max_healthy_percentage = 150',
   'health_check_grace_period = 1800',
@@ -124,6 +124,7 @@ const substitutions = {
   config_key: 'configs/runtime.env',
   artifacts_bucket: 'artifacts-bucket',
   environment: 'prod-secondary',
+  secure_runtime_deploy_line: '',
   bootstrap_log_group: '/test/bootstrap',
   host_maintenance_log_group: '/test/host-maintenance',
   host_log_group: '/test/host',
@@ -143,6 +144,9 @@ const compressedBytes = gzipSync(rendered).byteLength;
 if (compressedBytes > 16384) throw new Error(`compressed EC2 user data is ${compressedBytes} bytes; limit is 16384`);
 const syntax = spawnSync('bash', ['-n'], { input: rendered, encoding: 'utf8' });
 if (syntax.status !== 0) throw new Error(`rendered cloud-init shell syntax failed:\n${syntax.stderr}`);
+// A prod-secondary host must render no secure-runtime bytes at all: the flag
+// line is template-level omission, not a false literal.
+if (rendered.includes('SECURE_RUNTIME')) throw new Error('prod-secondary user_data must not carry the secure-runtime identity');
 for (const [file, text] of [[aptPath, aptHelper], [securityPath, securityUpgrade]]) {
   const result = spawnSync('bash', ['-n'], { input: text, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(`${file} shell syntax failed:\n${result.stderr}`);

@@ -3,6 +3,11 @@
 // shapes. Their 784 MiB aggregate leaves substantial OS/agent headroom. A
 // worker memory restart is safe because durable leases and provider idempotency
 // keys fence replay after an ambiguous termination.
+// Hosted runtime identity stamped by the target Terraform into deploy.env and
+// passed through by remote-deploy.sh. Processes must load credentials from
+// SSM/Secrets Manager after spawn instead of receiving them from the PM2
+// parent. Legacy environments leave it false and keep their entrypoints.
+const secureHosted = process.env.SECURE_RUNTIME_ENABLED === 'true';
 const memoryLimit = (limit) => process.env.EMAIL_WORKER_ENV === 'prod-secondary'
   ? { max_memory_restart: limit }
   : {};
@@ -20,13 +25,15 @@ module.exports = {
   apps: [
     {
       name: 'ona-api',
-      script: 'server.js',
+      script: secureHosted ? 'secure-runtime.js' : 'server.js',
+      args: secureHosted ? 'api' : undefined,
       cwd: '/opt/service/current/api',
       env: {
-        NODE_ENV: 'prod',
+        NODE_ENV: secureHosted ? 'production' : 'prod',
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
+        SECURE_RUNTIME_ENABLED: process.env.SECURE_RUNTIME_ENABLED,
       },
       kill_timeout: 30000,
       ...memoryLimit('352M'),
@@ -34,13 +41,15 @@ module.exports = {
     },
     {
       name: 'ona-email-worker',
-      script: 'email-worker.js',
+      script: secureHosted ? 'secure-runtime.js' : 'email-worker.js',
+      args: secureHosted ? 'delivery' : undefined,
       cwd: '/opt/service/current/api',
       env: {
-        NODE_ENV: 'prod',
+        NODE_ENV: secureHosted ? 'production' : 'prod',
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
+        SECURE_RUNTIME_ENABLED: process.env.SECURE_RUNTIME_ENABLED,
       },
       kill_timeout: 30000,
       ...memoryLimit('176M'),
@@ -48,14 +57,16 @@ module.exports = {
     },
     {
       name: 'ona-email-webhook-worker',
-      script: 'webhook-worker.js',
+      script: secureHosted ? 'secure-runtime.js' : 'webhook-worker.js',
+      args: secureHosted ? 'webhook' : undefined,
       cwd: '/opt/service/current/api',
       env: {
-        NODE_ENV: 'prod',
+        NODE_ENV: secureHosted ? 'production' : 'prod',
         APP_ENV: process.env.EMAIL_WORKER_ENV,
         RELEASE_REVISION: process.env.RELEASE_REVISION,
         DEPLOYMENT_ID: process.env.DEPLOYMENT_ID,
         EMAIL_WORKER_ENV: process.env.EMAIL_WORKER_ENV,
+        SECURE_RUNTIME_ENABLED: process.env.SECURE_RUNTIME_ENABLED,
       },
       kill_timeout: 30000,
       ...memoryLimit('256M'),

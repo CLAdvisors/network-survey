@@ -3626,7 +3626,7 @@ app.get('/', async (req, res) => {
   res.status(200).json({ message: 'Health Check: All Good!.' });
 });
 
-if (require.main === module) {
+function startServer() {
   const telemetry = startRuntimeTelemetry({ pool, processName:'api', env:process.env });
   const server = app.listen(port, () => {
     console.log(`Server is running on port: ${port}`);
@@ -3644,10 +3644,14 @@ if (require.main === module) {
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  return server;
 }
+
+if (require.main === module) startServer();
 
 module.exports = {
   app,
+  startServer,
   pool,
   validateRespondentToken,
   requireAuth,

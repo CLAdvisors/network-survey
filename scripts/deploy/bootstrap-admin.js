@@ -9,7 +9,16 @@ const path = require('path');
 const releaseApiDir = path.join(__dirname, '..', 'api');
 const apiDir = fs.existsSync(releaseApiDir) ? releaseApiDir : path.join(__dirname, '..', '..', 'api');
 const { Client } = require(path.join(apiDir, 'node_modules', 'pg'));
+const { createManagedDatabasePasswordProvider } = require(path.join(apiDir, 'db-credentials'));
 const bcrypt = require(path.join(apiDir, 'node_modules', 'bcrypt'));
+
+// Secure hosted bootstrap resolves the DB credential from the RDS managed
+// secret in-process; an inline password is a hard failure when the target
+// Terraform sets the secure runtime identity.
+if (process.env.SECURE_RUNTIME_ENABLED === 'true' &&
+    (!process.env.DB_MANAGED_SECRET_ARN || process.env.DB_PASSWORD)) {
+  throw new Error('Secure bootstrap requires managed DB credentials without an inline password');
+}
 
 const username = String(process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim();
 const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
@@ -29,7 +38,7 @@ const client = new Client({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT),
   user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  password: createManagedDatabasePasswordProvider(process.env) || process.env.DB_PASSWORD,
   database: process.env.DB_NAME || 'ONA',
   ssl: process.env.DB_SSL === 'true'
     ? {

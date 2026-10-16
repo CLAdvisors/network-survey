@@ -11,7 +11,7 @@ on:
         description: Environment to plan
         required: true
         type: choice
-        options: [staging, prod, prod-secondary]
+        options: [staging, staging-target, prod, prod-secondary]
         default: staging
 
 permissions:
@@ -34,6 +34,11 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.12.2
+
+      - name: Guard staging routes (fail-closed)
+        # staging-target is deliberately not plan-able yet: the target root is
+        # unprovisioned and no live Terraform plan/state read is approved.
+        run: bash scripts/ci/guard-staging-route.sh plan "${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

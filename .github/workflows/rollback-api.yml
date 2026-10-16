@@ -35,6 +35,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard staging routes (fail-closed)
+        env:
+          CONFIGURED_TF_ENV: ${{ vars.TF_ENV }}
+        run: bash scripts/ci/guard-staging-route.sh rollback "${{ inputs.environment }}" "$CONFIGURED_TF_ENV"
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:

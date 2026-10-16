@@ -1684,6 +1684,19 @@ resource "aws_cloudfront_distribution" "frontend" {
     minimum_protocol_version       = var.enable_custom_domain_aliases ? "TLSv1.2_2021" : "TLSv1"
   }
 
+  # Static SPA fallback, staging dashboard only: missing keys return 403/404
+  # from the S3 origin and must render index.html at 200 so a deep-link refresh
+  # works. Gated on the staging identity AND the dashboard key so the survey
+  # frontend, the API edge and all prod-secondary distributions are unchanged.
+  dynamic "custom_error_response" {
+    for_each = var.environment == "staging" && each.key == "dashboard" ? [403, 404] : []
+    content {
+      error_code         = custom_error_response.value
+      response_code      = 200
+      response_page_path = "/index.html"
+    }
+  }
+
   tags = merge(var.common_tags, { Name = "${var.name_prefix}-${each.key}", App = "ona-${each.key}" })
 }
 

@@ -134,8 +134,9 @@ for (const gate of [
 // (a separate root/module) keeps its existing deploy path.
 matches(moduleVars, /variable "secure_runtime_enabled"[\s\S]*?default\s*=\s*false/, 'secure runtime identity defaults off');
 has(moduleMain, 'var.secure_runtime_enabled ? ["SECURE_RUNTIME_ENABLED=true"] : []', 'runtime config stamps the secure identity only when enabled');
-has(moduleCloudInit, 'if [ "${secure_runtime_enabled}" = "true" ]; then', 'deploy.env stamps the secure identity only when enabled');
-has(moduleCloudInit, 'echo "SECURE_RUNTIME_ENABLED=true" >> "$SERVICE_DIR/deploy.env"', 'deploy.env gains the flag line');
+has(moduleMain, 'secure_runtime_deploy_line = var.secure_runtime_enabled ? "\\nSECURE_RUNTIME_ENABLED=true" : ""', 'user_data line is template-level omission when disabled');
+has(moduleCloudInit, 'ENVIRONMENT=${environment}${secure_runtime_deploy_line}', 'deploy.env appends the flag only from the omitted line');
+hasNot(moduleMain, 'SECURE_RUNTIME_ENABLED=${var.secure_runtime_enabled}', 'no unconditional identity line remains');
 hasNot(moduleMain, 'SECURE_RUNTIME_ENABLED=false', 'no false identity line drifts prod-secondary config');
 hasNot(moduleCloudInit, 'SECURE_RUNTIME_ENABLED=false', 'no false identity line drifts prod-secondary user_data');
 matches(targetMain, /secure_runtime_enabled\s+=\s+true/, 'target staging stamps the secure identity');

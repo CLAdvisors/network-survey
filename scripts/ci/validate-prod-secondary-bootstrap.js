@@ -124,7 +124,7 @@ const substitutions = {
   config_key: 'configs/runtime.env',
   artifacts_bucket: 'artifacts-bucket',
   environment: 'prod-secondary',
-  secure_runtime_enabled: 'false',
+  secure_runtime_deploy_line: '',
   bootstrap_log_group: '/test/bootstrap',
   host_maintenance_log_group: '/test/host-maintenance',
   host_log_group: '/test/host',
@@ -144,6 +144,9 @@ const compressedBytes = gzipSync(rendered).byteLength;
 if (compressedBytes > 16384) throw new Error(`compressed EC2 user data is ${compressedBytes} bytes; limit is 16384`);
 const syntax = spawnSync('bash', ['-n'], { input: rendered, encoding: 'utf8' });
 if (syntax.status !== 0) throw new Error(`rendered cloud-init shell syntax failed:\n${syntax.stderr}`);
+// A prod-secondary host must render no secure-runtime bytes at all: the flag
+// line is template-level omission, not a false literal.
+if (rendered.includes('SECURE_RUNTIME')) throw new Error('prod-secondary user_data must not carry the secure-runtime identity');
 for (const [file, text] of [[aptPath, aptHelper], [securityPath, securityUpgrade]]) {
   const result = spawnSync('bash', ['-n'], { input: text, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(`${file} shell syntax failed:\n${result.stderr}`);

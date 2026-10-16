@@ -82,7 +82,6 @@ locals {
     "FRONTEND_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.dashboard : aws_cloudfront_distribution.frontend["dashboard"].domain_name}",
     "SURVEY_URL=https://${var.enable_custom_domain_aliases ? var.custom_domains.survey : aws_cloudfront_distribution.frontend["survey"].domain_name}",
     "EMAIL_WORKER_ENV=${var.environment}",
-    "SECURE_RUNTIME_ENABLED=${var.secure_runtime_enabled}",
     "EMAIL_RATE_BUDGET_ENV=${var.environment}",
     "SURVEY_DELIVERY_V2_ENABLED=${var.enable_survey_delivery_v2}",
     "LEGACY_START_ENABLED=false",
@@ -1505,7 +1504,7 @@ resource "aws_launch_template" "app" {
     artifacts_bucket           = aws_s3_bucket.runtime["artifacts"].bucket
     aws_region                 = var.aws_region
     environment                = var.environment
-    secure_runtime_enabled     = var.secure_runtime_enabled
+    secure_runtime_deploy_line = var.secure_runtime_enabled ? "\nSECURE_RUNTIME_ENABLED=true" : ""
     apt_helper                 = file("${path.module}/apt-helper.sh")
     security_upgrade           = file("${path.module}/security-upgrade.sh")
     target_group_arn           = aws_lb_target_group.api.arn

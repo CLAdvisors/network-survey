@@ -106,9 +106,11 @@ get_env_value() {
 
 # Fail closed if the downloaded runtime config claims the secure identity while
 # this host is not in secure mode, so a mismatched config cannot fall back onto
-# the legacy secret-to-disk path. The secure branch re-checks the other
-# direction before touching secrets.
-if [ "$(get_env_value SECURE_RUNTIME_ENABLED || true)" = "true" ] && [ "$SECURE_RUNTIME" != true ]; then
+# the legacy secret-to-disk path. The read uses the same dotenv grammar as the
+# credential check (export/spaces/colon), and the secure branch re-checks the
+# other direction before touching secrets.
+CONFIG_SECURE_RUNTIME=$(node "$RELEASE_DIR/deploy/runtime-config-check.js" --read-key SECURE_RUNTIME_ENABLED "$RELEASE_DIR/api/.env.prod" 2>/dev/null || true)
+if [ "$CONFIG_SECURE_RUNTIME" = "true" ] && [ "$SECURE_RUNTIME" != true ]; then
   echo 'Runtime config declares the secure identity but this host is not secure; refusing' >&2
   exit 1
 fi
@@ -191,7 +193,7 @@ echo "==> Resolving runtime secret references"
 DB_MANAGED_SECRET_ARN=$(get_env_value DB_MANAGED_SECRET_ARN || true)
 if [ "$SECURE_RUNTIME" = true ]; then
   test -n "$DB_MANAGED_SECRET_ARN" || { echo 'Secure runtime requires the managed DB secret ARN' >&2; exit 1; }
-  test "$(get_env_value SECURE_RUNTIME_ENABLED)" = "true" || { echo 'Secure runtime config identity mismatch' >&2; exit 1; }
+  test "$CONFIG_SECURE_RUNTIME" = "true" || { echo 'Secure runtime config identity mismatch' >&2; exit 1; }
   test "$(get_env_value EMAIL_WORKER_ENV)" = "$ENVIRONMENT" || { echo 'Secure runtime config environment mismatch' >&2; exit 1; }
   test "$(get_env_value SESSION_SECRET_PARAMETER)" = "/network-survey/$ENVIRONMENT/api/session-secret" || { echo 'Secure runtime session reference mismatch' >&2; exit 1; }
   if [ "$(get_env_value RESEND_CREDENTIAL_LOAD_ENABLED)" = true ]; then

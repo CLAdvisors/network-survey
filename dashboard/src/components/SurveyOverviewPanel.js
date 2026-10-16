@@ -202,7 +202,7 @@ const EmailActivity = ({ campaign, campaignLoading, campaignError, campaignLoade
           <Typography sx={{ fontSize: 11, color: STUDIO.muted, mt: 0.5 }}>{scopeText}</Typography>
           {campaignError && (
             <Typography role="status" sx={{ fontSize: 11, color: STUDIO.red, mt: 0.5 }}>
-              Couldn’t refresh campaign data — showing the last known values.
+              {campaign ? 'Couldn’t refresh campaign data — showing the last known values.' : 'Couldn’t load campaign data.'}
             </Typography>
           )}
           {!campaignError && campaignLoading && (

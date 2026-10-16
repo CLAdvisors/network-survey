@@ -120,13 +120,14 @@ hasNot(moduleMain, 'aws_appautoscaling', 'no app-autoscaling target can raise ca
 matches(targetMain, /start_staging_app \? 1 : 0/, 'staging desired capacity gated at zero');
 matches(targetVars, /variable "start_staging_app"[\s\S]*?default\s*=\s*false/, 'staging app stays off by default');
 for (const gate of [
-  'enable_owner_bootstrap       = false',
   'enable_resend_credentials    = false',
   'enable_resend_webhook_ingest = false',
   'enable_survey_delivery_v2    = false',
 ]) {
   has(targetMain, gate, `staging feature gate stays off: ${gate}`);
 }
+// The reviewed bootstrap gate is enabled for staging only (synthetic admin).
+has(targetMain, 'enable_owner_bootstrap       = true', 'staging enables the reviewed bootstrap gate only');
 
 // --- Secure-runtime identity is target-staging only -----------------------
 // The secure-runtime flag is stamped by the module into deploy.env and the
@@ -254,5 +255,15 @@ assert.ok(ssmCoreBlock, 'SSM core policy present');
 hasNot(ssmCoreBlock[0], 'ssm:GetParameter"', 'SSM core policy must not grant parameter reads');
 hasNot(ssmCoreBlock[0], 'ssm:GetParameters"', 'SSM core policy must not grant parameter reads');
 hasNot(moduleMain, 'parameter/network-survey/*', 'no wildcard parameter resource anywhere');
+
+// --- Staging dashboard same-origin /api routing ---------------------------
+// The exact /api and /api/* behaviors route to the ALB origin with caching off
+// and no error-response override (API 401/403/404 stay JSON); the SPA fallback
+// is a viewer-request CloudFront Function on the default behavior only.
+has(moduleMain, 'for_each = var.environment == "staging" && each.key == "dashboard" ? ["/api", "/api/*"] : []', 'exact /api and /api/* ordered behaviors are staging-dashboard only');
+has(moduleMain, 'path_pattern           = ordered_cache_behavior.value', 'both API behaviors use the ordered path pattern');
+has(moduleMain, 'target_origin_id       = "${var.environment}-dashboard-api-alb"', 'API behaviors target the ALB origin');
+has(moduleMain, 'resource "aws_cloudfront_function" "spa_fallback"', 'SPA fallback is a CloudFront Function, not a distribution error response');
+hasNot(moduleMain, 'dynamic "custom_error_response"', 'no distribution-wide error response remains (API errors stay JSON)');
 
 console.log('staging-target contract validation passed');

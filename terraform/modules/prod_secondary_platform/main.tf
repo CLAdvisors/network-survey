@@ -1637,6 +1637,28 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
   signing_protocol                  = "sigv4"
 }
 
+# Staging dashboard only: client-routed SPA fallback. A CloudFront error
+# response is distribution-wide and would turn API 403/404 JSON into an HTML 200,
+# so the fallback is a viewer-request function on the default behavior only;
+# the /api/* ordered behavior never runs it.
+resource "aws_cloudfront_function" "spa_fallback" {
+  count   = var.environment == "staging" ? 1 : 0
+  name    = "${var.name_prefix}-spa-fallback"
+  runtime = "cloudfront-js-2.0"
+  comment = "Staging dashboard SPA fallback: extension-less paths -> /index.html"
+  publish = true
+  code    = <<-EOT
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+      if (uri === '/' || uri.indexOf('.') === -1) {
+        request.uri = '/index.html';
+      }
+      return request;
+    }
+  EOT
+}
+
 resource "aws_cloudfront_distribution" "frontend" {
   for_each = aws_s3_bucket.frontend
 
@@ -1650,6 +1672,27 @@ resource "aws_cloudfront_distribution" "frontend" {
     domain_name              = each.value.bucket_regional_domain_name
     origin_id                = "S3-${each.key}"
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend[each.key].id
+  }
+
+  # Same-origin API for the staging dashboard: route the exact /api and the
+  # /api/* subtree to the existing ALB origin (the API edge distribution fronts
+  # the same ALB). Staging dashboard only; the survey frontend, API edge and
+  # prod are unchanged. The ALB stays internet-facing but is CloudFront-source
+  # fenced (its SG allows TCP 80 only from the CloudFront origin-facing prefix
+  # list); this adds no exposure and does not change the network.
+  dynamic "origin" {
+    for_each = var.environment == "staging" && each.key == "dashboard" ? [1] : []
+    content {
+      domain_name = aws_lb.api.dns_name
+      origin_id   = "${var.environment}-dashboard-api-alb"
+
+      custom_origin_config {
+        http_port              = 80
+        https_port             = 443
+        origin_protocol_policy = "http-only"
+        origin_ssl_protocols   = ["TLSv1.2"]
+      }
+    }
   }
 
   default_cache_behavior {
@@ -1669,6 +1712,35 @@ resource "aws_cloudfront_distribution" "frontend" {
     min_ttl     = 0
     default_ttl = 3600
     max_ttl     = 86400
+
+    dynamic "function_association" {
+      for_each = var.environment == "staging" && each.key == "dashboard" ? [1] : []
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.spa_fallback[0].arn
+      }
+    }
+  }
+
+  # Exact /api and the /api/* subtree behaviors (staging dashboard only):
+  # caching disabled, forward cookies/headers/query/methods to the ALB so
+  # host-only SameSite=Lax session cookies and CSRF headers work same-origin.
+  # Both are explicit so a bare /api never falls through to the default S3
+  # behavior, and neither has an error-response override, so API 401/403/404
+  # stay JSON. The SPA fallback function is on the default behavior only.
+  dynamic "ordered_cache_behavior" {
+    for_each = var.environment == "staging" && each.key == "dashboard" ? ["/api", "/api/*"] : []
+    content {
+      path_pattern           = ordered_cache_behavior.value
+      allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+      cached_methods         = ["GET", "HEAD"]
+      target_origin_id       = "${var.environment}-dashboard-api-alb"
+      viewer_protocol_policy = "redirect-to-https"
+      compress               = true
+
+      cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+      origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_and_cloudfront.id
+    }
   }
 
   restrictions {
@@ -1682,19 +1754,6 @@ resource "aws_cloudfront_distribution" "frontend" {
     acm_certificate_arn            = var.enable_custom_domain_aliases ? aws_acm_certificate.cloudfront.arn : null
     ssl_support_method             = var.enable_custom_domain_aliases ? "sni-only" : null
     minimum_protocol_version       = var.enable_custom_domain_aliases ? "TLSv1.2_2021" : "TLSv1"
-  }
-
-  # Static SPA fallback, staging dashboard only: missing keys return 403/404
-  # from the S3 origin and must render index.html at 200 so a deep-link refresh
-  # works. Gated on the staging identity AND the dashboard key so the survey
-  # frontend, the API edge and all prod-secondary distributions are unchanged.
-  dynamic "custom_error_response" {
-    for_each = var.environment == "staging" && each.key == "dashboard" ? [403, 404] : []
-    content {
-      error_code         = custom_error_response.value
-      response_code      = 200
-      response_page_path = "/index.html"
-    }
   }
 
   tags = merge(var.common_tags, { Name = "${var.name_prefix}-${each.key}", App = "ona-${each.key}" })

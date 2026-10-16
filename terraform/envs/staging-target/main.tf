@@ -78,8 +78,11 @@ module "platform" {
   }
   enable_custom_domain_aliases = var.enable_custom_domain_aliases
 
-  # Provider, sending, webhook, bootstrap and delivery gates stay off.
-  enable_owner_bootstrap       = false
+  # Provider, sending, webhook and delivery gates stay off. The existing
+  # bootstrap gate is enabled for staging only so the reviewed
+  # ensure_bootstrap_administrator path can create a synthetic administrator
+  # from staging-only SecureStrings; no real identity or provider credential.
+  enable_owner_bootstrap       = true
   enable_resend_credentials    = false
   enable_resend_webhook_ingest = false
   enable_survey_delivery_v2    = false

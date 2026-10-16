@@ -14,20 +14,6 @@ const CREDENTIAL_KEYS = Object.freeze([
   'RESEND_WEBHOOK_SECRET', 'RESEND_WEBHOOK_PREVIOUS_SECRET', 'AWS_SECRET_ACCESS_KEY',
 ]);
 const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z0-9_.-]+)\s*(?:=|:)/;
-const DOTENV_LINE = /^\s*(?:export\s+)?([A-Za-z0-9_.-]+)\s*(?:=|:)\s*(.*)$/;
-
-// Dotenv-compatible single-key read, so an identity value written with
-// `export`, spaces or a colon is still seen. Last assignment wins.
-function readDotenvValue(content, key) {
-  let value;
-  for (const line of String(content).split('\n')) {
-    const match = DOTENV_LINE.exec(line);
-    if (match && match[1] === key) {
-      value = match[2].trim().replace(/^["']|["']$/g, '').replace(/\s+#.*$/, '').trim();
-    }
-  }
-  return value;
-}
 
 // Dotenv-compatible key extraction: leading whitespace, optional `export `,
 // `=` (with optional spaces) or `:` (dotenv also accepts `KEY: value`). Returns
@@ -48,14 +34,8 @@ function validate(content) {
 }
 
 if (require.main === module) {
-  const [first, second, third] = process.argv.slice(2);
-  if (first === '--read-key' && second && third) {
-    try {
-      process.stdout.write(readDotenvValue(fs.readFileSync(third, 'utf8'), second) || '');
-    } catch {
-      process.exitCode = 1;
-    }
-  } else if (first) {
+  const destination = process.argv[2];
+  if (destination) {
     let input = '';
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => { input += chunk; });
@@ -67,12 +47,12 @@ if (require.main === module) {
         process.exitCode = 1;
         return;
       }
-      fs.writeFileSync(first, input, { mode: 0o600 });
+      fs.writeFileSync(destination, input, { mode: 0o600 });
     });
   } else {
-    console.error('usage: runtime-config-check.js <destination-path>   |   --read-key <key> <file>');
+    console.error('usage: runtime-config-check.js <destination-path>');
     process.exitCode = 2;
   }
 }
 
-module.exports = { credentialKeysIn, readDotenvValue, validate, ASSIGNMENT, DOTENV_LINE };
+module.exports = { credentialKeysIn, validate, ASSIGNMENT };

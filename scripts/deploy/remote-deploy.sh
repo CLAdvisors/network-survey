@@ -106,10 +106,9 @@ get_env_value() {
 
 # Fail closed if the downloaded runtime config claims the secure identity while
 # this host is not in secure mode, so a mismatched config cannot fall back onto
-# the legacy secret-to-disk path. The read uses the same dotenv grammar as the
-# credential check (export/spaces/colon), and the secure branch re-checks the
-# other direction before touching secrets.
-CONFIG_SECURE_RUNTIME=$(node "$RELEASE_DIR/deploy/runtime-config-check.js" --read-key SECURE_RUNTIME_ENABLED "$RELEASE_DIR/api/.env.prod" 2>/dev/null || true)
+# the legacy secret-to-disk path. The read uses the runtime's own dotenv parser,
+# so no supported assignment form can hide the identity; a read failure exits.
+CONFIG_SECURE_RUNTIME=$(node "$RELEASE_DIR/deploy/read-secure-identity.js" "$RELEASE_DIR/api") || { echo 'Unable to read the runtime secure identity; refusing' >&2; exit 1; }
 if [ "$CONFIG_SECURE_RUNTIME" = "true" ] && [ "$SECURE_RUNTIME" != true ]; then
   echo 'Runtime config declares the secure identity but this host is not secure; refusing' >&2
   exit 1

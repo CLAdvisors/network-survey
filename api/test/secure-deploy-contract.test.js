@@ -39,7 +39,8 @@ test('the secure deploy validates reference-only config before writing it and re
   assert.match(script, /aws s3 cp "s3:\/\/\$CONFIG_BUCKET\/\$CONFIG_KEY" - \| node "\$RELEASE_DIR\/deploy\/runtime-config-check\.js"/);
   assert.match(script, /test "\$CONFIG_SECURE_RUNTIME" = "true"/);
   assert.match(script, /Runtime config declares the secure identity but this host is not secure; refusing/);
-  assert.match(script, /--read-key SECURE_RUNTIME_ENABLED/);
+  assert.match(script, /read-secure-identity\.js" "\$RELEASE_DIR\/api"/);
+  assert.match(script, /Unable to read the runtime secure identity; refusing/);
   assert.match(script, /fi # legacy secret-to-disk path; never execute for a secure runtime environment/);
   const marker = JSON.parse(fs.readFileSync(path.join(root, 'scripts/deploy/CAPABILITIES.json'), 'utf8'));
   assert.equal(marker.transient_runtime_secrets, 1);
@@ -91,7 +92,7 @@ test('the PM2 app environment carries only non-secret keys', () => {
 });
 
 test('the deploy artifact packages every secure-runtime file', () => {
-  for (const file of ['api/secure-runtime.js', 'api/runtime-secrets.js', 'deploy/runtime-pool.js', 'deploy/secure-artifact-check.js', 'deploy/runtime-config-check.js', 'deploy/read-managed-password.js']) {
+  for (const file of ['api/secure-runtime.js', 'api/runtime-secrets.js', 'deploy/runtime-pool.js', 'deploy/secure-artifact-check.js', 'deploy/runtime-config-check.js', 'deploy/read-managed-password.js', 'deploy/read-secure-identity.js']) {
     assert.match(deployWorkflow, new RegExp(`test -f "\\$STAGE_DIR/${file.replace(/[.]/g, '\\.')}"`), `deploy.yml must assert ${file}`);
   }
 });

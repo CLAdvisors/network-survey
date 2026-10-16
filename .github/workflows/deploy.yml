@@ -222,6 +222,7 @@ jobs:
           test -f "$STAGE_DIR/deploy/secure-artifact-check.js"
           test -f "$STAGE_DIR/deploy/runtime-config-check.js"
           test -f "$STAGE_DIR/deploy/read-managed-password.js"
+          test -f "$STAGE_DIR/deploy/read-secure-identity.js"
           tar -czf api-release.tar.gz -C "$STAGE_DIR" .
 
       - name: Upload artifact to S3

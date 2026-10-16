@@ -133,8 +133,11 @@ for (const gate of [
 // runtime config. Only this root sets it true, so the retained source staging
 // (a separate root/module) keeps its existing deploy path.
 matches(moduleVars, /variable "secure_runtime_enabled"[\s\S]*?default\s*=\s*false/, 'secure runtime identity defaults off');
-has(moduleMain, '"SECURE_RUNTIME_ENABLED=${var.secure_runtime_enabled}"', 'runtime config carries the secure identity');
-has(moduleCloudInit, 'SECURE_RUNTIME_ENABLED=${secure_runtime_enabled}', 'deploy.env carries the secure identity');
+has(moduleMain, 'var.secure_runtime_enabled ? ["SECURE_RUNTIME_ENABLED=true"] : []', 'runtime config stamps the secure identity only when enabled');
+has(moduleCloudInit, 'if [ "${secure_runtime_enabled}" = "true" ]; then', 'deploy.env stamps the secure identity only when enabled');
+has(moduleCloudInit, 'echo "SECURE_RUNTIME_ENABLED=true" >> "$SERVICE_DIR/deploy.env"', 'deploy.env gains the flag line');
+hasNot(moduleMain, 'SECURE_RUNTIME_ENABLED=false', 'no false identity line drifts prod-secondary config');
+hasNot(moduleCloudInit, 'SECURE_RUNTIME_ENABLED=false', 'no false identity line drifts prod-secondary user_data');
 matches(targetMain, /secure_runtime_enabled\s+=\s+true/, 'target staging stamps the secure identity');
 hasNot(prodMain, 'secure_runtime_enabled', 'prod-secondary inherits the secure-off default');
 hasNot(read('terraform/envs/staging/main.tf'), 'secure_runtime_enabled', 'legacy source staging never stamps the secure identity');

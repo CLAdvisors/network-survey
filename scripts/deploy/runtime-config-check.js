@@ -13,10 +13,11 @@ const CREDENTIAL_KEYS = Object.freeze([
   'DB_PASSWORD', 'SESSION_SECRET', 'RESEND_API_KEY', 'RESEND_KEY',
   'RESEND_WEBHOOK_SECRET', 'RESEND_WEBHOOK_PREVIOUS_SECRET', 'AWS_SECRET_ACCESS_KEY',
 ]);
-const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z0-9_.-]+)\s*=/;
+const ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z0-9_.-]+)\s*(?:=|:)/;
 
 // Dotenv-compatible key extraction: leading whitespace, optional `export `,
-// optional spaces around `=`. Returns the credential keys that appear.
+// `=` (with optional spaces) or `:` (dotenv also accepts `KEY: value`). Returns
+// the credential keys that appear.
 function credentialKeysIn(content) {
   const found = new Set();
   for (const line of String(content).split('\n')) {

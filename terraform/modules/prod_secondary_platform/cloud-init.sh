@@ -166,8 +166,12 @@ CONFIG_KEY=${config_key}
 ARTIFACTS_BUCKET=${artifacts_bucket}
 AWS_DEFAULT_REGION=${aws_region}
 ENVIRONMENT=${environment}
-SECURE_RUNTIME_ENABLED=${secure_runtime_enabled}
 EOF
+# Only the target secure-runtime root stamps this; every legacy environment keeps
+# a deploy.env with no flag line.
+if [ "${secure_runtime_enabled}" = "true" ]; then
+  echo "SECURE_RUNTIME_ENABLED=true" >> "$SERVICE_DIR/deploy.env"
+fi
 chown ubuntu:ubuntu "$SERVICE_DIR/deploy.env"
 chmod 0640 "$SERVICE_DIR/deploy.env"
 

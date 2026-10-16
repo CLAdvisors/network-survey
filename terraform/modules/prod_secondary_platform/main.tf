@@ -55,7 +55,7 @@ locals {
     survey    = "network-survey-${var.environment}-survey-${var.account_id}"
   }
 
-  runtime_config = join("\n", [
+  runtime_config = join("\n", concat([
     "ENVIRONMENT=${var.environment}",
     "DB_NAME=${var.db_name}",
     "DB_HOST=${aws_db_instance.postgres.address}",
@@ -109,7 +109,7 @@ locals {
     "CLA_PRODUCTION_CUTOVER=false",
     "PUBLIC_TRAFFIC_ENABLED=${var.enable_public_aws_endpoints}",
     "",
-  ])
+  ], var.secure_runtime_enabled ? ["SECURE_RUNTIME_ENABLED=true"] : []))
 
   # Interface endpoints are the staging cost lever. When disabled, AWS-service
   # traffic leaves through the single NAT while the S3 gateway endpoint stays;

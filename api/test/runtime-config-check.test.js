@@ -17,12 +17,15 @@ test('accepts a reference-only config and rejects every inline credential form',
     'export DB_PASSWORD=synthetic-test-value',
     '   DB_PASSWORD = synthetic-test-value',
     '\tSESSION_SECRET=synthetic-test-value',
+    'DB_PASSWORD: synthetic-test-value',
+    'SESSION_SECRET: synthetic-test-value',
     'RESEND_API_KEY=synthetic-test-value',
     'DB_PASSWORD=',
   ]) {
     assert.match(validate(`${line}\nOTHER=value\n`), /inline credential keys/, `must reject: ${JSON.stringify(line)}`);
   }
   assert.deepEqual(credentialKeysIn('export DB_PASSWORD = x\n'), ['DB_PASSWORD']);
+  assert.deepEqual(credentialKeysIn('DB_PASSWORD: x\n'), ['DB_PASSWORD']);
   assert.deepEqual(credentialKeysIn('DB_PASSWORD_EXPECTED=x\n'), []);
 });
 

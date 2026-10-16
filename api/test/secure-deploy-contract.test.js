@@ -38,6 +38,7 @@ test('the secure deploy validates reference-only config before writing it and re
   assert.match(script, /RELEASE_CAPABILITY_ARGS\+=\(--require-transient-runtime-secrets --require-alb-live-health\)/);
   assert.match(script, /aws s3 cp "s3:\/\/\$CONFIG_BUCKET\/\$CONFIG_KEY" - \| node "\$RELEASE_DIR\/deploy\/runtime-config-check\.js"/);
   assert.match(script, /test "\$\(get_env_value SECURE_RUNTIME_ENABLED\)" = "true"/);
+  assert.match(script, /Runtime config declares the secure identity but this host is not secure; refusing/);
   assert.match(script, /fi # legacy secret-to-disk path; never execute for a secure runtime environment/);
   const marker = JSON.parse(fs.readFileSync(path.join(root, 'scripts/deploy/CAPABILITIES.json'), 'utf8'));
   assert.equal(marker.transient_runtime_secrets, 1);
@@ -63,8 +64,9 @@ test('every deploy-invoked query resolves the DB credential through the managed 
 });
 
 test('secure staging and prod-secondary both serve /live before traffic is trusted', () => {
-  assert.match(script, /live_ok\(\) \{\n  case "\$ENVIRONMENT" in\n    prod-secondary\|staging\)/);
+  assert.match(script, /live_ok\(\) \{\n  if \[ "\$ENVIRONMENT" != "prod-secondary" \] && \[ "\$SECURE_RUNTIME" != true \]; then\n    return 0\n  fi/);
   assert.equal((script.match(/\blive_ok &&/g) || []).length, 2, 'both the deploy and restore health predicates check /live');
+  assert.equal(script.includes('prod-secondary|staging'), false, 'legacy source staging is not a name-based /live trigger');
 });
 
 test('the PM2 app environment carries only non-secret keys', () => {

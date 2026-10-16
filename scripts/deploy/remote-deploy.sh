@@ -71,15 +71,13 @@ run_pm2() {
 }
 
 # /live is a dependency-free process signal. prod-secondary and secure staging
-# hosts must serve it before traffic is trusted; legacy environments keep their
-# existing /health-only check.
+# hosts must serve it before traffic is trusted; every legacy environment
+# (including frozen source staging) keeps its existing /health-only check.
 live_ok() {
-  case "$ENVIRONMENT" in
-    prod-secondary|staging)
-      curl -fsS --connect-timeout 2 --max-time 5 http://localhost:3000/live >/dev/null 2>&1 ;;
-    *)
-      return 0 ;;
-  esac
+  if [ "$ENVIRONMENT" != "prod-secondary" ] && [ "$SECURE_RUNTIME" != true ]; then
+    return 0
+  fi
+  curl -fsS --connect-timeout 2 --max-time 5 http://localhost:3000/live >/dev/null 2>&1
 }
 
 echo "==> Installing release $REVISION to $RELEASE_DIR"
@@ -105,6 +103,15 @@ chmod 600 "$RELEASE_DIR/api/.env.prod"
 get_env_value() {
   grep "^$1=" "$RELEASE_DIR/api/.env.prod" | cut -d= -f2-
 }
+
+# Fail closed if the downloaded runtime config claims the secure identity while
+# this host is not in secure mode, so a mismatched config cannot fall back onto
+# the legacy secret-to-disk path. The secure branch re-checks the other
+# direction before touching secrets.
+if [ "$(get_env_value SECURE_RUNTIME_ENABLED || true)" = "true" ] && [ "$SECURE_RUNTIME" != true ]; then
+  echo 'Runtime config declares the secure identity but this host is not secure; refusing' >&2
+  exit 1
+fi
 
 get_secret_from_ssm() {
   local parameter_env_key="$1"

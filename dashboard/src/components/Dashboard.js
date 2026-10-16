@@ -1,6 +1,6 @@
 import React from "react";
 import { matchPath, useLocation, useNavigate } from "react-router-dom";
-import { Alert, Box, Button, CircularProgress, Snackbar, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, Snackbar, Stack, Typography } from "@mui/material";
 import RespondentTable from "./RespondentTable";
 import api from "../api/axios";
 import QuestionTable from "./QuestionTable";
@@ -22,6 +22,15 @@ import { responseRateSummary } from "./surveyResponseRate";
 import { surveyOperationGeneration } from "./useSurveyOperationState";
 
 const WORKSPACE_TABS = ['overview', 'content', 'respondents', 'email'];
+
+// The visible overview campaign: the authoritative launch record once the
+// lifecycle fetch has loaded (even when it confirms there is no campaign),
+// otherwise the survey-list snapshot while that fetch is pending.
+export const selectOverviewCampaign = (launchInfo, survey) => (
+  launchInfo?.loaded
+    ? launchInfo.latest ?? null
+    : (survey?.latestLaunch || survey?.latest_launch || null)
+);
 
 // Bounded route parsing: only the survey list "/" and a well-formed
 // "/surveys/:id" or "/surveys/:id/:tab" workspace are recognized. Extra
@@ -80,7 +89,7 @@ const Dashboard = () => {
   const [operationsBySurvey, setOperationsBySurvey] = React.useState({});
   const [launchSignal, setLaunchSignal] = React.useState(0);
   const [lifecycleRefreshToken, setLifecycleRefreshToken] = React.useState(0);
-  const [launchInfo, setLaunchInfo] = React.useState({ latest: null, error: '', loading: false });
+  const [launchInfo, setLaunchInfo] = React.useState({ latest: null, error: '', loading: false, loaded: false });
   const surveyRequest = React.useRef(0);
   const relatedRequest = React.useRef(0);
   const selectionRef = React.useRef(null);
@@ -129,7 +138,7 @@ const Dashboard = () => {
       setRespondentRevision(null);
       setRespondentLoading(Boolean(next) && canViewSensitiveSurveyData(next));
       setRespondentError(null);
-      setLaunchInfo({ latest: null, error: '', loading: false });
+      setLaunchInfo({ latest: null, error: '', loading: false, loaded: false });
       setLaunchSignal(0);
     }
     selectionRef.current = nextId;
@@ -369,7 +378,7 @@ const Dashboard = () => {
       node: (
         <SurveyOverviewPanel
           survey={selectSurvey}
-          campaign={launchInfo.latest || selectSurvey.latestLaunch || selectSurvey.latest_launch}
+          campaign={selectOverviewCampaign(launchInfo, selectSurvey)}
           campaignLoading={launchInfo.loading}
           campaignError={launchInfo.error}
           canOpenRespondents={showRespondentsPanel}
@@ -475,7 +484,8 @@ const Dashboard = () => {
   const workspaceMissing = showWorkspace && surveyList.loaded && !surveyList.error && Array.isArray(surveyData)
     && !surveyData.some((survey) => surveyId(survey) === route.surveyId);
   const workspaceReady = showWorkspace && Boolean(selectSurvey) && selectedId === route.surveyId && !workspaceMissing;
-  const workspaceLoading = showWorkspace && !workspaceReady && !workspaceMissing;
+  const workspaceListError = showWorkspace && Boolean(surveyList.error) && !surveyData;
+  const workspaceLoading = showWorkspace && !workspaceReady && !workspaceMissing && !workspaceListError;
   const listLoading = !surveyList.loaded && !surveyList.error;
 
   return (
@@ -524,6 +534,17 @@ const Dashboard = () => {
       )}
 
       {(showNotFound || workspaceMissing) && <NotFoundPanel onBack={handleBack} />}
+
+      {workspaceListError && (
+        <Box data-testid="workspace-list-error" sx={{ maxWidth: 520, mx: 'auto', mt: 8, textAlign: 'center' }}>
+          <Typography component="h1" sx={{ fontSize: 24, fontWeight: 700, color: '#233431' }}>Survey workspace unavailable</Typography>
+          <Typography sx={{ fontSize: 13, color: '#647570', mt: 1.5, lineHeight: 1.7 }}>{surveyList.error}</Typography>
+          <Stack direction="row" spacing={1.5} justifyContent="center" sx={{ mt: 3 }}>
+            <Button variant="contained" onClick={retrySurveyList} sx={{ bgcolor: '#147d78', '&:hover': { bgcolor: '#105e5b' }, textTransform: 'none' }}>Retry</Button>
+            <Button variant="outlined" onClick={handleBack} sx={{ textTransform: 'none' }}>Back to surveys</Button>
+          </Stack>
+        </Box>
+      )}
 
       {workspaceLoading && (
         <Box sx={{ minHeight: 320, display: 'grid', placeItems: 'center' }}>

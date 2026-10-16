@@ -92,11 +92,18 @@ const hasAnyValue = (source, keys) => Boolean(source) && keys.some((key) => sour
 // a zero or a Complete state from absent data.
 export const launchCountAvailability = (launch) => {
   const source = launch?.counts || launch?.dispatchCounts || launch?.dispatch_counts || launch || {};
+  const present = (...keys) => hasAnyValue(source, keys);
   return {
-    target: hasAnyValue(source, ['target', 'targetCount', 'target_count', 'total']),
-    accepted: hasAnyValue(source, ['accepted', 'acceptedCount', 'accepted_count']),
-    processing: hasAnyValue(source, ['pending', 'pendingCount', 'pending_count', 'leased', 'leasedCount', 'leased_count', 'retryWait', 'retry_wait', 'retryWaitCount', 'retry_wait_count', 'sending', 'retrying']),
-    notConfirmed: hasAnyValue(source, ['failed', 'failedCount', 'failed_count', 'uncertain', 'uncertainCount', 'uncertain_count', 'cancelled', 'cancelledCount', 'cancelled_count']),
+    target: present('target', 'targetCount', 'target_count', 'total'),
+    accepted: present('accepted', 'acceptedCount', 'accepted_count'),
+    // Processing/not-confirmed summaries aren't shown unless every component is
+    // present; a missing component is unknown, not zero.
+    processing: present('pending', 'pendingCount', 'pending_count')
+      && present('leased', 'leasedCount', 'leased_count', 'sending')
+      && present('retryWait', 'retry_wait', 'retryWaitCount', 'retry_wait_count', 'retrying'),
+    notConfirmed: present('failed', 'failedCount', 'failed_count')
+      && present('uncertain', 'uncertainCount', 'uncertain_count')
+      && present('cancelled', 'cancelledCount', 'cancelled_count'),
   };
 };
 
@@ -109,7 +116,7 @@ export const providerOutcomeAvailability = (launch) => {
   const present = (keys) => sources.some((source) => hasAnyValue(source, keys));
   return {
     delivered: present(['delivered', 'deliveredCount', 'delivered_count', 'providerDelivered', 'provider_delivered', 'providerDeliveredCount', 'provider_delivered_count']),
-    waiting: present(['waiting', 'waitingCount', 'waiting_count', 'providerWaiting', 'provider_waiting', 'providerWaitingCount', 'provider_waiting_count', 'acceptedUnverified', 'accepted_unverified', 'acceptedUnverifiedCount', 'accepted_unverified_count']),
+    waiting: present(['waiting', 'waitingCount', 'waiting_count', 'providerWaiting', 'provider_waiting', 'providerWaitingCount', 'provider_waiting_count']),
     problems: present(['problems', 'problemCount', 'problem_count', 'providerProblem', 'provider_problem', 'providerProblemCount', 'provider_problem_count']),
   };
 };

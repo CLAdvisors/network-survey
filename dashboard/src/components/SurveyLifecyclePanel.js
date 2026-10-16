@@ -91,7 +91,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0, onLau
         setLaunches(next);
         setLaunchSurveyId(id);
         setError('');
-        onLaunchSummary?.({ latest: next[0] || null, latestLaunchId: surveyId(next[0] || {}), error: '', loading: false });
+        onLaunchSummary?.({ latest: next[0] || null, latestLaunchId: surveyId(next[0] || {}), error: '', loading: false, loaded: true });
         await onSurveyRefresh?.(id, expectedGeneration);
       }
       return next;

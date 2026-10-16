@@ -68,7 +68,7 @@ test('does not render an incomplete campaign as Complete or as zero', () => {
 test('renders processing counts and delivery indicators only when provided', () => {
   renderPanel({
     id: 'l4', kind: 'initial', created_at: '2026-10-12T13:30:00Z',
-    counts: { target: 13, accepted: 8, pending: 1, retry_wait: 1, failed: 1, uncertain: 1, cancelled: 1 },
+    counts: { target: 13, accepted: 8, pending: 1, leased: 0, retry_wait: 1, failed: 1, uncertain: 1, cancelled: 1 },
     provider_outcome_counts: { delivered_count: 2, provider_waiting_count: 2, provider_problem_count: 3, delayed_count: 1 },
   });
   expect(screen.getByTestId('campaign-state')).toHaveTextContent('Processing');
@@ -76,6 +76,28 @@ test('renders processing counts and delivery indicators only when provided', () 
   expect(screen.getByText('3 not confirmed sent')).toBeInTheDocument();
   expect(screen.getByText('Delivery confirmations')).toBeInTheDocument();
   expect(screen.getByText('Awaiting final result')).toBeInTheDocument();
+});
+
+test('does not present an accepted/unverified subset as awaiting-final-result', () => {
+  renderPanel({
+    id: 'l6', kind: 'initial', created_at: '2026-10-12T13:30:00Z',
+    counts: fullCounts,
+    // Distinct waiting count absent; accepted-unverified is a subset, not the total.
+    provider_outcome_counts: { sent_count: 10, accepted_unverified_count: 2, provider_problem_count: 0, delivered_count: 10 },
+  });
+  expect(screen.queryByText('2 awaiting final result')).not.toBeInTheDocument();
+  expect(screen.getByText('Awaiting final result unavailable')).toBeInTheDocument();
+});
+
+test('does not report processing totals when component counts are incomplete', () => {
+  renderPanel({
+    id: 'l7', kind: 'initial', created_at: '2026-10-12T13:30:00Z',
+    // pending present, but leased/retry-wait missing: the true total is unknown.
+    counts: { target: 10, accepted: 10, pending: 1 },
+    provider_outcome_counts: { delivered_count: 10, provider_waiting_count: 0, provider_problem_count: 0 },
+  });
+  expect(screen.queryByText(/processing$/)).not.toBeInTheDocument();
+  expect(screen.getByText('processing unavailable')).toBeInTheDocument();
 });
 
 test('hides respondent and email destinations the viewer cannot open', () => {

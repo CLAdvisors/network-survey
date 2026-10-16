@@ -6,7 +6,7 @@ import { ThemeProvider as EmotionThemeProvider } from '@emotion/react';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
-import Dashboard, { parseDashboardRoute } from './Dashboard';
+import Dashboard, { parseDashboardRoute, selectOverviewCampaign } from './Dashboard';
 import api from '../api/axios';
 import { advanceSurveyOperationGeneration } from './useSurveyOperationState';
 
@@ -434,4 +434,31 @@ test('shows a durable, retryable list error rather than an authoritative zero', 
 
   await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await screen.findByRole('button', { name: 'Select Alpha' })).toBeInTheDocument();
+});
+
+test('shows a durable workspace error with retry when the survey list cannot load', async () => {
+  let surveyCalls = 0;
+  api.get.mockImplementation((url) => {
+    if (url === '/surveys') {
+      surveyCalls += 1;
+      return surveyCalls === 1 ? Promise.reject(new Error('network down')) : Promise.resolve({ data: { surveys } });
+    }
+    if (url.startsWith('/listQuestions')) return Promise.resolve({ data: { questions: [] } });
+    return Promise.resolve({ data: [] });
+  });
+  renderDashboard();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Open survey-a' }));
+  expect(await screen.findByTestId('workspace-list-error')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByTestId('survey-workspace')).toBeInTheDocument();
+});
+
+test('uses the authoritative campaign once loaded, even when it confirms none', () => {
+  expect(selectOverviewCampaign({ loaded: true, latest: null }, { latestLaunch: { id: 'stale-list' } })).toBeNull();
+  expect(selectOverviewCampaign({ loaded: true, latest: { id: 'fresh' } }, { latestLaunch: { id: 'stale-list' } })).toEqual({ id: 'fresh' });
+  expect(selectOverviewCampaign({ loaded: false }, { latestLaunch: { id: 'list' } })).toEqual({ id: 'list' });
+  expect(selectOverviewCampaign({ loaded: false }, { latest_launch: { id: 'list-snake' } })).toEqual({ id: 'list-snake' });
+  expect(selectOverviewCampaign(undefined, undefined)).toBeNull();
 });

@@ -11,12 +11,15 @@ import PeopleIcon from '@mui/icons-material/PeopleAltOutlined';
 import HubIcon from '@mui/icons-material/Hub';
 import LockIcon from '@mui/icons-material/LockOutlined';
 import { STUDIO, eyebrowSx, studioPanelSx } from '../theme/studioTokens';
-import { launchCounts, providerCounts, formatDateTime, lifecycleStatus } from './surveyLifecycle';
+import {
+  formatDateTime, launchCountAvailability, launchCounts, launchStatus,
+  lifecycleStatus, providerCounts, providerOutcomeAvailability,
+} from './surveyLifecycle';
 import { responseRateSummary } from './surveyResponseRate';
 
 const Arrow = () => <ArrowForwardIcon sx={{ fontSize: 13 }} />;
 
-const ResponsesVisual = ({ summary }) => {
+const ResponsesVisual = ({ summary, canOpenRespondents }) => {
   const { eligibleCount, completedCount, responseRatePercent } = summary;
   const awaiting = Math.max(eligibleCount - completedCount, 0);
   const rateAvailable = eligibleCount > 0 && responseRatePercent !== null;
@@ -29,53 +32,55 @@ const ResponsesVisual = ({ summary }) => {
     <Box sx={{ ...studioPanelSx, bgcolor: '#f0f8f7', border: 0, p: { xs: '21px', md: '24px 28px' }, minWidth: 0 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2}>
         <Typography component="h2" sx={{ fontSize: 15, fontWeight: 600, color: STUDIO.ink }}>Responses</Typography>
-        <Button
-          size="small"
-          aria-label="View respondents"
-          onClick={() => summary.onViewRespondents?.()}
-          sx={{ minWidth: 27, width: 27, height: 27, p: 0, borderRadius: '50%', border: '1px solid #d3e8e5', color: STUDIO.ink }}
-        >
-          <Arrow />
-        </Button>
+        {canOpenRespondents && (
+          <Button
+            size="small"
+            aria-label="View respondents"
+            onClick={() => summary.onViewRespondents?.()}
+            sx={{ minWidth: 27, width: 27, height: 27, p: 0, borderRadius: '50%', border: '1px solid #d3e8e5', color: STUDIO.ink }}
+          >
+            <Arrow />
+          </Button>
+        )}
       </Stack>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={{ xs: 2, sm: 4 }} alignItems="center" sx={{ pt: 2 }}>
+      <Stack direction="row" spacing={{ xs: 1.75, md: 4 }} alignItems="center" sx={{ pt: 2 }}>
         <Box
           role="img"
           aria-label={graphicLabel}
           sx={{
-            position: 'relative', width: 140, height: 140, flexShrink: 0, borderRadius: '50%',
+            position: 'relative', width: { xs: 112, md: 140 }, height: { xs: 112, md: 140 }, flexShrink: 0, borderRadius: '50%',
             background: `conic-gradient(${STUDIO.brand} 0 ${percent}%, #dfebea ${percent}% 100%)`,
             display: 'grid', placeItems: 'center', transform: 'rotate(-90deg)',
           }}
         >
-          <Box sx={{ position: 'absolute', inset: '11px', borderRadius: '50%', bgcolor: '#f0f8f7' }} />
+          <Box sx={{ position: 'absolute', inset: { xs: '9px', md: '11px' }, borderRadius: '50%', bgcolor: '#f0f8f7' }} />
           <Box sx={{ position: 'relative', transform: 'rotate(90deg)', textAlign: 'center' }}>
-            <Typography component="p" sx={{ fontSize: 40, lineHeight: 1.05, fontWeight: 600, letterSpacing: '-2px', color: STUDIO.ink }}>
-              {rateAvailable ? responseRatePercent : '—'}<Box component="span" sx={{ fontSize: 20, fontWeight: 500, ml: '1px' }}>{rateAvailable ? '%' : ''}</Box>
+            <Typography component="p" sx={{ fontSize: { xs: 30, md: 40 }, lineHeight: 1.05, fontWeight: 600, letterSpacing: '-2px', color: STUDIO.ink }}>
+              {rateAvailable ? responseRatePercent : '—'}<Box component="span" sx={{ fontSize: { xs: 16, md: 20 }, fontWeight: 500, ml: '1px' }}>{rateAvailable ? '%' : ''}</Box>
             </Typography>
             <Typography sx={{ fontSize: 10, color: STUDIO.muted }}>
               {eligibleCount === 0 ? 'no eligible respondents' : rateAvailable ? 'response rate' : 'rate unavailable'}
             </Typography>
           </Box>
         </Box>
-        <Box sx={{ flex: 1, minWidth: 0, maxWidth: 300 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5, gap: 1 }}>
             <Stack direction="row" alignItems="center" spacing={1}>
-              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: STUDIO.brand }} />
-              <Typography sx={{ fontSize: 12, color: STUDIO.muted }}>Responded</Typography>
+              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: STUDIO.brand, flexShrink: 0 }} />
+              <Typography sx={{ fontSize: { xs: 11, md: 12 }, color: STUDIO.muted }}>Responded</Typography>
             </Stack>
-            <Typography sx={{ fontSize: 20, fontWeight: 600, color: STUDIO.ink }}>{completedCount}</Typography>
+            <Typography sx={{ fontSize: { xs: 18, md: 20 }, fontWeight: 600, color: STUDIO.ink }}>{completedCount}</Typography>
           </Stack>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5, gap: 1 }}>
             <Stack direction="row" alignItems="center" spacing={1}>
-              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#c2cfcd' }} />
-              <Typography sx={{ fontSize: 12, color: STUDIO.muted }}>Awaiting response</Typography>
+              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#c2cfcd', flexShrink: 0 }} />
+              <Typography sx={{ fontSize: { xs: 11, md: 12 }, color: STUDIO.muted }}>Awaiting response</Typography>
             </Stack>
-            <Typography sx={{ fontSize: 20, fontWeight: 600, color: STUDIO.ink }}>{awaiting}</Typography>
+            <Typography sx={{ fontSize: { xs: 18, md: 20 }, fontWeight: 600, color: STUDIO.ink }}>{awaiting}</Typography>
           </Stack>
-          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ borderTop: `1px solid #dfeae8`, pt: 1.5 }}>
+          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ borderTop: '1px solid #dfeae8', pt: 1.5 }}>
             <PeopleIcon sx={{ fontSize: 14, color: STUDIO.muted }} />
-            <Typography sx={{ fontSize: 11, color: STUDIO.muted }}>{eligibleCount} respondents</Typography>
+            <Typography sx={{ fontSize: { xs: 10, md: 11 }, color: STUDIO.muted }}>{eligibleCount} respondents</Typography>
           </Stack>
         </Box>
       </Stack>
@@ -83,8 +88,9 @@ const ResponsesVisual = ({ summary }) => {
   );
 };
 
-const AttentionCard = ({ problems, rawEmails, onReview }) => {
-  const hasProblems = problems > 0;
+const AttentionCard = ({ problems, problemsAvailable, rawEmails, onReview, canOpenEmail }) => {
+  const hasProblems = problemsAvailable && problems > 0;
+  const neutral = !problemsAvailable;
   return (
     <Box
       component="section"
@@ -96,30 +102,32 @@ const AttentionCard = ({ problems, rawEmails, onReview }) => {
         display: 'grid', gridTemplateColumns: '1fr auto', gridTemplateRows: 'auto 1fr auto', gap: '10px 8px',
       }}
     >
-      <Box sx={{ gridColumn: 2, gridRow: '1 / 3', display: 'grid', placeItems: 'center', width: 45, height: 45, borderRadius: '13px', bgcolor: hasProblems ? '#fff0d5' : '#eaf6f3', color: hasProblems ? '#926020' : '#28764d' }}>
-        {hasProblems ? <WarningAmberIcon sx={{ fontSize: 24 }} /> : <CheckCircleIcon sx={{ fontSize: 24 }} />}
+      <Box sx={{ gridColumn: 2, gridRow: '1 / 3', display: 'grid', placeItems: 'center', width: 45, height: 45, borderRadius: '13px', bgcolor: hasProblems ? '#fff0d5' : '#eaf6f3', color: hasProblems ? '#926020' : neutral ? STUDIO.muted : '#28764d' }}>
+        {hasProblems || neutral ? <WarningAmberIcon sx={{ fontSize: 24 }} /> : <CheckCircleIcon sx={{ fontSize: 24 }} />}
       </Box>
       <Box sx={{ gridColumn: 1, gridRow: '1 / 3' }}>
         <Typography sx={{ ...eyebrowSx, color: '#8a652d', fontSize: 9 }}>LATEST CAMPAIGN</Typography>
-        <Typography component="p" sx={{ fontSize: hasProblems ? 48 : 26, lineHeight: 1.05, fontWeight: 500, letterSpacing: hasProblems ? '-3px' : '-1px', color: STUDIO.ink, my: '6px 0' }}>
-          {hasProblems ? problems : 'None'}
+        <Typography component="p" sx={{ fontSize: hasProblems ? { xs: 34, md: 48 } : { xs: 22, md: 26 }, lineHeight: 1.05, fontWeight: 500, letterSpacing: hasProblems ? '-3px' : '-1px', color: STUDIO.ink, my: '6px 0' }}>
+          {neutral ? 'Unavailable' : hasProblems ? problems : 'None'}
         </Typography>
-        <Typography sx={{ fontSize: 12, color: STUDIO.amberInk, maxWidth: 200, lineHeight: 1.6 }}>
-          {hasProblems ? `${rawEmails} with delivery problems` : 'No delivery problems reported'}
+        <Typography sx={{ fontSize: { xs: 10, md: 12 }, color: STUDIO.amberInk, maxWidth: 200, lineHeight: 1.6 }}>
+          {neutral ? 'Delivery problem data is unavailable' : hasProblems ? `${rawEmails} with delivery problems` : 'No delivery problems reported'}
         </Typography>
       </Box>
-      <Box
-        component="button"
-        type="button"
-        onClick={onReview}
-        sx={{
-          gridRow: 3, gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          border: 0, borderTop: `1px solid ${STUDIO.amberBorder}`, pt: '13px', bgcolor: 'transparent', cursor: 'pointer',
-          fontSize: 12, fontWeight: 600, color: '#654d27', font: 'inherit',
-        }}
-      >
-        Review emails <Arrow />
-      </Box>
+      {canOpenEmail && (
+        <Box
+          component="button"
+          type="button"
+          onClick={onReview}
+          sx={{
+            gridRow: 3, gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            border: 0, borderTop: `1px solid ${STUDIO.amberBorder}`, pt: '13px', bgcolor: 'transparent', cursor: 'pointer',
+            fontSize: 12, fontWeight: 600, color: '#654d27', font: 'inherit',
+          }}
+        >
+          Review emails <Arrow />
+        </Box>
+      )}
     </Box>
   );
 };
@@ -146,25 +154,39 @@ const NextStepCard = ({ closed, onViewResults, onReviewEmails }) => (
   </Box>
 );
 
-const Metric = ({ label, value, icon }) => (
+const Metric = ({ label, value, icon, available = true }) => (
   <Box sx={{ minWidth: 0 }}>
     {icon && <Box sx={{ width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center', bgcolor: '#f2f2f2', color: '#666', mb: 1.5 }}>{icon}</Box>}
-    <Typography component="p" sx={{ fontSize: 34, lineHeight: 1.1, letterSpacing: '-1.6px', fontWeight: 600, color: STUDIO.ink }}>{value}</Typography>
-    <Typography sx={{ fontSize: 11, color: STUDIO.muted, lineHeight: 1.6, maxWidth: 150, mt: 0.75 }}>{label}</Typography>
+    <Typography component="p" sx={{ fontSize: 34, lineHeight: 1.1, letterSpacing: '-1.6px', fontWeight: 600, color: available ? STUDIO.ink : STUDIO.muted }}>{available ? value : '—'}</Typography>
+    <Typography sx={{ fontSize: 11, color: STUDIO.muted, lineHeight: 1.6, maxWidth: 150, mt: 0.75 }}>{available ? label : `${label} unavailable`}</Typography>
   </Box>
 );
 
-const EmailActivity = ({ survey, onRefresh, onViewEmailHistory, onReviewEmails, refreshToken = 0 }) => {
-  const latest = survey.latestLaunch || survey.latest_launch;
-  const counts = launchCounts(latest);
-  const outcomes = providerCounts(latest);
+const campaignState = (campaign, dispatch) => {
+  if (!dispatch.accepted && !dispatch.target) return 'Unavailable';
+  const status = launchStatus(campaign);
+  if (status === 'processing') return 'Processing';
+  if (status === 'queued') return 'Queued';
+  if (status === 'completed_with_issues') return 'Completed with issues';
+  if (status === 'completed') return 'Complete';
+  return 'In progress';
+};
+
+const EmailActivity = ({ campaign, campaignLoading, campaignError, onRefresh, onViewEmailHistory, canOpenEmail }) => {
+  const counts = launchCounts(campaign);
+  const outcomes = providerCounts(campaign);
+  const dispatch = launchCountAvailability(campaign);
+  const provider = providerOutcomeAvailability(campaign);
   const processing = counts.pending + counts.leased + counts.retryWait;
   const notConfirmed = counts.failed + counts.uncertain + counts.cancelled;
-  const isReminder = latest?.kind === 'reminder';
+  const isReminder = campaign?.kind === 'reminder';
   const kindLabel = isReminder ? 'Reminder' : 'Initial invitations';
-  const created = latest ? formatDateTime(latest.createdAt || latest.created_at) : '';
-  const state = !latest ? 'No campaign' : processing > 0 ? 'Processing' : notConfirmed > 0 ? 'Not confirmed' : 'Complete';
-  const submittedPercent = counts.target > 0 ? Math.min(100, Math.round((counts.accepted / counts.target) * 100)) : 0;
+  const rawEmails = isReminder ? 'reminders' : 'emails';
+  const created = campaign ? formatDateTime(campaign.createdAt || campaign.created_at) : '';
+  const dateLabel = created && created !== '—' ? ` · ${created}` : '';
+  const state = campaignState(campaign, dispatch);
+  const submittedReady = dispatch.accepted && dispatch.target;
+  const submittedPercent = submittedReady && counts.target > 0 ? Math.min(100, Math.round((counts.accepted / counts.target) * 100)) : 0;
 
   return (
     <Box component="section" aria-label="Email activity" sx={{ mt: { xs: 2.5, md: 3 } }}>
@@ -172,21 +194,29 @@ const EmailActivity = ({ survey, onRefresh, onViewEmailHistory, onReviewEmails, 
         <Box>
           <Typography component="h2" sx={{ fontSize: 17, fontWeight: 600, color: STUDIO.ink }}>Email activity</Typography>
           <Typography sx={{ fontSize: 11, color: STUDIO.muted, mt: 0.5 }}>
-            {latest ? `Latest campaign · ${kindLabel} · ${created}` : 'No campaign has been sent yet.'}
+            {campaign ? `Latest campaign · ${kindLabel}${dateLabel}` : 'No campaign has been sent yet.'}
           </Typography>
+          {campaignError && (
+            <Typography role="status" sx={{ fontSize: 11, color: STUDIO.red, mt: 0.5 }}>
+              Couldn’t refresh campaign data — showing the last known values.
+            </Typography>
+          )}
+          {!campaignError && campaignLoading && (
+            <Typography role="status" sx={{ fontSize: 11, color: STUDIO.muted, mt: 0.5 }}>Refreshing campaign data…</Typography>
+          )}
         </Box>
         <Button size="small" onClick={onRefresh} startIcon={<RefreshIcon sx={{ fontSize: 16 }} />} sx={{ color: STUDIO.ink, textTransform: 'none', fontSize: 11 }}>
           Refresh
         </Button>
       </Stack>
 
-      {!latest && (
+      {!campaign && (
         <Box sx={{ ...studioPanelSx, p: 3, color: STUDIO.muted, fontSize: 13 }}>
           Sending and delivery indicators appear here after an invitation campaign starts.
         </Box>
       )}
 
-      {latest && (
+      {campaign && (
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: { xs: 3, md: 4 } }}>
           <Box sx={{ minWidth: 0 }}>
             <Stack direction="row" alignItems="center" spacing={1}>
@@ -194,38 +224,40 @@ const EmailActivity = ({ survey, onRefresh, onViewEmailHistory, onReviewEmails, 
               <Typography component="h3" sx={{ fontSize: 12, fontWeight: 600, color: '#555' }}>Submitted for sending</Typography>
             </Stack>
             <Stack direction="row" alignItems="baseline" spacing={0.75} sx={{ my: '13px 14px' }}>
-              <Typography sx={{ fontSize: 36, lineHeight: 1.1, letterSpacing: '-1.8px', fontWeight: 600, color: STUDIO.ink }}>{counts.accepted}</Typography>
-              <Typography sx={{ fontSize: 15, color: '#999' }}>/ {counts.target}</Typography>
-              <Box component="span" sx={{ ml: 'auto', fontSize: 10, color: '#555', bgcolor: '#f0f7f5', px: 0.75, py: 0.5, borderRadius: '4px' }}>{state}</Box>
+              <Typography sx={{ fontSize: 36, lineHeight: 1.1, letterSpacing: '-1.8px', fontWeight: 600, color: submittedReady ? STUDIO.ink : STUDIO.muted }}>{submittedReady ? counts.accepted : '—'}</Typography>
+              <Typography sx={{ fontSize: 15, color: '#999' }}>/ {submittedReady ? counts.target : '—'}</Typography>
+              <Box component="span" data-testid="campaign-state" sx={{ ml: 'auto', fontSize: 10, color: '#555', bgcolor: '#f0f7f5', px: 0.75, py: 0.5, borderRadius: '4px' }}>{state}</Box>
             </Stack>
-            <Box role="img" aria-label={`${counts.accepted} of ${counts.target} ${isReminder ? 'reminders' : 'invitations'} submitted for sending`} sx={{ height: 7, bgcolor: '#eceeee', borderRadius: 8, overflow: 'hidden' }}>
+            <Box role="img" aria-label={submittedReady ? `${counts.accepted} of ${counts.target} ${isReminder ? 'reminders' : 'invitations'} submitted for sending` : 'Sending progress unavailable'} sx={{ height: 7, bgcolor: '#eceeee', borderRadius: 8, overflow: 'hidden' }}>
               <Box sx={{ width: `${submittedPercent}%`, height: '100%', bgcolor: STUDIO.brand, borderRadius: 8 }} />
             </Box>
             <Stack direction="row" flexWrap="wrap" gap={2} sx={{ mt: 1.5, fontSize: 11, color: STUDIO.muted }}>
-              <Stack direction="row" alignItems="center" spacing={0.75}><ScheduleIcon sx={{ fontSize: 12 }} />{processing} processing</Stack>
-              <Stack direction="row" alignItems="center" spacing={0.75}><CheckCircleIcon sx={{ fontSize: 12 }} />{notConfirmed} not confirmed sent</Stack>
+              <Stack direction="row" alignItems="center" spacing={0.75}><ScheduleIcon sx={{ fontSize: 12 }} />{dispatch.processing ? `${processing} processing` : 'processing unavailable'}</Stack>
+              <Stack direction="row" alignItems="center" spacing={0.75}><CheckCircleIcon sx={{ fontSize: 12 }} />{dispatch.notConfirmed ? `${notConfirmed} not confirmed sent` : 'not-confirmed unavailable'}</Stack>
             </Stack>
             <Typography sx={{ fontSize: 10, color: STUDIO.muted, mt: 1.5 }}>Provider accepted ≠ delivery confirmed</Typography>
           </Box>
 
           <Box
             aria-label="Independent delivery indicators"
-            sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2.5, borderLeft: { md: `1px solid #e7e7e7` }, pl: { md: '34px' } }}
+            sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2.5, borderLeft: { md: '1px solid #e7e7e7' }, pl: { md: '34px' } }}
           >
-            <Metric icon={<CheckCircleIcon sx={{ fontSize: 18 }} />} value={outcomes.delivered} label="Delivery confirmations" />
-            <Metric icon={<ScheduleIcon sx={{ fontSize: 18 }} />} value={outcomes.waiting} label="Awaiting final result" />
+            <Metric icon={<CheckCircleIcon sx={{ fontSize: 18 }} />} available={provider.delivered} value={outcomes.delivered} label="Delivery confirmations" />
+            <Metric icon={<ScheduleIcon sx={{ fontSize: 18 }} />} available={provider.waiting} value={outcomes.waiting} label="Awaiting final result" />
           </Box>
         </Box>
       )}
 
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, borderTop: `1px solid #ededed`, mt: 3, pt: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, borderTop: '1px solid #ededed', mt: 3, pt: 2 }}>
         <Typography sx={{ fontSize: 11, color: STUDIO.muted, maxWidth: 620, lineHeight: 1.7 }}>
           Submitted for sending means the email provider accepted the request; it is not a delivery confirmation. Delivery
           problem and delay reports can overlap other outcomes.
         </Typography>
-        <Button variant="text" size="small" onClick={onViewEmailHistory || onReviewEmails} endIcon={<Arrow />} sx={{ color: STUDIO.teal, fontWeight: 600, textTransform: 'none', whiteSpace: 'nowrap', fontSize: 11 }}>
-          Email history
-        </Button>
+        {canOpenEmail && (
+          <Button variant="text" size="small" onClick={onViewEmailHistory} endIcon={<Arrow />} sx={{ color: STUDIO.teal, fontWeight: 600, textTransform: 'none', whiteSpace: 'nowrap', fontSize: 11 }}>
+            Email history
+          </Button>
+        )}
       </Box>
     </Box>
   );
@@ -298,7 +330,20 @@ const DraftOverview = ({ survey, onGoToTab, onReviewLaunch, canLaunch = false })
   );
 };
 
-const SurveyOverviewPanel = ({ survey, onGoToTab, onViewResults, onRefresh, onReviewLaunch, canLaunch, lifecycleDetails, refreshToken = 0 }) => {
+const SurveyOverviewPanel = ({
+  survey,
+  campaign,
+  campaignLoading = false,
+  campaignError = '',
+  canOpenRespondents = false,
+  canOpenEmail = false,
+  onGoToTab,
+  onViewResults,
+  onRefresh,
+  onReviewLaunch,
+  canLaunch = false,
+  lifecycleDetails,
+}) => {
   if (!survey) return null;
   const status = lifecycleStatus(survey);
 
@@ -307,42 +352,47 @@ const SurveyOverviewPanel = ({ survey, onGoToTab, onViewResults, onRefresh, onRe
   }
 
   const summary = responseRateSummary(survey);
-  const latest = survey.latestLaunch || survey.latest_launch;
-  const outcomes = providerCounts(latest);
-  const isReminder = latest?.kind === 'reminder';
+  const activeCampaign = campaign || survey.latestLaunch || survey.latest_launch;
+  const outcomes = providerCounts(activeCampaign);
+  const provider = providerOutcomeAvailability(activeCampaign);
+  const isReminder = activeCampaign?.kind === 'reminder';
   const rawEmails = isReminder ? 'reminders' : 'emails';
   const closed = status === 'closed';
 
   return (
     <Box>
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0,1.75fr) minmax(260px,1fr)' }, gap: { xs: 2, md: '22px' }, mb: { xs: 3, md: '29px' } }}>
-        <ResponsesVisual summary={{ ...summary, onViewRespondents: () => onGoToTab('respondents') }} />
+        <ResponsesVisual summary={{ ...summary, onViewRespondents: () => onGoToTab('respondents') }} canOpenRespondents={canOpenRespondents} />
         {closed
           ? <NextStepCard closed onViewResults={onViewResults} onReviewEmails={() => onGoToTab('email')} />
-          : <AttentionCard problems={outcomes.problems} rawEmails={rawEmails} onReview={() => onGoToTab('email')} />}
+          : (
+            <AttentionCard
+              problems={outcomes.problems}
+              problemsAvailable={provider.problems}
+              rawEmails={rawEmails}
+              onReview={() => onGoToTab('email')}
+              canOpenEmail={canOpenEmail}
+            />
+          )}
       </Box>
 
       <EmailActivity
-        survey={survey}
-        refreshToken={refreshToken}
+        campaign={activeCampaign}
+        campaignLoading={campaignLoading}
+        campaignError={campaignError}
         onRefresh={onRefresh}
         onViewEmailHistory={() => onGoToTab('email')}
+        canOpenEmail={canOpenEmail}
       />
 
-      {!closed && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, borderTop: `1px solid #ededed`, mt: 3, pt: 2, color: STUDIO.muted }}>
-          <LockIcon sx={{ fontSize: 13 }} />
-          <Typography sx={{ fontSize: 11 }}>
-            Survey content and respondent identities are read-only while this survey is launched. Administrators can still edit reminder templates.
-          </Typography>
-        </Box>
-      )}
-      {closed && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, borderTop: `1px solid #ededed`, mt: 3, pt: 2, color: STUDIO.muted }}>
-          <LockIcon sx={{ fontSize: 13 }} />
-          <Typography sx={{ fontSize: 11 }}>Survey content and respondent identities are read-only while this survey is closed.</Typography>
-        </Box>
-      )}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, borderTop: '1px solid #ededed', mt: 3, pt: 2, color: STUDIO.muted }}>
+        <LockIcon sx={{ fontSize: 13 }} />
+        <Typography sx={{ fontSize: 11 }}>
+          {closed
+            ? 'Survey content and respondent identities are read-only while this survey is closed.'
+            : 'Survey content and respondent identities are read-only while this survey is launched. Administrators can still edit reminder templates.'}
+        </Typography>
+      </Box>
 
       {lifecycleDetails && (
         <Box sx={{ mt: 2.5 }}>

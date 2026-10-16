@@ -1,0 +1,86 @@
+import React from 'react';
+import { render, screen, within } from '@testing-library/react';
+import { createTheme, ThemeProvider } from '@mui/material/styles';
+import { expect, test } from 'vitest';
+import SurveyOverviewPanel from './SurveyOverviewPanel';
+
+const theme = createTheme();
+
+const activeSurvey = {
+  id: 'survey-1',
+  name: 'Survey',
+  lifecycleStatus: 'active',
+  respondents: 10,
+  eligibleRespondents: 10,
+  completedResponses: 5,
+  responseRatePercent: 50,
+};
+
+const renderPanel = (campaign, overrides = {}) => render(
+  <ThemeProvider theme={theme}>
+    <SurveyOverviewPanel
+      survey={{ ...activeSurvey, ...(overrides.survey || {}) }}
+      campaign={campaign}
+      onGoToTab={() => {}}
+      onViewResults={() => {}}
+      onRefresh={() => {}}
+      canOpenEmail={overrides.canOpenEmail ?? true}
+      canOpenRespondents={overrides.canOpenRespondents ?? true}
+    />
+  </ThemeProvider>,
+);
+
+const fullCounts = {
+  target: 10, accepted: 10, pending: 0, leased: 0, retryWait: 0, failed: 0, uncertain: 0, cancelled: 0,
+};
+
+test('shows the distinct delivery problem count when the launch provides it', () => {
+  renderPanel({
+    id: 'l1', kind: 'initial', created_at: '2026-10-12T13:30:00Z',
+    counts: fullCounts,
+    provider_outcome_counts: { delivered_count: 8, provider_waiting_count: 2, provider_problem_count: 2, bounced_count: 1, complained_count: 1 },
+  });
+  expect(screen.getByText('emails with delivery problems')).toBeInTheDocument();
+  expect(within(screen.getByLabelText('Latest campaign')).getByText('2')).toBeInTheDocument();
+  expect(screen.getByTestId('campaign-state')).toHaveTextContent('Complete');
+  expect(screen.getByText(/Latest campaign · Initial invitations ·/)).toBeInTheDocument();
+});
+
+test('never synthesizes a delivery problem count from overlapping event reports', () => {
+  renderPanel({
+    id: 'l2', kind: 'initial', created_at: '2026-10-12T13:30:00Z',
+    counts: fullCounts,
+    // Distinct problem/waiting/delivered fields absent; bounced+complained can overlap.
+    provider_outcome_counts: { bounced_count: 2, complained_count: 2 },
+  });
+  expect(screen.queryByText('emails with delivery problems')).not.toBeInTheDocument();
+  expect(within(screen.getByLabelText('Latest campaign')).getByText('Unavailable')).toBeInTheDocument();
+});
+
+test('does not render an incomplete campaign as Complete or as zero', () => {
+  renderPanel({ id: 'l3', kind: 'initial', status: 'queued' });
+  expect(screen.getByTestId('campaign-state')).toHaveTextContent('Unavailable');
+  expect(screen.queryByText('Complete')).not.toBeInTheDocument();
+  // Missing counts render as unavailable placeholders, not a factual 0 of 0.
+  expect(screen.queryByText(/^0 of 0/)).not.toBeInTheDocument();
+});
+
+test('renders processing counts and delivery indicators only when provided', () => {
+  renderPanel({
+    id: 'l4', kind: 'initial', created_at: '2026-10-12T13:30:00Z',
+    counts: { target: 13, accepted: 8, pending: 1, retry_wait: 1, failed: 1, uncertain: 1, cancelled: 1 },
+    provider_outcome_counts: { delivered_count: 2, provider_waiting_count: 2, provider_problem_count: 3, delayed_count: 1 },
+  });
+  expect(screen.getByTestId('campaign-state')).toHaveTextContent('Processing');
+  expect(screen.getByText('2 processing')).toBeInTheDocument();
+  expect(screen.getByText('3 not confirmed sent')).toBeInTheDocument();
+  expect(screen.getByText('Delivery confirmations')).toBeInTheDocument();
+  expect(screen.getByText('Awaiting final result')).toBeInTheDocument();
+});
+
+test('hides respondent and email destinations the viewer cannot open', () => {
+  renderPanel({ id: 'l5', kind: 'initial', counts: fullCounts, provider_outcome_counts: { provider_problem_count: 1, delivered_count: 10, provider_waiting_count: 0 } }, { canOpenEmail: false, canOpenRespondents: false });
+  expect(screen.queryByRole('button', { name: 'View respondents' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Email history' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Review emails/ })).not.toBeInTheDocument();
+});

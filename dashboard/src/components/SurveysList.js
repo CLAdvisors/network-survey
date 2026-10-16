@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, InputBase, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, InputBase, Stack, Typography } from '@mui/material';
 import SearchIcon from '@mui/icons-material/SearchOutlined';
 import AddIcon from '@mui/icons-material/AddOutlined';
 import { STUDIO } from '../theme/studioTokens';
@@ -23,6 +23,9 @@ const SurveysList = ({
   operationsBySurvey = {},
   canCreate = false,
   onCreate,
+  loading = false,
+  error = '',
+  onRetry,
 }) => {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -102,21 +105,42 @@ const SurveysList = ({
           </Stack>
         </Stack>
 
-        <Box data-testid="survey-table-region" sx={{ p: 0, height: { xs: 460, md: 560 } }}>
-          <SurveyTable
-            rows={visibleRows}
-            selectRow={selectRow}
-            onSurveyDeleted={onSurveyDeleted}
-            onSurveyCopied={onSurveyCopied}
-            onLifecycleChange={onLifecycleChange}
-            dirtyBySurvey={dirtyBySurvey}
-            operationsBySurvey={operationsBySurvey}
-          />
-        </Box>
+        {error && rows?.length > 0 && (
+          <Alert severity="warning" sx={{ borderRadius: 0, fontSize: 12 }} action={<Button size="small" onClick={onRetry}>Retry</Button>}>
+            Couldn’t refresh surveys. Showing the last loaded list.
+          </Alert>
+        )}
+
+        {loading ? (
+          <Box data-testid="survey-list-loading" sx={{ height: 320, display: 'grid', placeItems: 'center' }}>
+            <CircularProgress size={28} aria-label="Loading surveys" />
+          </Box>
+        ) : error && !(rows?.length > 0) ? (
+          <Box data-testid="survey-list-error" sx={{ p: 4, textAlign: 'center' }}>
+            <Typography sx={{ fontSize: 13, color: STUDIO.muted, mb: 1.5 }}>{error}</Typography>
+            <Button variant="contained" onClick={onRetry} sx={{ bgcolor: STUDIO.teal, '&:hover': { bgcolor: STUDIO.tealDark }, textTransform: 'none' }}>Retry</Button>
+          </Box>
+        ) : !(rows?.length > 0) ? (
+          <Box data-testid="survey-list-empty" sx={{ p: 5, textAlign: 'center', color: STUDIO.muted, fontSize: 13 }}>
+            No surveys yet. Create one to get started.
+          </Box>
+        ) : (
+          <Box data-testid="survey-table-region" sx={{ p: 0, height: { xs: 460, md: 560 } }}>
+            <SurveyTable
+              rows={visibleRows}
+              selectRow={selectRow}
+              onSurveyDeleted={onSurveyDeleted}
+              onSurveyCopied={onSurveyCopied}
+              onLifecycleChange={onLifecycleChange}
+              dirtyBySurvey={dirtyBySurvey}
+              operationsBySurvey={operationsBySurvey}
+            />
+          </Box>
+        )}
 
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ borderTop: `1px solid ${STUDIO.line}`, px: 2, py: 1.5, color: STUDIO.muted, fontSize: 11 }}>
           <Box component="span" aria-live="polite">
-            {visibleRows.length} of {allRows.length} surveys
+            {loading || (error && !(rows?.length > 0)) ? 'Surveys unavailable' : `${visibleRows.length} of ${allRows.length} surveys`}
           </Box>
           <Box component="span">Sort, column controls and export are available in the table toolbar.</Box>
         </Stack>

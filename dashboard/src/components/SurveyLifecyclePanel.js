@@ -70,7 +70,7 @@ const PlainLanguageBreakdown = ({ counts, outcomes, kind = 'initial' }) => {
   );
 };
 
-const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => {
+const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0, onLaunchSummary }) => {
   const [launches, setLaunches] = React.useState([]);
   const [launchSurveyId, setLaunchSurveyId] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
@@ -83,6 +83,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
   const load = React.useCallback(async (signal, expectedGeneration) => {
     if (!id) return [];
     setLoading(true);
+    onLaunchSummary?.({ loading: true });
     try {
       const response = await api.get(`/surveys/${id}/launches`, { signal });
       const next = Array.isArray(response.data) ? response.data : response.data?.launches || [];
@@ -90,19 +91,22 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
         setLaunches(next);
         setLaunchSurveyId(id);
         setError('');
+        onLaunchSummary?.({ latest: next[0] || null, latestLaunchId: surveyId(next[0] || {}), error: '', loading: false });
         await onSurveyRefresh?.(id, expectedGeneration);
       }
       return next;
     } catch (err) {
       if (!signal.aborted && generation.current === expectedGeneration) {
-        setError(err.response?.data?.message || 'Unable to load invitation delivery history.');
+        const message = err.response?.data?.message || 'Unable to load invitation delivery history.';
+        setError(message);
+        onLaunchSummary?.({ error: message, loading: false });
         if ([401, 403, 404].includes(err.response?.status)) await onSurveyRefresh?.(id, expectedGeneration);
       }
       return null;
     } finally {
       if (!signal.aborted && generation.current === expectedGeneration) setLoading(false);
     }
-  }, [id, onSurveyRefresh]);
+  }, [id, onSurveyRefresh, onLaunchSummary]);
 
   React.useEffect(() => {
     if (!id) return undefined;

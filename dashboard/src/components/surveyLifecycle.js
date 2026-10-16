@@ -85,6 +85,35 @@ export const providerCounts = (launch) => {
   };
 };
 
+const hasAnyValue = (source, keys) => Boolean(source) && keys.some((key) => source[key] !== undefined && source[key] !== null);
+
+// Presence (not value) of the distinct dispatch aggregates. Distinguishes
+// "explicitly zero" from "not provided" so the visible overview never invents
+// a zero or a Complete state from absent data.
+export const launchCountAvailability = (launch) => {
+  const source = launch?.counts || launch?.dispatchCounts || launch?.dispatch_counts || launch || {};
+  return {
+    target: hasAnyValue(source, ['target', 'targetCount', 'target_count', 'total']),
+    accepted: hasAnyValue(source, ['accepted', 'acceptedCount', 'accepted_count']),
+    processing: hasAnyValue(source, ['pending', 'pendingCount', 'pending_count', 'leased', 'leasedCount', 'leased_count', 'retryWait', 'retry_wait', 'retryWaitCount', 'retry_wait_count', 'sending', 'retrying']),
+    notConfirmed: hasAnyValue(source, ['failed', 'failedCount', 'failed_count', 'uncertain', 'uncertainCount', 'uncertain_count', 'cancelled', 'cancelledCount', 'cancelled_count']),
+  };
+};
+
+// Presence of the distinct provider outcome aggregates. Missing distinct fields
+// must render as unavailable, never as a synthetic sum of overlapping events.
+export const providerOutcomeAvailability = (launch) => {
+  const nested = launch?.providerOutcomeCounts || launch?.provider_outcome_counts
+    || launch?.providerCounts || launch?.provider_counts || launch?.providerOutcomes || launch?.provider_outcomes;
+  const sources = [nested, launch?.counts, launch?.dispatchCounts, launch?.dispatch_counts, launch].filter(Boolean);
+  const present = (keys) => sources.some((source) => hasAnyValue(source, keys));
+  return {
+    delivered: present(['delivered', 'deliveredCount', 'delivered_count', 'providerDelivered', 'provider_delivered', 'providerDeliveredCount', 'provider_delivered_count']),
+    waiting: present(['waiting', 'waitingCount', 'waiting_count', 'providerWaiting', 'provider_waiting', 'providerWaitingCount', 'provider_waiting_count', 'acceptedUnverified', 'accepted_unverified', 'acceptedUnverifiedCount', 'accepted_unverified_count']),
+    problems: present(['problems', 'problemCount', 'problem_count', 'providerProblem', 'provider_problem', 'providerProblemCount', 'provider_problem_count']),
+  };
+};
+
 const timestampAliases = {
   sent: ['sentAt', 'sent_at', 'providerSentAt', 'provider_sent_at'],
   delivered: ['deliveredAt', 'delivered_at', 'providerDeliveredAt', 'provider_delivered_at'],

@@ -6,7 +6,7 @@ import { ThemeProvider as EmotionThemeProvider } from '@emotion/react';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
-import Dashboard from './Dashboard';
+import Dashboard, { parseDashboardRoute } from './Dashboard';
 import api from '../api/axios';
 import { advanceSurveyOperationGeneration } from './useSurveyOperationState';
 
@@ -70,7 +70,20 @@ vi.mock('./SurveyInstructionsEditor', () => ({
 vi.mock('./InvitationSubjectEditor', () => ({
   default: ({ surveyId, readOnly, onDirtyChange, onOperationChange }) => {
     const mount = React.useRef(++mountSequence);
-    return <div data-testid="subject-editor" data-survey={surveyId} data-readonly={String(readOnly)} data-mount={`subject-${mount.current}`}>Invitation Email Subject<button onClick={() => onDirtyChange?.(surveyId, 'invitationSubject', true)}>Dirty subject</button><button onClick={() => onOperationChange?.(surveyId, 'invitationSubject', true)}>Start subject operation</button></div>;
+    const [draft, setDraft] = React.useState('');
+    return (
+      <div data-testid="subject-editor" data-survey={surveyId} data-readonly={String(readOnly)} data-mount={`subject-${mount.current}`}>
+        Invitation Email Subject
+        <input
+          aria-label="Invitation subject"
+          value={draft}
+          readOnly={readOnly}
+          onChange={(event) => { setDraft(event.target.value); onDirtyChange?.(surveyId, 'invitationSubject', true); }}
+        />
+        <button onClick={() => onDirtyChange?.(surveyId, 'invitationSubject', true)}>Dirty subject</button>
+        <button onClick={() => onOperationChange?.(surveyId, 'invitationSubject', true)}>Start subject operation</button>
+      </div>
+    );
   },
 }));
 vi.mock('./EmailNotificationEditor', () => ({
@@ -104,6 +117,8 @@ const Harness = () => {
         <button key={survey.id} onClick={() => navigate(`/surveys/${survey.id}/overview`)}>{`Open ${survey.id}`}</button>
       ))}
       <button onClick={() => navigate('/')}>Open list</button>
+      <button onClick={() => navigate('/surveys/does-not-exist/overview')}>Open missing survey</button>
+      <button onClick={() => navigate('/not-a-page')}>Open unknown path</button>
       <Routes>
         <Route path="*" element={<Dashboard />} />
       </Routes>
@@ -357,4 +372,66 @@ test('repeated survey and lifecycle switches never accumulate or alias email edi
     expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-readonly', String(id === 'survey-b'));
     expect(screen.getByTestId('body-editor')).toHaveAttribute('data-readonly', String(id === 'survey-b'));
   }
+});
+
+test('keeps an unsaved editor draft when leaving to the list and reopening the survey', async () => {
+  renderDashboard();
+  await userEvent.click(await screen.findByRole('button', { name: 'Select Alpha' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Email' }));
+  const subjectMount = screen.getByTestId('subject-editor').dataset.mount;
+  await userEvent.type(screen.getByLabelText('Invitation subject'), 'Hello team');
+  expect(await screen.findByTestId('dirty-survey-a')).toHaveTextContent('invitationSubject');
+
+  // Leaving to the list must not unmount the editor (draft text survives).
+  await userEvent.click(screen.getByRole('button', { name: 'Open list' }));
+  expect(await screen.findByRole('heading', { name: 'Surveys' })).toBeInTheDocument();
+  expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-mount', subjectMount);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Open survey-a' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Email' }));
+  expect(screen.getByTestId('subject-editor')).toHaveAttribute('data-mount', subjectMount);
+  expect(screen.getByLabelText('Invitation subject')).toHaveValue('Hello team');
+});
+
+test('rejects unknown paths, unknown surveys and malformed workspace URLs', async () => {
+  renderDashboard();
+  await screen.findByRole('button', { name: 'Select Alpha' });
+
+  await userEvent.click(screen.getByRole('button', { name: 'Open unknown path' }));
+  expect(await screen.findByTestId('dashboard-not-found')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Open missing survey' }));
+  expect(await screen.findByTestId('dashboard-not-found')).toBeInTheDocument();
+  expect(screen.queryByTestId('survey-workspace')).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Back to surveys' }));
+  expect(await screen.findByRole('heading', { name: 'Surveys' })).toBeInTheDocument();
+});
+
+test('bounds dashboard route parsing to known list/workspace URLs', () => {
+  expect(parseDashboardRoute('/')).toEqual({ kind: 'list', surveyId: null, tab: null });
+  expect(parseDashboardRoute('/surveys/abc')).toEqual({ kind: 'workspace', surveyId: 'abc', tab: 'overview' });
+  expect(parseDashboardRoute('/surveys/abc/email')).toEqual({ kind: 'workspace', surveyId: 'abc', tab: 'email' });
+  expect(parseDashboardRoute('/surveys/abc/bogus-tab')).toEqual({ kind: 'workspace', surveyId: 'abc', tab: 'overview' });
+  expect(parseDashboardRoute('/surveys/abc/email/extra').kind).toBe('notfound');
+  expect(parseDashboardRoute('/nope').kind).toBe('notfound');
+  expect(parseDashboardRoute('/surveys/%E0%A4%A/overview').kind).toBe('notfound');
+});
+
+test('shows a durable, retryable list error rather than an authoritative zero', async () => {
+  let surveyCalls = 0;
+  api.get.mockImplementation((url) => {
+    if (url === '/surveys') {
+      surveyCalls += 1;
+      return surveyCalls === 1 ? Promise.reject(new Error('network down')) : Promise.resolve({ data: { surveys } });
+    }
+    return Promise.resolve({ data: [] });
+  });
+  renderDashboard();
+
+  expect(await screen.findByTestId('survey-list-error')).toHaveTextContent('Unable to load surveys');
+  expect(screen.queryByText(/0 of 0 surveys/)).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByRole('button', { name: 'Select Alpha' })).toBeInTheDocument();
 });

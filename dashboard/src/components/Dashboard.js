@@ -1,6 +1,6 @@
 import React from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { Alert, Box, Snackbar } from "@mui/material";
+import { matchPath, useLocation, useNavigate } from "react-router-dom";
+import { Alert, Box, Button, CircularProgress, Snackbar, Typography } from "@mui/material";
 import RespondentTable from "./RespondentTable";
 import api from "../api/axios";
 import QuestionTable from "./QuestionTable";
@@ -21,17 +21,50 @@ import { lifecycleLabel, lifecycleStatus, surveyId } from "./surveyLifecycle";
 import { responseRateSummary } from "./surveyResponseRate";
 import { surveyOperationGeneration } from "./useSurveyOperationState";
 
+const WORKSPACE_TABS = ['overview', 'content', 'respondents', 'email'];
+
+// Bounded route parsing: only the survey list "/" and a well-formed
+// "/surveys/:id" or "/surveys/:id/:tab" workspace are recognized. Extra
+// segments, malformed encoding and unknown paths resolve to a not-found state
+// instead of a general URL parser.
+export const parseDashboardRoute = (pathname) => {
+  try {
+    // Reject malformed percent-encoding before interpreting the path.
+    decodeURIComponent(pathname);
+    const workspaceMatch = matchPath({ path: '/surveys/:surveyId/:tab?', end: true }, pathname);
+    if (workspaceMatch) {
+      const requestedTab = workspaceMatch.params.tab;
+      return {
+        kind: 'workspace',
+        surveyId: workspaceMatch.params.surveyId,
+        tab: WORKSPACE_TABS.includes(requestedTab) ? requestedTab : 'overview',
+      };
+    }
+    if (matchPath({ path: '/', end: true }, pathname)) return { kind: 'list', surveyId: null, tab: null };
+  } catch (err) {
+    // Malformed percent-encoding: treat as not found.
+  }
+  return { kind: 'notfound', surveyId: null, tab: null };
+};
+
+const NotFoundPanel = ({ onBack }) => (
+  <Box data-testid="dashboard-not-found" sx={{ maxWidth: 520, mx: 'auto', mt: 8, textAlign: 'center' }}>
+    <Typography component="h1" sx={{ fontSize: 26, fontWeight: 700, color: '#233431' }}>Page not found</Typography>
+    <Typography sx={{ fontSize: 13, color: '#647570', mt: 1.5, lineHeight: 1.7 }}>
+      We couldn’t find that survey or page. It may have been archived or the link may be incorrect.
+    </Typography>
+    <Button variant="contained" onClick={onBack} sx={{ mt: 3, bgcolor: '#147d78', '&:hover': { bgcolor: '#105e5b' }, textTransform: 'none' }}>
+      Back to surveys
+    </Button>
+  </Box>
+);
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  // The dashboard area is served by a single route; the workspace URL is parsed
-  // here so navigating between the list and a survey never remounts this page
-  // (drafts and pending operations survive list/tab/back navigation).
-  const pathSegments = location.pathname.split('/').filter(Boolean);
-  const isWorkspaceRoute = pathSegments[0] === 'surveys' && Boolean(pathSegments[1]);
-  const routeSurveyId = isWorkspaceRoute ? decodeURIComponent(pathSegments[1]) : null;
-  const routeTab = isWorkspaceRoute ? (pathSegments[2] || 'overview') : null;
+  const route = React.useMemo(() => parseDashboardRoute(location.pathname), [location.pathname]);
   const [surveyData, setSurveyData] = React.useState(null);
+  const [surveyList, setSurveyList] = React.useState({ loaded: false, error: '' });
   const [selectSurvey, setSelectSurvey] = React.useState(null);
   const [questionData, setQuestionData] = React.useState(null);
   const [questionLoading, setQuestionLoading] = React.useState(false);
@@ -47,8 +80,8 @@ const Dashboard = () => {
   const [operationsBySurvey, setOperationsBySurvey] = React.useState({});
   const [launchSignal, setLaunchSignal] = React.useState(0);
   const [lifecycleRefreshToken, setLifecycleRefreshToken] = React.useState(0);
+  const [launchInfo, setLaunchInfo] = React.useState({ latest: null, error: '', loading: false });
   const surveyRequest = React.useRef(0);
-  const pendingSelectionId = React.useRef(null);
   const relatedRequest = React.useRef(0);
   const selectionRef = React.useRef(null);
   const { memberships, canViewSensitiveSurveyData, canEditSurvey, hasSurveyRole } = useAuth();
@@ -60,22 +93,11 @@ const Dashboard = () => {
       if (request !== surveyRequest.current) return response.data.surveys || [];
       const surveys = response.data.surveys || [];
       setSurveyData(surveys);
-      setSelectSurvey((current) => {
-        const preferredId = pendingSelectionId.current;
-        if (preferredId) {
-          const preferred = surveys.find((survey) => surveyId(survey) === preferredId);
-          if (preferred) {
-            pendingSelectionId.current = null;
-            selectionRef.current = preferredId;
-            return preferred;
-          }
-        }
-        if (!current) return null;
-        return surveys.find((survey) => surveyId(survey) === surveyId(current)) || null;
-      });
+      setSurveyList({ loaded: true, error: '' });
       return surveys;
     } catch (err) {
       if (request === surveyRequest.current) {
+        setSurveyList((current) => ({ loaded: current.loaded, error: 'Unable to load surveys. Check your connection and retry.' }));
         setSnackbar({ severity: 'error', message: 'Unable to refresh surveys.' });
       }
       return [];
@@ -88,8 +110,14 @@ const Dashboard = () => {
     return () => clearInterval(timer);
   }, [fetchSurveyData]);
 
-  // Selecting a survey resets the related questions/respondents so stale data
-  // from a previous survey is never shown while the next one loads.
+  const retrySurveyList = React.useCallback(() => {
+    setSurveyList((current) => ({ ...current, error: '' }));
+    fetchSurveyData();
+  }, [fetchSurveyData]);
+
+  // Selecting a survey resets related questions/respondents (and launch/campaign
+  // state) so the previous survey's data is never shown for the new selection.
+  // The same path is used for row clicks and URL/history transitions.
   const applySelection = React.useCallback((next) => {
     const nextId = next ? surveyId(next) : null;
     if (nextId !== selectionRef.current) {
@@ -101,34 +129,24 @@ const Dashboard = () => {
       setRespondentRevision(null);
       setRespondentLoading(Boolean(next) && canViewSensitiveSurveyData(next));
       setRespondentError(null);
+      setLaunchInfo({ latest: null, error: '', loading: false });
+      setLaunchSignal(0);
     }
     selectionRef.current = nextId;
     setSelectSurvey(next);
   }, [canViewSensitiveSurveyData]);
 
-  // Keep the selected survey in sync with the workspace URL (direct links,
-  // browser back/forward, and the plain survey list route).
+  // Resolve the workspace URL to a survey. The list route intentionally keeps the
+  // last selection (and its editor drafts) mounted but hidden.
   React.useEffect(() => {
-    const urlId = routeSurveyId || null;
-    if (urlId) {
-      if (!surveyData) return;
-      const found = surveyData.find((survey) => surveyId(survey) === urlId);
-      if (!found) return;
-      setSelectSurvey((current) => {
-        if (current && surveyId(current) === urlId) return current;
-        selectionRef.current = urlId;
-        return found;
-      });
-      return;
-    }
-    if (!isWorkspaceRoute) {
-      setSelectSurvey((current) => {
-        if (!current) return current;
-        selectionRef.current = null;
-        return null;
-      });
-    }
-  }, [routeSurveyId, surveyData, isWorkspaceRoute]);
+    if (route.kind !== 'workspace' || !route.surveyId || !surveyData) return;
+    const found = surveyData.find((survey) => surveyId(survey) === route.surveyId);
+    if (found) applySelection(found);
+  }, [route.kind, route.surveyId, surveyData, applySelection]);
+
+  React.useEffect(() => {
+    if (!selectSurvey) selectionRef.current = null;
+  }, [selectSurvey]);
 
   React.useEffect(() => {
     const request = ++relatedRequest.current;
@@ -212,7 +230,6 @@ const Dashboard = () => {
   }, [selectSurvey, canViewSensitiveSurveyData, relatedRefresh]);
 
   const handleSelectRow = (childData) => {
-    pendingSelectionId.current = null;
     applySelection(childData);
     navigate(`/surveys/${surveyId(childData)}/overview`);
   };
@@ -239,7 +256,6 @@ const Dashboard = () => {
       setSnackbar({ severity: 'error', message: 'The copied survey was created, but its stable ID was not returned.' });
       return;
     }
-    pendingSelectionId.current = copiedId;
     relatedRequest.current += 1;
     setQuestionData(null);
     setQuestionLoading(true);
@@ -273,6 +289,10 @@ const Dashboard = () => {
     const surveys = await fetchSurveyData();
     return surveys.find((survey) => surveyId(survey) === selectedId);
   }, [fetchSurveyData]);
+
+  const handleLaunchSummary = React.useCallback((info) => {
+    setLaunchInfo((current) => ({ ...current, ...info }));
+  }, []);
 
   const handleDirtyChange = React.useCallback((owningSurveyId, section, dirty) => {
     if (!owningSurveyId || !section) return;
@@ -330,14 +350,17 @@ const Dashboard = () => {
   const selectedId = selectSurvey ? surveyId(selectSurvey) : null;
   const selectedDirty = selectedId ? dirtyBySurvey[selectedId] || {} : {};
   const selectedOperations = selectedId ? operationsBySurvey[selectedId] || {} : {};
-  const activeTab = routeTab || 'overview';
+  const activeTab = route.tab || 'overview';
+
+  const showRespondentsPanel = selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations;
+  const showEmailPanel = selectedCanEdit || selectedCanViewRespondents || hasInvitationDrafts || hasInvitationOperations;
 
   const workspaceSubtitle = selectSurvey && lifecycleStatus(selectSurvey) !== 'draft'
     ? `${responseRateSummary(selectSurvey).eligibleCount || selectSurvey.respondents || 0} respondents`
     : null;
 
   const lifecycleDetails = selectSurvey && lifecycleStatus(selectSurvey) !== 'draft'
-    ? <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} refreshToken={lifecycleRefreshToken} />
+    ? <SurveyLifecyclePanel survey={selectSurvey} onSurveyRefresh={handlePanelSurveyRefresh} refreshToken={lifecycleRefreshToken} onLaunchSummary={handleLaunchSummary} />
     : null;
 
   const workspacePanels = selectSurvey ? [
@@ -346,13 +369,17 @@ const Dashboard = () => {
       node: (
         <SurveyOverviewPanel
           survey={selectSurvey}
+          campaign={launchInfo.latest || selectSurvey.latestLaunch || selectSurvey.latest_launch}
+          campaignLoading={launchInfo.loading}
+          campaignError={launchInfo.error}
+          canOpenRespondents={showRespondentsPanel}
+          canOpenEmail={showEmailPanel}
           onGoToTab={handleTabChange}
           onViewResults={() => navigate('/results')}
           onRefresh={() => setLifecycleRefreshToken((value) => value + 1)}
           onReviewLaunch={() => setLaunchSignal((value) => value + 1)}
           canLaunch={selectedCanEdit && lifecycleStatus(selectSurvey) === 'draft'}
           lifecycleDetails={lifecycleDetails}
-          refreshToken={lifecycleRefreshToken}
         />
       ),
     },
@@ -386,7 +413,7 @@ const Dashboard = () => {
         </Box>
       ),
     },
-    ...(selectedCanViewRespondents || hasRespondentDrafts || hasRespondentOperations ? [{
+    ...(showRespondentsPanel ? [{
       key: 'respondents',
       node: (
         <Box sx={{ display: selectedCanViewRespondents ? 'block' : 'none' }} aria-hidden={!selectedCanViewRespondents}>
@@ -406,7 +433,7 @@ const Dashboard = () => {
         </Box>
       ),
     }] : []),
-    ...(selectedCanEdit || selectedCanViewRespondents || hasInvitationDrafts || hasInvitationOperations ? [{
+    ...(showEmailPanel ? [{
       key: 'email',
       node: (
         <Box>
@@ -442,6 +469,15 @@ const Dashboard = () => {
     }] : []),
   ] : [];
 
+  const showWorkspace = route.kind === 'workspace';
+  const showList = route.kind === 'list';
+  const showNotFound = route.kind === 'notfound';
+  const workspaceMissing = showWorkspace && surveyList.loaded && !surveyList.error && Array.isArray(surveyData)
+    && !surveyData.some((survey) => surveyId(survey) === route.surveyId);
+  const workspaceReady = showWorkspace && Boolean(selectSurvey) && selectedId === route.surveyId && !workspaceMissing;
+  const workspaceLoading = showWorkspace && !workspaceReady && !workspaceMissing;
+  const listLoading = !surveyList.loaded && !surveyList.error;
+
   return (
     <Box
       data-testid="dashboard-shell"
@@ -470,7 +506,7 @@ const Dashboard = () => {
         </Alert>
       </Snackbar>
 
-      {!selectSurvey ? (
+      {showList && (
         <SurveysList
           rows={surveyData}
           selectRow={handleSelectRow}
@@ -481,39 +517,54 @@ const Dashboard = () => {
           operationsBySurvey={operationsBySurvey}
           canCreate={canCreateSurvey}
           onCreate={() => setCreateDialogOpen(true)}
+          loading={listLoading}
+          error={surveyList.error}
+          onRetry={retrySurveyList}
         />
-      ) : (
-        <SurveyWorkspace
-          survey={selectSurvey}
-          tab={activeTab}
-          onTabChange={handleTabChange}
-          onBack={handleBack}
-          subtitle={workspaceSubtitle}
-          primaryAction={(
-            <SurveyPrimaryAction
-              survey={selectSurvey}
-              unsavedChanges={selectedDirty}
-              pendingOperations={selectedOperations}
-              onLifecycleChange={fetchSurveyData}
-              onSurveyUpdated={handleSurveyUpdated}
-              onNotify={setSnackbar}
-              onViewResults={() => navigate('/results')}
-              launchSignal={launchSignal}
-            />
-          )}
-          menu={(
-            <SurveyTableMenuCell
-              row={selectSurvey}
-              onSurveyDeleted={handleSurveyDeleted}
-              onSurveyCopied={handleSurveyCopied}
-              onLifecycleChange={fetchSurveyData}
-              onViewLifecycle={handleSurveyUpdated}
-              unsavedChanges={selectedDirty}
-              pendingOperations={selectedOperations}
-            />
-          )}
-          panels={workspacePanels}
-        />
+      )}
+
+      {(showNotFound || workspaceMissing) && <NotFoundPanel onBack={handleBack} />}
+
+      {workspaceLoading && (
+        <Box sx={{ minHeight: 320, display: 'grid', placeItems: 'center' }}>
+          <CircularProgress size={30} aria-label="Loading survey workspace" />
+        </Box>
+      )}
+
+      {selectSurvey && (
+        <Box sx={{ display: workspaceReady ? 'block' : 'none' }} aria-hidden={!workspaceReady}>
+          <SurveyWorkspace
+            survey={selectSurvey}
+            tab={activeTab}
+            onTabChange={handleTabChange}
+            onBack={handleBack}
+            subtitle={workspaceSubtitle}
+            primaryAction={(
+              <SurveyPrimaryAction
+                survey={selectSurvey}
+                unsavedChanges={selectedDirty}
+                pendingOperations={selectedOperations}
+                onLifecycleChange={fetchSurveyData}
+                onSurveyUpdated={handleSurveyUpdated}
+                onNotify={setSnackbar}
+                onViewResults={() => navigate('/results')}
+                launchSignal={launchSignal}
+              />
+            )}
+            menu={(
+              <SurveyTableMenuCell
+                row={selectSurvey}
+                onSurveyDeleted={handleSurveyDeleted}
+                onSurveyCopied={handleSurveyCopied}
+                onLifecycleChange={fetchSurveyData}
+                onViewLifecycle={handleSurveyUpdated}
+                unsavedChanges={selectedDirty}
+                pendingOperations={selectedOperations}
+              />
+            )}
+            panels={workspacePanels}
+          />
+        </Box>
       )}
 
       <CreateSurveyDialog

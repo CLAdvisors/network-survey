@@ -82,7 +82,7 @@ jobs:
           PGPASSWORD=postgres createdb -h 127.0.0.1 -U postgres ONA_upgrade
           rm -rf /tmp/db-pre-lifecycle
           cp -a db /tmp/db-pre-lifecycle
-          sed -i -e '/v1_6_survey_lifecycle_email_delivery.sql/d' -e '/v1_7_email_webhook_delivery_truth.sql/d' -e '/v1_8_bulk_survey_reminders.sql/d' -e '/v1_9_reminder_provider_account_binding.sql/d' -e '/v1_10_editable_survey_instructions.sql/d' -e '/v1_8_prod_secondary_controls.sql/d' -e '/v1_11_survey_email_history_pagination.sql/d' /tmp/db-pre-lifecycle/changelogs/master-changelog.xml
+          sed -i -e '/v1_6_survey_lifecycle_email_delivery.sql/d' -e '/v1_7_email_webhook_delivery_truth.sql/d' -e '/v1_8_bulk_survey_reminders.sql/d' -e '/v1_9_reminder_provider_account_binding.sql/d' -e '/v1_10_editable_survey_instructions.sql/d' -e '/v1_8_prod_secondary_controls.sql/d' -e '/v1_11_survey_email_history_pagination.sql/d' -e '/v1_12_delivery_permissions.sql/d' -e '/v1_12_delivery_schedule.sql/d' /tmp/db-pre-lifecycle/changelogs/master-changelog.xml
           docker run --rm --network host \
             -v /tmp/db-pre-lifecycle:/db \
             liquibase/liquibase:4.29 \
@@ -113,7 +113,7 @@ jobs:
             IF (SELECT count(*) FROM databasechangelog WHERE id='cla-organization-backfill-1') <> 1 THEN
               RAISE EXCEPTION 'CLA backfill history mismatch';
             END IF;
-            IF EXISTS (SELECT 1 FROM databasechangelog WHERE filename IN ('changelogs/v1_6_survey_lifecycle_email_delivery.sql','changelogs/v1_7_email_webhook_delivery_truth.sql','changelogs/v1_8_bulk_survey_reminders.sql','changelogs/v1_9_reminder_provider_account_binding.sql','changelogs/v1_10_editable_survey_instructions.sql','changelogs/v1_8_prod_secondary_controls.sql','changelogs/v1_11_survey_email_history_pagination.sql')) THEN
+            IF EXISTS (SELECT 1 FROM databasechangelog WHERE filename IN ('changelogs/v1_6_survey_lifecycle_email_delivery.sql','changelogs/v1_7_email_webhook_delivery_truth.sql','changelogs/v1_8_bulk_survey_reminders.sql','changelogs/v1_9_reminder_provider_account_binding.sql','changelogs/v1_10_editable_survey_instructions.sql','changelogs/v1_8_prod_secondary_controls.sql','changelogs/v1_11_survey_email_history_pagination.sql','changelogs/v1_12_delivery_permissions.sql','changelogs/v1_12_delivery_schedule.sql')) THEN
               RAISE EXCEPTION 'post-cutover master suffix ran too early';
             END IF;
           END $$;
@@ -152,7 +152,7 @@ jobs:
           # provider-binding suffix. This protects the real intermediate upgrade.
           rm -rf /tmp/db-capability1
           cp -a db /tmp/db-capability1
-          sed -i -e '/v1_9_reminder_provider_account_binding.sql/d' -e '/v1_10_editable_survey_instructions.sql/d' -e '/v1_8_prod_secondary_controls.sql/d' -e '/v1_11_survey_email_history_pagination.sql/d' /tmp/db-capability1/changelogs/master-changelog.xml
+          sed -i -e '/v1_9_reminder_provider_account_binding.sql/d' -e '/v1_10_editable_survey_instructions.sql/d' -e '/v1_8_prod_secondary_controls.sql/d' -e '/v1_11_survey_email_history_pagination.sql/d' -e '/v1_12_delivery_permissions.sql/d' -e '/v1_12_delivery_schedule.sql/d' /tmp/db-capability1/changelogs/master-changelog.xml
           awk '/--changeset cladvisors:bulk-survey-reminder-isolated-queue-1/{exit} {print}' \
             db/changelogs/v1_8_bulk_survey_reminders.sql > /tmp/db-capability1/changelogs/v1_8_bulk_survey_reminders.sql
           docker run --rm --network host -v /tmp/db-capability1:/db liquibase/liquibase:4.29 \

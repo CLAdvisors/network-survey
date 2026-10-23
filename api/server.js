@@ -17,6 +17,7 @@ const { ResendProvider, demoEmailIdempotencyKey, reserveProviderRateOnClient, sy
 validateProdSecondaryResendConfig(process.env);
 const emailIdentity = synchronousEmailIdentity(process.env);
 const lifecycle = require('./lifecycle');
+const deliverySchedules = require('./delivery-schedule');
 const respondentRoster = require('./respondent-roster');
 const { effectiveInstructions } = require('./survey-instructions');
 const { createResendWebhookHandler } = require('./webhooks');
@@ -2561,9 +2562,30 @@ app.put('/api/surveys/:surveyId/reminder-templates/:language', express.json(), r
   try { res.json({template:await lifecycle.saveReminderTemplate(pool,req.user,req.params.surveyId,{...req.body,language:req.params.language})}); }
   catch(error){ sendLifecycleError(res,error); }
 });
+app.get('/api/surveys/:surveyId/delivery-schedule', requireAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json({ schedule: await deliverySchedules.view(pool, req.user, req.params.surveyId) }); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.put('/api/surveys/:surveyId/delivery-schedule', express.json(), requireAuth, async (req, res) => {
+  if (process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true' || process.env.SURVEY_SCHEDULES_ENABLED !== 'true') return res.status(503).json({ error: 'schedule_disabled', message: 'Automatic scheduling is disabled.' });
+  res.set('Cache-Control', 'no-store');
+  try { res.json({ schedule: await deliverySchedules.configure(pool, req.user, req.params.surveyId, req.body) }); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.delete('/api/surveys/:surveyId/delivery-schedule', express.json(), requireAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(await deliverySchedules.cancel(pool, req.user, req.params.surveyId, req.body?.expectedVersion)); }
+  catch (error) { sendLifecycleError(res, error); }
+});
 app.post('/api/surveys/:surveyId/launches', express.json(), requireAuth, async (req, res) => {
   if (process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true') return res.status(503).json({ error: 'launch_disabled', message: 'Survey launch is temporarily disabled.' });
   try { launchResponse(res, await lifecycle.launchSurvey(pool, req.user, req.params.surveyId, { kind: req.body?.kind, idempotencyKey: req.get('Idempotency-Key') })); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.post('/api/surveys/:surveyId/respondents/:respondentId/resend', express.json(), requireAuth, async (req, res) => {
+  if (process.env.SURVEY_DELIVERY_V2_ENABLED !== 'true') return res.status(503).json({ error: 'launch_disabled', message: 'Survey delivery is disabled.' });
+  try { launchResponse(res, await lifecycle.launchReminder(pool, req.user, req.params.surveyId, { respondentId: req.params.respondentId, idempotencyKey: req.get('Idempotency-Key') })); }
   catch (error) { sendLifecycleError(res, error); }
 });
 app.get('/api/surveys/:surveyId/launches', requireAuth, async (req, res) => {
@@ -2579,6 +2601,21 @@ const sendEmailHistory = async (req, res) => {
   try { res.json(await lifecycle.listEmailHistory(pool, req.user, req.params.surveyId, req.query)); }
   catch (error) { sendLifecycleError(res, error); }
 };
+app.get('/api/surveys/:surveyId/personal-link-permission', requireAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(await lifecycle.personalLinkPermission(pool, req.user, req.params.surveyId)); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.put('/api/surveys/:surveyId/personal-link-permission', express.json(), requireAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(await lifecycle.setPersonalLinkPermission(pool, req.user, req.params.surveyId, req.body?.minimumRole)); }
+  catch (error) { sendLifecycleError(res, error); }
+});
+app.post('/api/surveys/:surveyId/respondents/:respondentId/personal-link', express.json(), requireAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(await lifecycle.revealPersonalLink(pool, req.user, req.params.surveyId, req.params.respondentId, req.body?.purpose)); }
+  catch (error) { sendLifecycleError(res, error); }
+});
 app.get('/api/surveys/:surveyId/email-history', requireAuth, sendEmailHistory);
 // Retire the early raw-delivery response while keeping its URL as a redacted alias.
 // Old raw UUID cursors/status filters are intentionally not accepted.

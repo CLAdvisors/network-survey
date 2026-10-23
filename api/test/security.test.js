@@ -2098,6 +2098,8 @@ test('CLA organization migration preserves survey data and enforces stable child
     'v1_10_editable_survey_instructions.sql',
     'v1_8_prod_secondary_controls.sql',
     'v1_11_survey_email_history_pagination.sql',
+    'v1_12_delivery_permissions.sql',
+    'v1_12_delivery_schedule.sql',
   ];
   const sharedPreCutoverIncludes = masterIncludes.filter((file) => !postCutoverMasterIncludes.includes(file));
 

@@ -59,6 +59,55 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
   const [originalRows, setOriginalRows] = useState([]);
   const [authoritativeRevision, setAuthoritativeRevision] = useState(null);
   const [mutationErrors, setMutationErrors] = useState({});
+  const [deliveryPermission, setDeliveryPermission] = useState(null);
+  const [revealedLink, setRevealedLink] = useState(null);
+  const [deliveryAction, setDeliveryAction] = useState(null);
+  const deliveryActionRef = useRef(false);
+  const [deliveryNotice, setDeliveryNotice] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setDeliveryPermission(null);
+    setRevealedLink(null);
+    setDeliveryNotice(null);
+    if (surveyName) api.get(`/surveys/${surveyName}/personal-link-permission`)
+      .then(({ data }) => { if (!cancelled) setDeliveryPermission({ ...data, surveyId: surveyName }); })
+      .catch(() => { if (!cancelled) setDeliveryPermission(null); });
+    return () => { cancelled = true; };
+  }, [surveyName]);
+  const visibleDeliveryPermission = deliveryPermission?.surveyId === surveyName ? deliveryPermission : null;
+  const personalLinkAction = async (row, purpose) => {
+    const targetSurveyId = surveyName;
+    if (!visibleDeliveryPermission?.canReveal || deliveryActionRef.current || hasChanges || !respondentsReady) return;
+    deliveryActionRef.current = true;
+    setDeliveryAction(row.id);
+    try {
+      const { data } = await api.post(`/surveys/${targetSurveyId}/respondents/${row.id}/personal-link`, { purpose });
+      if (surveyIdentity.current !== targetSurveyId) return;
+      if (purpose === 'copy') await navigator.clipboard.writeText(data.link);
+      else setRevealedLink({ respondentId: row.id, link: data.link });
+      setSurveyMutationError(targetSurveyId, null);
+    } catch (error) {
+      if (surveyIdentity.current === targetSurveyId) setSurveyMutationError(targetSurveyId, apiErrorMessage(error, 'Unable to access personal link.'));
+    } finally { deliveryActionRef.current = false; setDeliveryAction(null); }
+  };
+  const resendOne = async (row) => {
+    const targetSurveyId = surveyName;
+    if (!visibleDeliveryPermission?.canResend || deliveryActionRef.current || hasChanges || !respondentsReady) return;
+    if (!window.confirm(`Queue one reminder to ${row.name}?`)) return;
+    deliveryActionRef.current = true;
+    setDeliveryAction(row.id);
+    try {
+      // Preserve an uncertain request key across reloads so a retry cannot queue two emails.
+      const keyName = `delivery-resend:${targetSurveyId}:${row.id}`;
+      const idempotencyKey = window.sessionStorage.getItem(keyName) || crypto.randomUUID();
+      window.sessionStorage.setItem(keyName, idempotencyKey);
+      await api.post(`/surveys/${targetSurveyId}/respondents/${row.id}/resend`, {}, { headers: { 'Idempotency-Key': idempotencyKey } });
+      window.sessionStorage.removeItem(keyName);
+      if (surveyIdentity.current === targetSurveyId) setDeliveryNotice('One reminder queued. Check email history for delivery outcome.');
+    } catch (error) {
+      if (surveyIdentity.current === targetSurveyId) setSurveyMutationError(targetSurveyId, apiErrorMessage(error, 'Unable to queue reminder.'));
+    } finally { deliveryActionRef.current = false; setDeliveryAction(null); }
+  };
   const draftsRef = useRef(new Map());
   const acceptedRevisionRef = useRef(new Map());
   const displayedSurveyRef = useRef(surveyName);
@@ -161,6 +210,14 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
         return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
       }
     },
+    ...(visibleDeliveryPermission?.canReveal || visibleDeliveryPermission?.canResend ? [{
+      field: 'personalDelivery', headerName: 'Personal delivery', width: 300, sortable: false, filterable: false,
+      renderCell: ({ row }) => <Box sx={{ display: 'flex', gap: 0.5 }}>
+        {visibleDeliveryPermission?.canReveal && <><Button size="small" disabled={Boolean(deliveryAction) || hasChanges || !respondentsReady} onClick={() => personalLinkAction(row, 'reveal')}>Reveal link</Button>
+          <Button size="small" disabled={Boolean(deliveryAction) || hasChanges || !respondentsReady} onClick={() => personalLinkAction(row, 'copy')}>Copy link</Button></>}
+        {visibleDeliveryPermission?.canResend && <Button size="small" disabled={Boolean(deliveryAction) || hasChanges || !respondentsReady} onClick={() => resendOne(row)}>Resend</Button>}
+      </Box>
+    }] : []),
     {
       field: 'actions',
       headerName: 'Actions',
@@ -491,6 +548,23 @@ const RespondentTable = ({ rows, revision, surveyName, loading = false, loadErro
           {mutationError}
         </Alert>
       )}
+      {deliveryNotice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setDeliveryNotice(null)}>{deliveryNotice}</Alert>}
+      {revealedLink && visibleDeliveryPermission?.canReveal && <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setRevealedLink(null)}>
+        Personal link for respondent {revealedLink.respondentId}: <a href={revealedLink.link} target="_blank" rel="noreferrer">{revealedLink.link}</a>. Treat this as a private bearer credential.
+      </Alert>}
+      {visibleDeliveryPermission?.canConfigure && <Box sx={{ mb: 2 }}>
+        <label htmlFor="personal-link-role">Minimum role allowed to reveal and copy personal links: </label>
+        <select id="personal-link-role" value={visibleDeliveryPermission.minimumRole} onChange={async (event) => {
+          const minimumRole = event.target.value;
+          try {
+            const { data } = await api.put(`/surveys/${surveyName}/personal-link-permission`, { minimumRole });
+            if (surveyIdentity.current === surveyName) setDeliveryPermission({ ...data, surveyId: surveyName });
+            setRevealedLink(null);
+          } catch (error) { setSurveyMutationError(surveyName, apiErrorMessage(error, 'Unable to change link permission.')); }
+        }}>
+          {['owner', 'admin', 'editor', 'analyst', 'viewer'].map(role => <option key={role} value={role}>{role}</option>)}
+        </select>
+      </Box>}
       {Array.isArray(rows) && authoritativeRevision === null && !loading && !loadError && (
         <Alert severity="error" sx={{ mb: 2 }}>
           The roster revision is unavailable. Refresh before editing respondents.

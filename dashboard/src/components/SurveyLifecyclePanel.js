@@ -5,6 +5,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import LockIcon from '@mui/icons-material/Lock';
 import api from '../api/axios';
+import DeliverySchedulePanel from './DeliverySchedulePanel';
 import {
   formatDateTime, isLaunchRunning, launchCounts, providerCounts,
   lifecycleLabel, lifecycleStatus, shouldPollLaunch, surveyId,
@@ -164,6 +165,7 @@ const SurveyLifecyclePanel = ({ survey, onSurveyRefresh, refreshToken = 0 }) => 
       </Stack>
 
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+      {['owner', 'admin'].includes(survey.role) && <DeliverySchedulePanel surveyId={id} lifecycleStatus={lifecycleStatus(survey)} />}
 
       {latest && <Box sx={{ mt: 2 }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>

@@ -15,6 +15,7 @@ import {
 } from '@network-survey/frontend-react';
 import {
   applyProductionSurveyTheme,
+  EXCLUSIVE_GROUP_PROPERTY,
   PRODUCTION_SURVEY_CLASS_NAME,
   PRODUCTION_SURVEY_WRAPPER_SX,
   QuestionDraggableRankingModel,
@@ -75,6 +76,9 @@ Serializer.addProperty('draggableranking', {
   category: 'choices',
   displayName: 'Maximum selections'
 });
+// Label shared by ranking questions that may not rank the same option twice.
+// Registered here (and in the respondent app) so Creator's toJSON keeps it.
+Serializer.addProperty('draggableranking', EXCLUSIVE_GROUP_PROPERTY);
 // Assign an iconName so the custom type has an icon in the toolbox
 Serializer.addProperty('draggableranking', { name: 'iconName', default: 'icon-tagbox' });
 // Register React component for editor preview

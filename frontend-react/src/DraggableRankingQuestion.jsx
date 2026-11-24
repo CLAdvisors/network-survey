@@ -1,5 +1,10 @@
 import React from "react";
 import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
+import {
+  collectExclusiveConflictKeys,
+  collectExclusiveTakenKeys,
+  exclusiveGroupOf,
+} from "@network-survey/frontend-shared";
 
 const colors = {
   primary: "var(--survey-primary, #42B4AF)",
@@ -174,6 +179,8 @@ export default function DraggableRankingQuestion({
 }) {
   const [ranked, setRanked] = React.useState([]);
   const [available, setAvailable] = React.useState([]);
+  const [groupHiddenCount, setGroupHiddenCount] = React.useState(0);
+  const [groupStarved, setGroupStarved] = React.useState(false);
   const [dragSourceId, setDragSourceId] = React.useState(null);
   const actionButtonRefs = React.useRef(new Map());
   const pendingFocusKey = React.useRef(null);
@@ -191,8 +198,28 @@ export default function DraggableRankingQuestion({
 
   const syncFromValue = React.useCallback((currentValue) => {
     const baseChoices = (question?.choices || []).map(normalizeChoice);
+    // Linked questions (same exclusiveGroup) share their choice values, so an
+    // option ranked elsewhere disappears from this list completely. Values
+    // owned by an earlier linked question also win over a duplicate in this
+    // question's own answer, so prefilled/resumed data resolves the same way
+    // on every client.
+    const takenKeys = collectExclusiveTakenKeys(question);
+    const conflictKeys = collectExclusiveConflictKeys(question);
     const rankedRaw = Array.isArray(currentValue) ? currentValue : [];
-    const rankedValues = rankedRaw.map(extractValue);
+    let rankedValues = rankedRaw.map(extractValue);
+    let droppedConflictValues = [];
+
+    if (conflictKeys.size) {
+      const keptValues = [];
+      rankedValues.forEach((rawValue) => {
+        if (conflictKeys.has(getValueKey(rawValue))) {
+          droppedConflictValues.push(rawValue);
+        } else {
+          keptValues.push(rawValue);
+        }
+      });
+      rankedValues = keptValues;
+    }
 
     let overflowValues = [];
     let effectiveRankedValues = rankedValues;
@@ -210,11 +237,13 @@ export default function DraggableRankingQuestion({
       return baseChoices.find((choice) => choice.key === key) || buildChoiceFromValue(val);
     });
 
-    let availableChoices = baseChoices.filter((choice) => !rankedKeySet.has(choice.key));
+    let availableChoices = baseChoices.filter((choice) => (
+      !rankedKeySet.has(choice.key) && !takenKeys.has(choice.key)
+    ));
 
     overflowValues.forEach((val) => {
       const key = getValueKey(val);
-      if (!availableChoices.some((choice) => choice.key === key)) {
+      if (!takenKeys.has(key) && !availableChoices.some((choice) => choice.key === key)) {
         availableChoices.push(buildChoiceFromValue(val));
       }
     });
@@ -222,10 +251,17 @@ export default function DraggableRankingQuestion({
     setRanked(rankedChoices);
     setAvailable(availableChoices);
 
-    if (overflowValues.length) {
+    const hiddenCount = baseChoices.filter((choice) => (
+      takenKeys.has(choice.key) && !rankedKeySet.has(choice.key)
+    )).length;
+    const remainingMinimum = Math.max(0, (minSelected || 0) - effectiveRankedValues.length);
+    setGroupHiddenCount(hiddenCount);
+    setGroupStarved(hiddenCount > 0 && availableChoices.length < remainingMinimum);
+
+    if (overflowValues.length || droppedConflictValues.length) {
       onChange?.(rankedChoices.map((item) => item.value));
     }
-  }, [question?.choices, maxSelected, onChange]);
+  }, [question, minSelected, maxSelected, onChange]);
 
   React.useEffect(() => {
     syncFromValue(isQuestionValueSource ? question?.value : value);
@@ -260,6 +296,22 @@ export default function DraggableRankingQuestion({
       disposers.forEach((dispose) => dispose());
     };
   }, [isQuestionValueSource, question, question?.choices, syncFromValue, value]);
+
+  // Sibling answers and visibility decide what this question may offer, so
+  // re-sync whenever the survey reports either kind of change. Unlinked
+  // questions have no peers and keep their original update channels.
+  const exclusiveGroup = exclusiveGroupOf(question);
+  React.useEffect(() => {
+    const survey = question?.survey;
+    if (!survey || !exclusiveGroup) return undefined;
+    const handler = () => syncFromValue(isQuestionValueSource ? question?.value : value);
+    const events = [survey.onValueChanged, survey.onQuestionVisibleChanged]
+      .filter((event) => event?.add);
+    events.forEach((event) => event.add(handler));
+    return () => {
+      events.forEach((event) => event.remove(handler));
+    };
+  }, [exclusiveGroup, isQuestionValueSource, question, syncFromValue, value]);
 
   React.useEffect(() => {
     if (!pendingFocusKey.current) return;
@@ -467,6 +519,24 @@ export default function DraggableRankingQuestion({
               </div>
             )}
           </Droppable>
+          {groupHiddenCount > 0 && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                marginTop: 4,
+                fontSize: "0.8rem",
+                color: groupStarved ? colors.error : colors.muted
+              }}
+            >
+              {groupHiddenCount === 1
+                ? "1 option is ranked in another linked question."
+                : `${groupHiddenCount} options are ranked in another linked question.`}
+              {groupStarved
+                ? " Unselect an option in another question to free it up."
+                : ""}
+            </div>
+          )}
         </div>
       </div>
     </DragDropContext>

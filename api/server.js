@@ -32,6 +32,16 @@ if (!Serializer.findClass('draggableranking')) {
   }
   Serializer.addClass('draggableranking', [], () => new QuestionDraggableRankingModel(''), 'question');
 }
+// Registered so server-side SurveyJS models and audits see the author-defined
+// exclusive group; validation below reads the raw schema, not the model.
+if (!Serializer.findProperty('draggableranking', 'exclusiveGroup')) {
+  Serializer.addProperty('draggableranking', {
+    name: 'exclusiveGroup:string',
+    default: '',
+    category: 'choices',
+    displayName: 'Exclusive ranking group',
+  });
+}
 lifecycle.setSurveyDefinitionValidator(validateSurveyDefinition);
 
 const pool = createPool(process.env);
@@ -1858,6 +1868,62 @@ function validateMultipleTextItems(items, questionLabel) {
 
 const SURVEYJS_RESERVED_EXPRESSION_ROOTS = new Set(['item', 'row', 'panel', 'composite', 'survey']);
 
+const EXCLUSIVE_GROUP_PATTERN = /^[A-Za-z0-9 _-]{1,64}$/;
+
+function normalizeExclusiveGroup(rawValue, questionLabel) {
+  if (rawValue === undefined || rawValue === null) return '';
+  if (typeof rawValue !== 'string') {
+    throw new Error(`${questionLabel} exclusiveGroup must be a string.`);
+  }
+  const group = rawValue.trim();
+  if (!group) return '';
+  if (!EXCLUSIVE_GROUP_PATTERN.test(group)) {
+    throw new Error(`${questionLabel} exclusiveGroup must be 1-64 characters using letters, digits, spaces, underscores or hyphens.`);
+  }
+  return group;
+}
+
+function draggableRankingChoiceKey(choice) {
+  return String(choice && typeof choice === 'object' && !Array.isArray(choice)
+    ? choice.value
+    : choice);
+}
+
+// A group is feasible only if every linked question offers the same values and
+// the required selections of all linked questions can still be satisfied. A
+// required question needs at least one value even without an explicit minimum.
+function validateExclusiveRankingGroups(exclusiveGroups) {
+  exclusiveGroups.forEach((members, group) => {
+    if (members.length < 2) {
+      throw new Error(`Exclusive ranking group "${group}" must link at least two draggableranking questions.`);
+    }
+    const first = members[0];
+    for (const member of members.slice(1)) {
+      const sameChoiceSet = member.choiceKeys.size === first.choiceKeys.size &&
+        [...member.choiceKeys].every((key) => first.choiceKeys.has(key));
+      if (!sameChoiceSet) {
+        throw new Error(`Exclusive ranking group "${group}" requires identical choice values in ${first.name} and ${member.name}.`);
+      }
+    }
+    const minimumTotal = members.reduce(
+      (sum, member) => sum + Math.max(member.minimum, member.required ? 1 : 0), 0);
+    if (minimumTotal > first.choiceKeys.size) {
+      const sharedChoices = first.choiceKeys.size === 1 ? '1 choice' : `${first.choiceKeys.size} choices`;
+      throw new Error(`Exclusive ranking group "${group}" cannot be completed: its questions require ${minimumTotal} selections in total but share only ${sharedChoices}. Reduce the minimums or make the questions optional.`);
+    }
+    const claimedDefaults = new Map();
+    for (const member of members) {
+      for (const key of member.defaultKeys) {
+        const owner = claimedDefaults.get(key);
+        if (owner !== undefined && owner !== member.name) {
+          throw new Error(`Exclusive ranking group "${group}" has the same default value in ${owner} and ${member.name}; default answers must not overlap.`);
+        }
+        if (owner === undefined) claimedDefaults.set(key, member.name);
+      }
+    }
+  });
+}
+
 function validateSurveyDefinition(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     throw new Error('Questions must be a SurveyJS schema object.');
@@ -1887,6 +1953,7 @@ function validateSurveyDefinition(json) {
 
   const questionNames = new Set();
   const definitionTotals = { chars: 0, bytes: 0, choices: 0 };
+  const exclusiveGroups = new Map();
   const normalized = {
     ...json,
     elements: json.elements.map((element, index) => {
@@ -1897,6 +1964,9 @@ function validateSurveyDefinition(json) {
       for (const [property, value] of Object.entries(element)) {
         if (property === 'definition') {
           throw new Error(`${questionLabel} defines unsupported property definition; only draggableranking choices may define it.`);
+        }
+        if (property === 'exclusiveGroup' && element.type !== 'draggableranking') {
+          throw new Error(`${questionLabel} defines exclusiveGroup; only draggableranking questions may be linked in a group.`);
         }
         if (property === 'choices' && element.type === 'draggableranking' && Array.isArray(value)) {
           value.forEach((choice, choiceIndex) =>
@@ -1946,10 +2016,24 @@ function validateSurveyDefinition(json) {
       }
 
       let normalizedChoices = element.choices;
+      let exclusiveGroup = '';
       if (element.type === 'draggableranking') {
         validateDraggableRankingSelectionLimits(element, questionLabel);
         if (element.choices !== undefined) {
           normalizedChoices = normalizeDraggableRankingChoices(element.choices, questionLabel, definitionTotals);
+        }
+        exclusiveGroup = normalizeExclusiveGroup(element.exclusiveGroup, questionLabel);
+        if (exclusiveGroup) {
+          if (!exclusiveGroups.has(exclusiveGroup)) exclusiveGroups.set(exclusiveGroup, []);
+          exclusiveGroups.get(exclusiveGroup).push({
+            name: element.name,
+            choiceKeys: new Set((Array.isArray(normalizedChoices) ? normalizedChoices : [])
+              .map(draggableRankingChoiceKey)),
+            minimum: Number.isSafeInteger(element.minSelectedChoices) ? element.minSelectedChoices : 0,
+            required: element.isRequired === true,
+            defaultKeys: new Set((Array.isArray(element.defaultValue) ? element.defaultValue : [])
+              .map(draggableRankingChoiceKey)),
+          });
         }
       } else if (element.choices !== undefined) {
         validateItemDefinitions(element.choices, `${questionLabel} choices`);
@@ -1992,13 +2076,16 @@ function validateSurveyDefinition(json) {
         validateMultipleTextItems(element.items, questionLabel);
       }
       // Materialize SurveyJS's false default, making the persisted contract explicit.
+      const { exclusiveGroup: _rawExclusiveGroup, ...elementWithoutGroup } = element;
       return {
-        ...element,
+        ...elementWithoutGroup,
         ...(element.choices !== undefined ? { choices: normalizedChoices } : {}),
+        ...(exclusiveGroup ? { exclusiveGroup } : {}),
         isRequired: element.isRequired === true,
       };
     })
   };
+  validateExclusiveRankingGroups(exclusiveGroups);
   if (definitionTotals.chars > DEFINED_RANKING_LIMITS.surveyDefinitionChars ||
       definitionTotals.bytes > DEFINED_RANKING_LIMITS.surveyDefinitionBytes) {
     throw new Error(`Survey choice definitions exceed the ${DEFINED_RANKING_LIMITS.surveyDefinitionChars}-character or ${DEFINED_RANKING_LIMITS.surveyDefinitionBytes}-byte aggregate limit.`);
@@ -2204,6 +2291,57 @@ function validateStructuredAnswer(element, value) {
   return null;
 }
 
+function exclusiveChoiceAnswerLabel(element, key) {
+  const choices = Array.isArray(element.choices) ? element.choices : [];
+  const match = choices.find((choice) => draggableRankingChoiceKey(choice) === String(key));
+  if (match && typeof match === 'object' && !Array.isArray(match) &&
+      typeof match.text === 'string' && match.text.trim()) {
+    return match.text.trim();
+  }
+  return String(key);
+}
+
+// Linked draggable rankings may not rank the same value twice across questions.
+// Hidden (visibleIf) and read-only questions are exempt because the client does
+// not offer their values either; SurveyJS still submits their stored values.
+function exclusiveRankingAnswerErrors(elements, answers, model) {
+  const groups = new Map();
+  for (const element of elements) {
+    if (!element || element.type !== 'draggableranking') continue;
+    const group = typeof element.exclusiveGroup === 'string' ? element.exclusiveGroup.trim() : '';
+    if (!group) continue;
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(element);
+  }
+
+  const errors = [];
+  groups.forEach((members) => {
+    if (members.length < 2) return;
+    const rankedBy = new Map();
+    for (const element of members) {
+      const modelQuestion = model.getQuestionByName(element.name);
+      const isVisible = modelQuestion ? modelQuestion.isVisible : true;
+      const isEnabled = modelQuestion ? !modelQuestion.isReadOnly : true;
+      if (!isVisible || !isEnabled) continue;
+      const value = answers[element.name];
+      if (!Array.isArray(value)) continue;
+      for (const rawValue of value) {
+        const key = draggableRankingChoiceKey(rawValue);
+        const owner = rankedBy.get(key);
+        if (owner !== undefined && owner !== element.name) {
+          const label = exclusiveChoiceAnswerLabel(element, key);
+          errors.push(`"${label}" is ranked in more than one linked ranking question.`);
+          break;
+        }
+        // Repeats inside one answer array are reported by the per-question
+        // duplicate check, not as a cross-question collision.
+        if (owner === undefined) rankedBy.set(key, element.name);
+      }
+    }
+  });
+  return errors;
+}
+
 function validateRequiredAnswers(schema, answers, options = {}) {
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
     return ['Answers must be an object.'];
@@ -2339,6 +2477,7 @@ function validateRequiredAnswers(schema, answers, options = {}) {
     }
     if (!valid) addInvalid(element.name);
   });
+  errors.push(...exclusiveRankingAnswerErrors(elements, answers, model));
   return [...new Set(errors)];
 }
 

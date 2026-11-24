@@ -4,3 +4,4 @@ export * from './surveyInstructionFormatting.js';
 export * from './surveyTheme.js';
 export * from './surveyChoiceDefinitions.js';
 export * from './QuestionDraggableRankingModel.js';
+export * from './exclusiveRankingGroups.js';

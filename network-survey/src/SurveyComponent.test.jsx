@@ -30,7 +30,7 @@ vi.mock('survey-core', () => {
 
   return {
     Model: FakeModel,
-    Serializer: { addClass: vi.fn() },
+    Serializer: { addClass: vi.fn(), addProperty: vi.fn() },
     Question: class {},
   };
 });
@@ -41,6 +41,7 @@ vi.mock('survey-react-ui', () => ({
 
 vi.mock('@network-survey/frontend-shared', () => ({
   applyProductionSurveyTheme: vi.fn(),
+  EXCLUSIVE_GROUP_PROPERTY: { name: 'exclusiveGroup:string', default: '' },
   PRODUCTION_SURVEY_CLASS_NAME: 'survey-runtime',
   registerChoiceDefinitionProperty: runtimeSpies.registerDefinitions,
   buildApiUrl: (pathname, queryParams = {}) => {

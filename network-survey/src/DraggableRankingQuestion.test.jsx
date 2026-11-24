@@ -1,8 +1,29 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { Model, Question, Serializer } from 'survey-core';
+import { EXCLUSIVE_GROUP_PROPERTY } from '@network-survey/frontend-shared';
 import { DraggableRankingQuestion } from '@network-survey/frontend-react';
+
+if (!Serializer.findClass('draggableranking')) {
+  class QuestionDraggableRankingModel extends Question {
+    getType() {
+      return 'draggableranking';
+    }
+  }
+  Serializer.addClass(
+    'draggableranking',
+    [
+      { name: 'choices:itemvalues', default: [] },
+      { name: 'minSelectedChoices:number', default: 0, minValue: 0 },
+      { name: 'maxSelectedChoices:number', default: 0, minValue: 0 },
+    ],
+    () => new QuestionDraggableRankingModel(''),
+    'question'
+  );
+  Serializer.addProperty('draggableranking', EXCLUSIVE_GROUP_PROPERTY);
+}
 
 vi.mock('react-beautiful-dnd', () => ({
   DragDropContext: ({ children, onDragStart, onDragEnd }) => (
@@ -230,5 +251,124 @@ describe('DraggableRankingQuestion', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('drop-available')).toHaveAttribute('data-direction', 'vertical'));
+  });
+});
+
+describe('DraggableRankingQuestion exclusive groups', () => {
+  function groupedSurvey(elements) {
+    return new Model({ elements });
+  }
+
+  function ranking(name, extra = {}) {
+    return {
+      type: 'draggableranking',
+      name,
+      choices: ['Alex', 'Blair', 'Casey'],
+      exclusiveGroup: 'values',
+      ...extra,
+    };
+  }
+
+  function renderQuestion(survey, name) {
+    const question = survey.getQuestionByName(name);
+    const onChange = vi.fn((value) => {
+      question.value = value;
+    });
+    const view = render(
+      <DraggableRankingQuestion
+        question={question}
+        value={question.value || []}
+        onChange={onChange}
+        valueSource="question"
+      />
+    );
+    return { question, onChange, ...view };
+  }
+
+  const availableList = () => screen.getByTestId('drop-available');
+
+  it('hides an option ranked in a linked question and restores it when unranked', async () => {
+    const survey = groupedSurvey([ranking('q1'), ranking('q2')]);
+    renderQuestion(survey, 'q2');
+    await waitFor(() => expect(within(availableList()).getByText('Alex')).toBeInTheDocument());
+
+    act(() => survey.setValue('q1', ['Alex']));
+    await waitFor(() => expect(within(availableList()).queryByText('Alex')).not.toBeInTheDocument());
+    expect(within(availableList()).getByText('Blair')).toBeInTheDocument();
+
+    act(() => survey.setValue('q1', ['Blair']));
+    await waitFor(() => expect(within(availableList()).getByText('Alex')).toBeInTheDocument());
+    expect(within(availableList()).queryByText('Blair')).not.toBeInTheDocument();
+  });
+
+  it('explains hidden options and warns when the minimum cannot be met', async () => {
+    const survey = groupedSurvey([
+      ranking('q1'),
+      ranking('q2', { minSelectedChoices: 3 }),
+    ]);
+    renderQuestion(survey, 'q2');
+    await waitFor(() => expect(within(availableList()).getByText('Alex')).toBeInTheDocument());
+    expect(screen.queryByText(/ranked in another linked question/)).not.toBeInTheDocument();
+
+    act(() => survey.setValue('q1', ['Alex']));
+    await waitFor(() => expect(screen.getByText(/1 option is ranked in another linked question/)).toBeInTheDocument());
+    expect(screen.getByText(/Unselect an option in another question to free it up/)).toBeInTheDocument();
+  });
+
+  it('ignores linked questions that are hidden or read-only', async () => {
+    const survey = groupedSurvey([
+      { type: 'boolean', name: 'show' },
+      ranking('q1', { visibleIf: '{show} = true' }),
+      ranking('q2'),
+      ranking('q3', { readOnly: true }),
+    ]);
+    renderQuestion(survey, 'q2');
+    await waitFor(() => expect(within(availableList()).getByText('Alex')).toBeInTheDocument());
+    act(() => survey.setValue('q1', ['Alex']));
+    act(() => survey.setValue('q3', ['Blair']));
+    expect(within(availableList()).getByText('Alex')).toBeInTheDocument();
+    expect(within(availableList()).getByText('Blair')).toBeInTheDocument();
+
+    act(() => survey.setValue('show', true));
+    await waitFor(() => expect(within(availableList()).queryByText('Alex')).not.toBeInTheDocument());
+    expect(within(availableList()).getByText('Blair')).toBeInTheDocument();
+  });
+
+  it('drops a conflicting value in favor of the earlier question in document order', async () => {
+    const survey = groupedSurvey([ranking('q1'), ranking('q2')]);
+    const { onChange } = renderQuestion(survey, 'q2');
+    act(() => {
+      survey.setValue('q1', ['Alex']);
+      survey.setValue('q2', ['Alex', 'Blair']);
+    });
+
+    await waitFor(() => expect(onChange).toHaveBeenLastCalledWith(['Blair']));
+    expect(onChange).not.toHaveBeenCalledWith(['Alex', 'Blair']);
+    expect(within(availableList()).queryByText('Alex')).not.toBeInTheDocument();
+  });
+
+  it('leaves ungrouped and differently grouped questions untouched', async () => {
+    const survey = groupedSurvey([
+      ranking('q1'),
+      ranking('q2'),
+      ranking('q3', { exclusiveGroup: 'other' }),
+    ]);
+    renderQuestion(survey, 'q2');
+    await waitFor(() => expect(within(availableList()).getByText('Alex')).toBeInTheDocument());
+    act(() => survey.setValue('q3', ['Alex']));
+    expect(within(availableList()).getByText('Alex')).toBeInTheDocument();
+
+    act(() => survey.setValue('q1', ['Alex']));
+    await waitFor(() => expect(within(availableList()).queryByText('Alex')).not.toBeInTheDocument());
+  });
+
+  it('stops listening to the survey after unmount', () => {
+    const survey = groupedSurvey([ranking('q1'), ranking('q2')]);
+    const removeValueSpy = vi.spyOn(survey.onValueChanged, 'remove');
+    const removeVisibilitySpy = vi.spyOn(survey.onQuestionVisibleChanged, 'remove');
+    const { unmount } = renderQuestion(survey, 'q2');
+    unmount();
+    expect(removeValueSpy).toHaveBeenCalled();
+    expect(removeVisibilitySpy).toHaveBeenCalled();
   });
 });

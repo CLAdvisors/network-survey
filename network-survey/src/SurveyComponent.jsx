@@ -8,6 +8,7 @@ import { buildApiUrl } from "./api";
 import { attachDraggableRankingRenderer } from "@network-survey/frontend-react";
 import {
   applyProductionSurveyTheme,
+  EXCLUSIVE_GROUP_PROPERTY,
   PRODUCTION_SURVEY_CLASS_NAME,
   QuestionDraggableRankingModel,
   registerChoiceDefinitionProperty
@@ -31,6 +32,10 @@ Serializer.addClass(
   () => new QuestionDraggableRankingModel(""),
   "question"
 );
+// Optional label linking ranking questions that share their choice values. The
+// property must be registered so SurveyJS loads it onto the model, where the
+// renderer can read siblings' answers.
+Serializer.addProperty("draggableranking", EXCLUSIVE_GROUP_PROPERTY);
 
 function SurveyComponent({setTitle, setInstructions}) {
     const theme = useTheme();

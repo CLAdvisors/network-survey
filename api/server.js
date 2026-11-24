@@ -2311,12 +2311,15 @@ function exclusiveRankingAnswerErrors(elements, answers, model) {
       if (!Array.isArray(value)) continue;
       for (const rawValue of value) {
         const key = draggableRankingChoiceKey(rawValue);
-        if (rankedBy.has(key)) {
+        const owner = rankedBy.get(key);
+        if (owner !== undefined && owner !== element.name) {
           const label = exclusiveChoiceAnswerLabel(element, key);
           errors.push(`"${label}" is ranked in more than one linked ranking question.`);
           break;
         }
-        rankedBy.set(key, element.name);
+        // Repeats inside one answer array are reported by the per-question
+        // duplicate check, not as a cross-question collision.
+        if (owner === undefined) rankedBy.set(key, element.name);
       }
     }
   });

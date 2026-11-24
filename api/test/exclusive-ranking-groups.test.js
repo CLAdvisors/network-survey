@@ -111,6 +111,16 @@ test('submit rejects the same value ranked in two linked questions', () => {
   );
 });
 
+test('a duplicate within one linked question is not worded as a cross-question collision', () => {
+  const schema = grouped([
+    ranking('a', { exclusiveGroup: 'values', isRequired: true }),
+    ranking('b', { exclusiveGroup: 'values', isRequired: true }),
+  ]);
+  assert.deepEqual(validateRequiredAnswers(schema, { a: ['alpha', 'alpha'], b: ['beta'] }), [
+    'Invalid response: a',
+  ]);
+});
+
 test('submit reports the choice text and ignores hidden or read-only siblings', () => {
   const schema = grouped([
     { type: 'boolean', name: 'show' },

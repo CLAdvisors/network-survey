@@ -100,6 +100,22 @@ describe('exclusive ranking group helpers', () => {
     expect([...collectExclusiveTakenKeys(survey.getQuestionByName('q2'))]).toEqual(['a', 'b']);
   });
 
+  it('keeps a read-only or hidden current question out of conflict resolution', () => {
+    const survey = createSurvey([
+      ranking('q1', { exclusiveGroup: 'values' }),
+      ranking('q2', { exclusiveGroup: 'values', readOnly: true }),
+      { type: 'boolean', name: 'show' },
+      ranking('q3', { exclusiveGroup: 'values', visibleIf: '{show} = true' }),
+    ]);
+    survey.setValue('q1', ['a']);
+    survey.setValue('q2', ['a']);
+    survey.setValue('q3', ['a']);
+
+    expect(collectExclusiveConflictKeys(survey.getQuestionByName('q2')).size).toBe(0);
+    expect(collectExclusiveConflictKeys(survey.getQuestionByName('q3')).size).toBe(0);
+    expect(collectExclusiveConflictKeys(survey.getQuestionByName('q1')).size).toBe(0);
+  });
+
   it('reads the group from raw schema objects and SurveyJS questions', () => {
     expect(exclusiveGroupOf({ exclusiveGroup: ' values ' })).toBe('values');
     expect(exclusiveGroupOf({ exclusiveGroup: 5 })).toBe('');

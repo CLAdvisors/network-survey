@@ -347,6 +347,21 @@ describe('DraggableRankingQuestion exclusive groups', () => {
     expect(within(availableList()).queryByText('Alex')).not.toBeInTheDocument();
   });
 
+  it('keeps the stored value of a read-only linked question', async () => {
+    const survey = groupedSurvey([
+      ranking('q1'),
+      ranking('q2', { readOnly: true }),
+    ]);
+    survey.setValue('q1', ['Alex']);
+    survey.setValue('q2', ['Alex']);
+    const { onChange } = renderQuestion(survey, 'q2');
+
+    await waitFor(() => expect(within(screen.getByTestId('drop-ranked')).getByText('Alex')).toBeInTheDocument());
+    expect(onChange).not.toHaveBeenCalledWith([]);
+    expect(survey.getQuestionByName('q2').value).toEqual(['Alex']);
+    expect(within(availableList()).queryByText('Alex')).not.toBeInTheDocument();
+  });
+
   it('leaves ungrouped and differently grouped questions untouched', async () => {
     const survey = groupedSurvey([
       ranking('q1'),

@@ -77,9 +77,10 @@ export function rankedChoiceKeys(question) {
 
 /**
  * A question participates in enforcement while it can accept answers. Hidden
- * (visibleIf) and read-only questions neither consume nor reserve values.
+ * (visibleIf) and read-only questions neither consume nor reserve values, and
+ * they are exempt in the API's submit validation too.
  */
-export function isExclusivePeerActive(question) {
+export function isExclusiveQuestionActive(question) {
   if (!isRankingQuestion(question) || !exclusiveGroupOf(question)) return false;
   if (question.isVisible === false) return false;
   if (question.isReadOnly === true) return false;
@@ -97,7 +98,7 @@ export function exclusiveGroupPeers(question) {
   if (!survey || !group || typeof survey.getAllQuestions !== 'function') return [];
   return survey.getAllQuestions().filter((peer) => (
     peer !== question &&
-    isExclusivePeerActive(peer) &&
+    isExclusiveQuestionActive(peer) &&
     exclusiveGroupOf(peer) === group
   ));
 }
@@ -115,9 +116,11 @@ export function collectExclusiveTakenKeys(question) {
  * Choice keys ranked by an earlier (document order) active peer. Those values
  * cannot belong to this question too; the later question yields, so prefilled
  * or resumed data resolves deterministically (first question in the survey
- * keeps the option).
+ * keeps the option). An exempt current question (hidden or read-only) keeps
+ * its stored value, matching the API's submit validation.
  */
 export function collectExclusiveConflictKeys(question) {
+  if (!isExclusiveQuestionActive(question)) return new Set();
   const survey = question?.survey;
   const group = exclusiveGroupOf(question);
   if (!survey || !group || typeof survey.getAllQuestions !== 'function') return new Set();
@@ -125,7 +128,7 @@ export function collectExclusiveConflictKeys(question) {
   const questions = survey.getAllQuestions();
   for (const peer of questions) {
     if (peer === question) break;
-    if (!isExclusivePeerActive(peer) || exclusiveGroupOf(peer) !== group) continue;
+    if (!isExclusiveQuestionActive(peer) || exclusiveGroupOf(peer) !== group) continue;
     rankedChoiceKeys(peer).forEach((key) => ownerKeys.add(key));
   }
   return ownerKeys;

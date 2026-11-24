@@ -85,6 +85,46 @@ test('save rejects malformed, singleton, mismatched and infeasible groups', () =
   );
 });
 
+test('save counts requiredness when checking group feasibility', () => {
+  assert.throws(
+    () => grouped([
+      ranking('a', { exclusiveGroup: 'values', choices: ['only'], isRequired: true }),
+      ranking('b', { exclusiveGroup: 'values', choices: ['only'], isRequired: true }),
+    ]),
+    /cannot be completed/
+  );
+  assert.throws(
+    () => grouped([
+      ranking('a', { exclusiveGroup: 'values', choices: ['one', 'two'], isRequired: true, minSelectedChoices: 2 }),
+      ranking('b', { exclusiveGroup: 'values', choices: ['one', 'two'], isRequired: true }),
+    ]),
+    /cannot be completed/
+  );
+
+  const feasible = grouped([
+    ranking('a', { exclusiveGroup: 'values', choices: ['only'], isRequired: true }),
+    ranking('b', { exclusiveGroup: 'values', choices: ['only'] }),
+  ]);
+  assert.equal(feasible.elements[0].isRequired, true);
+});
+
+test('save rejects overlapping default answers within a group', () => {
+  assert.throws(
+    () => grouped([
+      ranking('a', { exclusiveGroup: 'values', defaultValue: ['alpha'] }),
+      ranking('b', { exclusiveGroup: 'values', defaultValue: ['alpha', 'beta'] }),
+    ]),
+    /same default value in a and b/
+  );
+
+  const disjoint = grouped([
+    ranking('a', { exclusiveGroup: 'values', defaultValue: ['alpha'] }),
+    ranking('b', { exclusiveGroup: 'values', defaultValue: ['beta'] }),
+    ranking('c', { exclusiveGroup: 'values' }),
+  ]);
+  assert.deepEqual(disjoint.elements[0].defaultValue, ['alpha']);
+});
+
 test('save accepts groups whose minimums exactly exhaust the shared choices', () => {
   const schema = grouped([
     ranking('a', { exclusiveGroup: 'values', minSelectedChoices: 2 }),

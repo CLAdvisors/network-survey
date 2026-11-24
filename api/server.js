@@ -1890,7 +1890,8 @@ function draggableRankingChoiceKey(choice) {
 }
 
 // A group is feasible only if every linked question offers the same values and
-// the minimum selections of all linked questions can still be satisfied.
+// the required selections of all linked questions can still be satisfied. A
+// required question needs at least one value even without an explicit minimum.
 function validateExclusiveRankingGroups(exclusiveGroups) {
   exclusiveGroups.forEach((members, group) => {
     if (members.length < 2) {
@@ -1904,9 +1905,21 @@ function validateExclusiveRankingGroups(exclusiveGroups) {
         throw new Error(`Exclusive ranking group "${group}" requires identical choice values in ${first.name} and ${member.name}.`);
       }
     }
-    const minimumTotal = members.reduce((sum, member) => sum + member.minimum, 0);
+    const minimumTotal = members.reduce(
+      (sum, member) => sum + Math.max(member.minimum, member.required ? 1 : 0), 0);
     if (minimumTotal > first.choiceKeys.size) {
-      throw new Error(`Exclusive ranking group "${group}" cannot be completed: its questions require ${minimumTotal} selections in total but share only ${first.choiceKeys.size} choices.`);
+      const sharedChoices = first.choiceKeys.size === 1 ? '1 choice' : `${first.choiceKeys.size} choices`;
+      throw new Error(`Exclusive ranking group "${group}" cannot be completed: its questions require ${minimumTotal} selections in total but share only ${sharedChoices}. Reduce the minimums or make the questions optional.`);
+    }
+    const claimedDefaults = new Map();
+    for (const member of members) {
+      for (const key of member.defaultKeys) {
+        const owner = claimedDefaults.get(key);
+        if (owner !== undefined && owner !== member.name) {
+          throw new Error(`Exclusive ranking group "${group}" has the same default value in ${owner} and ${member.name}; default answers must not overlap.`);
+        }
+        if (owner === undefined) claimedDefaults.set(key, member.name);
+      }
     }
   });
 }
@@ -2017,6 +2030,9 @@ function validateSurveyDefinition(json) {
             choiceKeys: new Set((Array.isArray(normalizedChoices) ? normalizedChoices : [])
               .map(draggableRankingChoiceKey)),
             minimum: Number.isSafeInteger(element.minSelectedChoices) ? element.minSelectedChoices : 0,
+            required: element.isRequired === true,
+            defaultKeys: new Set((Array.isArray(element.defaultValue) ? element.defaultValue : [])
+              .map(draggableRankingChoiceKey)),
           });
         }
       } else if (element.choices !== undefined) {
